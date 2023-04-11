@@ -4,7 +4,7 @@
 
 性能改进：单节点 55w、fengli、yuhua、haoqian、tianze
 
-年底 EC：jiewei、shijie、lianpeng、kaiqi、haiwei
+年底 EC：jiewei、sijie、lianpeng、kaiqi、haiwei
 
 引擎：wangsai、dongdong、yangliang、shihao
 

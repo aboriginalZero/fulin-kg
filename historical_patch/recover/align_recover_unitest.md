@@ -68,23 +68,40 @@ pextent_table 之类的 meta leader 独有的表每次更新都会在 zk 中同�
 
 #### MetaServer 启动流程
 
-1. MetaSMServer::Run() --> MetaSMServer::SMThreadFunc()、MetaSMServer::SetEnable() --> MetaSMServer::StartMetaServer() --> MetaSMServer::MetaServerThreadFunc() --> MetaServer::Initialize() 调用的是 QuorumServer 的方法
-2. MetaServer::Run() 也是调用 QuorumServer 的方法，当 ENTER_RUNNING 事件被 zk 感知，调用 MetaServer::StartService()
+1. Meta_main.cc --> MetaSMServer::Start() --> MetaSMServer::SetEnable() --> MetaSMServer::StartMetaServer() --> MetaSMServer::DoStartMetaServer()  --> MetaServer::Initialize() 调用的是 QuorumServer 的方法，在 zk 上注册自身地址
+
+2. 当 ENTER_RUNNING 事件被 zk 感知，调用 MetaServer::StartService()
+
     1. StartWatchDog()
-    2. new MetaContext 并且 Initialize
-    3. RunStatusServer()
-    4. 如果是 meta leader ，StartLeader --> RunMetaRpcServer()、RunGCManager()，否则 StartFollower --> RunMetaRpcServer()
-3. 而在 MetaContext::Initialize 中，包括整个系统主要组件的初始化，比如 CommonRpcServiceInitialize、ChunkManagerInitialize、PExtentTableInitialize、PExtentAllocatorInitialize、HTTPServerInitialize、GcManagerInitialize、VolumeManagerInitialize、MetaRpcServerInitialize、NFSServerInitialize 等。
+    2. new MetaContext 并且 Initialize，MetaContext 是一个大全局变量
+    3. StartStatusServer()
+    4. 如果是 meta leader ，StartLeader() --> RunMetaRpcServer()、StartGCManager()，否则 StartFollower() --> 只需要 RunMetaRpcServer()，但其实也不会响应 rpc
+
+3. 在 MetaContext::Initialize 中，包括整个系统主要组件的初始化，比如 CommonRpcServiceInitialize、ChunkManagerInitialize、PExtentTableInitialize、PExtentAllocatorInitialize、HTTPServerInitialize、GcManagerInitialize、VolumeManagerInitialize、MetaRpcServerInitialize、NFSServerInitialize 等。
+
     如果是 meta leader ，还会执行 RecoverManagerInitialize 和 AccessManagerInitialize，分别 new RecoverManager / AccessManager 并且 Initialize
-4. 【RecoverManager】在 new 一个 RecoverManager 对象的时候就会 start 当前线程，开始 loop 每 4s 执行一次 RecoverManager::DoScan()
+
+4. 【ChunkManager】 在 RebuildIdMapAndChunkTable() 中创建 pidmap 和 ChunkTable，其实就是将 metaDB 中记录的 chunks 信息放一份到内存。还会调用 InitChunkIsolateManager()，然后就会开启一个定期线程来周期性地执行 CheckRemovingChunk()、UpdateChunkSpaceInfo() 等更新 chunk 信息的操作。
+
+5. 【RecoverManager】在 new 一个 RecoverManager 对象的时候就会 start 当前线程，开始 loop 每 4s 执行一次 RecoverManager::DoScan()
+
     1. CleanTimeoutAndFinishedCmd()、GenerateRecoverCmds()、GenerateMigrateCmds()
     2. AddRecoverCmdUnlock() 往 access_manager 中 EnqueueRecoverCmd，即将 active 队列中 extent 生成的 recover cmd 放入 chunk 队列中等待下发
         1. AllocOwner，为要 recover 的 pextent 分配 owner
         2. GenerateLease，为要 recover 的 pextent 生成 lease ，作为 recover_cmd 的 lease，owner 是先前生成的 owner
         3. 往 owner session 的 waiting_recover_cmds 放入 recover_cmd，随着 keepalive 发往目的 session
-5. 【AccessManager】SessionMaster::KeepAlive 作为对 SessionFollower::KeepAliveLoop 暴露的 rpc 入口，调用了作为 keep_alive_cb_ 的 AccessManager::HandleKeepAlive 之后，调用 MasterSession::HandleKeepAlive 响应 follower 的心跳请求。
-    1. AccessManager::HandleKeepAlive --> AccessKeepAliveResponse --> ComposeAccessResponse 这个方法把每个 AccessSession 的 waiting_recover_cmds 中的 recover cmd 放入 AccessKeepAliveResponse，跟随心跳下发到 SessionFollower
-    2. 
+
+6. 【AccessManager/SessionMaster】先通过 consensus::GetAliveChunkAddrsFromZK 获取当前活跃 chunk 的 ip，zk 中的路径是 /zos/service/chunk，SessionMaster::KeepAlive 作为对 SessionFollower::KeepAliveLoop 暴露的 rpc 入口，调用了作为 keep_alive_cb_ 的 AccessManager::HandleKeepAlive 之后，调用 MasterSession::HandleKeepAlive 响应 follower 的心跳请求。
+
+    AccessManager::HandleKeepAlive --> AccessKeepAliveResponse --> ComposeAccessResponse 这个方法把每个 AccessSession 的 waiting_recover_cmds 中的 recover cmd 放入 AccessKeepAliveResponse，跟随心跳下发到 SessionFollower
+
+7. 【SessionFollower】ChunkServer 启动的时候会 AccessHandler::Start()，其中调用 AccessHandler::CreateSession()，在设置一系列回调函数函数后调用 SessionFollower::CreateSession() --> SessionFollower::DoCreate()
+
+    > 因为每个 ChunkServer 都是一个 SessionFollower，Meta Leader 所在的物理节点上不仅有 SessionFollower 还有 SessionMaster
+
+    其中，先通过 SessionFollower::Connect() 正确设置一个指向 meta leader 的 SessionClient 并判断是否能连通到 SessionMaster，然后通过 SessionFollower::CreateSessionCtx() 向 SessionMaster 发送 CreateSession 的 rpc，从 rpc response 中拿到 session_epoch 和 lease_interval_ns 。SessionMaster 响应 rpc 时将
+
+8. 
 
 待补充
 
@@ -110,27 +127,27 @@ Data_channel_client_v2::ReadVolume() --> Data_channel_client_v2::DoRequest() -->
 
 1. 如果是 Read
 
-     MetaRpcServer::GetLeaseForRead ，通过 volume id 和 vextent_no 可以从 VExtentTable 中拿到对应的 pid，然后执行 MetaRpcServer::DoGetLease ，包括以下两个步骤：
+    MetaRpcServer::GetLeaseForRead ，通过 volume id 和 vextent_no 可以从 VExtentTable 中拿到对应的 pid，然后执行 MetaRpcServer::DoGetLease ，包括以下两个步骤：
 
-     1.  PExtentTable::GetPExtentTableEntry ，通过 pid 可以从 PExtentTable 中拿到对应的 PExtentEntry，其中信息包括副本数、副本位置
-     2. AccessManager::AllocOwner ，通过 pid 和 preferred_session 拿到对应 Lease 的 owner（是一个 SessionInfo ）
+    1.  PExtentTable::GetPExtentTableEntry ，通过 pid 可以从 PExtentTable 中拿到对应的 PExtentEntry，其中信息包括副本数、副本位置
+    2.  AccessManager::AllocOwner ，通过 pid 和 preferred_session 拿到对应 Lease 的 owner（是一个 SessionInfo ）
 
-     > meta in zbs 中写的是，当发生 Snapshot/Clone/Rollback 等需要调整 vextent 中的 COW flag 操作时，Meta leader 会通知清理所有 Access 持有的 vextent lease 信息，以便 chunk 重新申请获取 lease 的最新状态。
+    > meta in zbs 中写的是，当发生 Snapshot/Clone/Rollback 等需要调整 vextent 中的 COW flag 操作时，Meta leader 会通知清理所有 Access 持有的 vextent lease 信息，以便 chunk 重新申请获取 lease 的最新状态。
 
 2. 如果是 Write
 
     MetaRpcServer::GetLeaseForWrite ，通过 volume id 和 vextent_no 可以从 VExtentTable 中拿到对应的 pid，然后根据 thin/thick 和 COW 做不同处理：
 
     1. 如果这个 extent 已经被分配（比如 volume 为 thick 模式，或者 thin 模式但是之前已经被写过），不做任何处理
-    
+
     2. 如果 Volume 为 thin 并且副本尚未分配，此时分配副本，持久化 pextent 副本信息，更新内存中的数据和 chunk 的数据空间信息，之后执行类 Read 操作，且操作的 pid 是新副本的 pid
-    
+
     3. 如果此时 volume 的 pid 都还没分配（比如写一个 size 为 0 的 NFS file），那么在 GetLease 时需要申请 pids，分配副本，持久化 pextent 副本信息，通过 AllocPExtentTransaction 更新内存中的 PExtentTable  （没有更新 chunk 的数据空间和类 Read 操作吗？）
-    
+
     4. 如果是写一个有 COW 标记的 Volume，那么需要调用 CowPExtentTransaction 进行 COW PExtent 的处理，包括申请一个新的 pid，在 origin_pid 的 location 上分配副本，用新的 pid 更新 VExtentTable，PExtentTable 中的 PExtentEntry，并在 meta db 上持久化 Volume 信息。
-    
+
         > meta in zbs 中写的是，会修改 Volume 的 vtable 将对应带有 COW 标记的 vextent 替换成一个新的不带有 COW 标记的 vextent，新的 vextent 对应一个新的父级指向原 extent 的 child extent，ZBS Client / Access 会收到新的 vextent lease 以继续 IO 请求。
-    
+
     执行 MetaRpcServer::DoGetLease 操作，从 PExtentTable 中获取 extent 详细信息，并查询 AccessManager 获取 owner
 
 GenerateLease，通过 pid、MetaContext（包含这个 pid 的 PExtentEntry）和 owner 构造一个 Lease
@@ -155,12 +172,12 @@ GenerateLease，通过 pid、MetaContext（包含这个 pid 的 PExtentEntry）�
 
     > 如果是做备份的 taskd，由于与 chunkd 不在一个进程，io clinet 是 ExtenrnallIO 
 
-    1.  Meta::GetVExtentLease 根据 volume_id 和 vextent_no 向 libmeta 请求对应的 extent lease，如果 libmeta 中有缓存，那么直接将 lease 信息返回给 io client，否则向 meta leader 请求 lease 并缓存到本地 libmeta。
+    1. Meta::GetVExtentLease 根据 volume_id 和 vextent_no 向 libmeta 请求对应的 extent lease，如果 libmeta 中有缓存，那么直接将 lease 信息返回给 io client，否则向 meta leader 请求 lease 并缓存到本地 libmeta。
 
     2. InternalIOClient::IsLocal ，io client 根据拿到的 lease 中的 SessionInfo 中的 uuid，判断是否在本地。
-       
+
         > io client 拿到的 lease 只通过里面的 uuid 判断 lease 是否在本地，其他信息没有被利用。io client 向 meta leader 申请 lease，如果这个 pid 已经被分配到其他 chunk，那么返回已有的 lease，否则 lease 分配到当前 io client 所在的 chunk
-        
+
         1. InternalIOClient::DoLocalIO，如果 lease 在本地，那么执行本地的 AccessIOHandler::ReadVExtent
         2. InternalIOClient::DoRemoteIO，否则，根据 Lease 的 IP+port 通过 data channel manager 拿到一个 dc client，通过这个 client 下发 IO。当 IO 达到相应的 Access 后，由其 access io handler 处理 IO，aih 上的 DataChannelServerInterface 注册了 VEXTENT_READ 的处理函数为 AccessIOHanlder::SubmitReadVExtent
 
@@ -173,11 +190,11 @@ GenerateLease，通过 pid、MetaContext（包含这个 pid 的 PExtentEntry）�
     3. 执行到这，说明 Sync Gen 成功，标记着这个数据存在有效副本。那么 AccessIOHandler::SetupIOCtx，然后 AccessIOHandler::DoReadVExtent --> AccessIOHandler::ReadReplica，只要有一个读成功就返回
 
         其中调用 AccessIOHandler::IsLocal ，access io handler 根据拿到的 lease 中的 SessionInfo 中的 cid，判断是否在本地
+
         1. 如果 lease 在本地，那么直接调用本地的 lsm 处理 IO，执行 LSM::ScheduleRead
         2. 否则，根据 Lease 的 IP+port 通过 data channel manager 拿到一个 dc client，通过这个 client 下发请求头为 PEXTENT_READ IO 请求，目的 chunk 上的 LocalIOHandler 收到这个请求后，根据 MessageHeader::PEXTENT_READ 注册的 LocalIOHandler::HandlePExtentRequest 调用它本地的 lsm 处理 IO
 
-5. 
-   至此，完成 IO 从 access io handler 到 lsm 的过程。
+3. 至此，完成 IO 从 access io handler 到 lsm 的过程。
 
 #### ZbsClient::Write
 
@@ -254,29 +271,30 @@ GenerateLease，通过 pid、MetaContext（包含这个 pid 的 PExtentEntry）�
             1. RecoverHandler::GetReplicaGeneration
             2. 通过 dcc 发往 src_chunk 上的 LocalIOHandler，由 LocalIOHandler::HandleGetGeneration 处理
             3. LSMInterface::VerifyAndGetGeneration --> LSMProxy::VerifyAndGetGeneration --> LSMv2::VerifyAndGetGeneration --> LocalIOHanlder::LocalIODone
-        
+
     2. RecoverHandler::RecoverStart 通知 dst_cid 所在 chunk 的 lsm  做 RecoverStart，应该是为 dst_cid  创建对应的 extent，待细追
+
         1. dst_cid is local，通过本地 lsm 执行 RecoverStart，执行完调用 ctx->done
         2. dst_cid isn't local，通过 DataChannel 通知对方执行 RecoverStart，执行完调用 ctx->done
-    
+
 4. RecoverHandler::HandleRecoverEvent，其中的状态机有 4 种状态：
-   
+
     * START
-    
+
         如果 recover 做完，状态更改为 END，并执行 RecoverEnd，执行流程跟 RecoverStart 一样分本地和远程两种，RecoverEnd 之后回到 HandleRecoverEvent
-    
+
         如果还没有做完，状态更改为 READ， 并执行 ReadFromSrc，执行流程跟 RecoverStart 一样分本地和远程两种，read 之后回到 HandleRecoverEvent
-    
+
     * READ
-    
+
         状态更改为 WRITE， 并执行 WriteToDst，执行流程跟 RecoverStart 一样分本地和远程两种， write 之后回到 HandleRecoverEvent
-    
+
     * WRITE
-    
+
         更新 recover_block_num、cur_block 等参数，如果是敏捷恢复则判断下一个要 recover 的 block，并且直接转到 START 的逻辑
-        
+
     * END
-    
+
         更新 meta  上的副本位置，ReplacePExtentReplica、DropLeaseIfNecessary 
 
 #### 数据结构
@@ -450,7 +468,7 @@ message RecoverCmd {
 
 * ChunkTable 中存的是 ChunkTableEntry，即记录每台 chunk 上 normal / recover / migrate / reserved pextent 的数量，还有上次往 meta leader 成功发送心跳的时间
 
-* VExtentTable 中存的是 volume id + vextent_no 跟 pid 的映射关系
+* VExtentTable 中存的是 volume id + vextent_no 跟 pid 的映射关系（信息过时了）
 
 * PExtentTable 中存的是 pid 跟 PExtentEntry 的映射关系，PExtentEntry 中包含副本数、副本位置、Lease owner 等信息，举个例子，pid 为 776 的 PExtentEntry 如下：（根据 message PExtentInfo 得来）
 
