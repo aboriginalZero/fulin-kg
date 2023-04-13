@@ -39,3 +39,30 @@ linux主分区、扩展分区、逻辑分区的区别、磁盘分区、挂载，
 
 
 
+centos7 中将 pip 默认是 8.x，升级到 20.3.4（更高版本不支持 Python 2.7）
+
+```
+wget https://bootstrap.pypa.io/pip/2.7/get-pip.py
+python get-pip.py
+```
+
+pip 根据 whl 文件安装包
+
+```
+pip install xx.whl
+```
+
+git_review 插件安装 1.28.0，进 pypi.org 找包的各个历史版本
+
+```
+pip install git-review==1.28.0
+```
+
+pip 更改镜像源
+
+```shell
+pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
+```
+
+
+
