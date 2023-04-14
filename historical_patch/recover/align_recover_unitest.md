@@ -99,13 +99,17 @@ pextent_table 之类的 meta leader 独有的表每次更新都会在 zk 中同�
 
     > 因为每个 ChunkServer 都是一个 SessionFollower，Meta Leader 所在的物理节点上不仅有 SessionFollower 还有 SessionMaster
 
-    其中，先通过 SessionFollower::Connect() 正确设置一个指向 meta leader 的 SessionClient 并判断是否能连通到 SessionMaster，然后通过 SessionFollower::CreateSessionCtx() 向 SessionMaster 发送 CreateSession 的 rpc，从 rpc response 中拿到 session_epoch 和 lease_interval_ns 。SessionMaster 响应 rpc 时将
+    其中，先通过 SessionFollower::Connect() 正确设置一个指向 meta leader 的 SessionClient 并判断是否能连通到 SessionMaster，然后通过 SessionFollower::CreateSessionCtx() 向 SessionMaster 发送 CreateSession 的 rpc，从 rpc response 中拿到 session_epoch 和 lease_interval_ns 。SessionMaster 响应 rpc 时将为其分配一个 session_epoch 并作为 session_ 的 key，value 是一个 MasterSession 类型的数据结构。
 
 8. 
 
-待补充
-
 具体可以参考[Meta in ZBS](https://docs.google.com/document/d/1Xro2919inu3brs03wP1pu5gtbTmOf_Tig7H8pfdYPls/edit#heading=h.esxx3wtrrxe)
+
+#### ChunkServer 启动流程
+
+持有的 AccessHandler 启动同时也会启动一个 SessionFollower，并与 Meta Leader 上的 SessionMaster 建立心跳
+
+
 
 #### DataChannel
 
@@ -154,7 +158,14 @@ GenerateLease，通过 pid、MetaContext（包含这个 pid 的 PExtentEntry）�
 
 #### libmeta::RemovePExtentReplica
 
-在 zbs_code_intro_ans.md 中
+副本剔除操作由 Meta::RemovePExtentReplica(pid, failed_cids, gen = max_generation) 执行，具体分为 libmeta 和 meta leader 两部分操作：
+
+1. libmeta。调用 Meta::RemovePExtentReplica(pid, failed_cids, max_generation)  简单封装一个 request，通过 rpc 转发到 meta leader 的 MetaRpcServer::RemoveReplica(request) 执行。
+2. meta leader。调用 MetaRpcServer::DoRemoveReplica(request)，分别处理这个副本在 PExtentTable 和 MetaDb 中的记录：
+   1. 调用 PExtentTable::RemoveReplica(info, response) ，删除 chunk_table 中指定 cid 指定 pid 的 ChunkTableEntry。然后更新这个 pid 的 PExtentTableEntry 的 generation() 为 max_generation()，将更新后的 PExtentTableEntry 更新到 response。
+   2. 调用 MetaDb::PutPExtent(*response)，把经过上一步更新后的 extent 信息持久化到 MetaDB。
+   3. 往 recover manager 下发一条这个 pid 的 recover cmd。
+3. libmeta。如果 meta leader 操作成功，libmeta 根据 reponse 中的 location 来设置 CachedLeasePtr->location，并用 max_generation 更新 CachedLeasePtr 的 meta_generation()
 
 #### AccessIOHandler::SyncGeneration
 
@@ -220,11 +231,8 @@ GenerateLease，通过 pid、MetaContext（包含这个 pid 的 PExtentEntry）�
 
     3. 执行到这说明 Sync Gen 成功，标记着这个数据存在有效副本，那么执行 AccessIOHandler::SetupIOCtx。这边有个可以加速的特殊情况是如果 wctx.lease 的 gen 为 0 、没有 origin_pid 、写的是全 0 数据，那么无需经过 lsm 就可以直接返回 Status::ok
 
-        1. wctx.lease 的 gen++，AccessIOHandler::DoWriteVExtent --> 等待多个副本 AccessIOHandler::WriteReplica 同步执行完毕。
-
-
-        其中调用 AccessIOHandler::IsLocal ，access io handler 根据拿到的 lease 中的 SessionInfo 中的 cid，判断是否在本地
-    
+        wctx.lease 的 gen++，AccessIOHandler::DoWriteVExtent --> 等待多个副本 AccessIOHandler::WriteReplica 同步执行完毕。其中调用 AccessIOHandler::IsLocal ，access io handler 根据拿到的 lease 中的 SessionInfo 中的 cid，判断是否在本地
+        
         1. 如果 lease 在本地，那么直接调用本地的 lsm 处理 IO，执行 LSM::ScheduleWrite
         2. 否则，通过 dc client 下发请求头为 PEXTENT_WRITE 的写请求，被目的 chunk 上的 LocalIOHandler::HandlePExtentRequest 处理
 

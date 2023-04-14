@@ -37,9 +37,15 @@
 
     至此，IO 从 ZbsClient 转发到 Access。
     
+    > 由于缓存的 vextent lease 可能与 Meta Leader 处不一致，如果此时 ZBSClient  访问旧的 Lease Owner，Access 将返回一个 ENotOwner 错误，ZBSClient 收到该错误后会发 rpc 向 Meta Leader 获取最新的 Lease 并更新本地缓存，所以能够保证 ZBSClient 将 IO 从转发到正确的 Access
+    
 7. 调用 AccessIOHandler::GetVExtentLease(wctx) 获取 lease，因为如果是写有 COW 标记的 vextent，meta leader 在复制一个新的 vextent 之后，会通过心跳下发 Revoke Lease 指令要求 Access 释放 Lease，之后让 Access 主动去获取新的 vextent lease，这一步是为了保证拿到最新的 vextent lease 
 
 8. 调用 AccessIOHandler::SyncGeneration(ioctx)，在 Access Session 成为 Lease owner 之后执行初次 IO 请求之前，会获取 Extent 所有有效副本的 Gen，最大的 Gen 会被视为有效的 Gen，如果这个 Gen 低于 Meta 认可的 Gen 则同步失败，数据进入不可 IO 的异常，否则那些没有在指定时间内响应的副本或者 Gen 低于有效 Gen 的副本将会被剔除。同步 Gen 之后，触发本地记录的 Gen + 1。
+
+    > 为什么只需要初次 IO 时进行 SyncGeneration？
+    >
+    > 因为如果当前 extent 的 Lease Owner 不变，那么都要从这个 Access 处写入（唯一接入点），那么这个 Access 本地的 Gen 就永远是最新的，如果 Lease Owner 转移，那么在初次 IO 时又要执行 SyncGeneration 来保证从最新的（epoch 最大的）副本上开始写
 
 9. 调用 AccessIOHandler::DoWriteVExtent(wctx)，根据 wctx->loc 遍历当前 extent 的每个副本，执行写操作，并通过 co_wait 来保证所有副本都写入才执行后续操作。也就是调用 AccessIOHandler::WriteVExtentDone() 统计写失败副本的个数、标记慢盘、调整失败副本上的 recover 行为、为写失败的副本创建敏捷恢复的 StagingBlockInfo
 
