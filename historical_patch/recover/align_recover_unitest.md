@@ -181,7 +181,9 @@ GenerateLease，通过 pid、MetaContext（包含这个 pid 的 PExtentEntry）�
 
     如果是正常的读写 IO，走的是 chunk 的内部线程，所以走 InternalIO 通道。InternalIOClient::SplitIO() --> ZbsClient::ProcessIO() --> InternalIOClient::SubmitIO()
 
-    > 如果是做备份的 taskd，由于与 chunkd 不在一个进程，io clinet 是 ExtenrnallIO 
+    > 在 Internal 模式下，IO Client 会将 UIO 按照 Volume 的 stripe 配置将 UIO 拆分为若干 BIO。在发送 BIO 时也会查询 VExtent Lease，将 IO 转发给 Access Owner。如是本地将直接调用 Access 接口将任务交给 Access 队列，如是远端，则通过 Datachannel Client 发送 VExtent IO
+    >
+    > 如果是做备份的 taskd，由于与 chunkd 不在一个进程，io client 是 ExtenrnallIO 
 
     1. Meta::GetVExtentLease 根据 volume_id 和 vextent_no 向 libmeta 请求对应的 extent lease，如果 libmeta 中有缓存，那么直接将 lease 信息返回给 io client，否则向 meta leader 请求 lease 并缓存到本地 libmeta。
 
@@ -206,6 +208,8 @@ GenerateLease，通过 pid、MetaContext（包含这个 pid 的 PExtentEntry）�
         2. 否则，根据 Lease 的 IP+port 通过 data channel manager 拿到一个 dc client，通过这个 client 下发请求头为 PEXTENT_READ IO 请求，目的 chunk 上的 LocalIOHandler 收到这个请求后，根据 MessageHeader::PEXTENT_READ 注册的 LocalIOHandler::HandlePExtentRequest 调用它本地的 lsm 处理 IO
 
 3. 至此，完成 IO 从 access io handler 到 lsm 的过程。
+
+在 ZBS Client 中，不额外的处理 IO 重叠的保序问题，即不会严格的按照收到的 IO 请求顺序下发 IO。因为对于通用的块存储系统收到的并发重叠 IO，A 和 B，语义上并不保证最终结果是 A 或 B 或者 AB 交叠。大部分应用端希望确定某个结果时，会在发送时做合并或者严格的遵循收到 A 成功之后再下发 B 的原则。这样 IO 都成功之后结果就一定是 B。
 
 #### ZbsClient::Write
 
