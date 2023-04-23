@@ -1,13 +1,26 @@
-```shell
-zbs-meta pextent read -o <output_file> <pextent_id> <offset> <length> 
-zbs-chunk extent list 
-```
 
-显示 2023-04-07 14:58:47,878, ERROR, cmd.py:2967, write() argument must be str, not bytes
+1. ZBS 中的一个 extent，读的同时不允许写？为啥不用多版本机制来管理（块存储覆盖写的原因？还是块存储没必要提供）
 
-zbs-nfs 中难以查看 dir
+2. 代码中 [(zbs.labels).as_str = true] 的意思
 
-https://blog.csdn.net/qq_24406903/article/details/118763610
+3. Zbs cli 使用
+
+   ```shell
+   zbs-meta pextent read -o <output_file> <pextent_id> <offset> <length> 
+   zbs-chunk extent list 
+   ```
+
+   显示 2023-04-07 14:58:47,878, ERROR, cmd.py:2967, write() argument must be str, not bytes
+
+   zbs-nfs 中难以查看 dir
+
+4. zbs 中 ./format.sh 可以提前运行吗？省得到 CI 才发现有问题
+
+5. gtest 如何开启 VLOG DLOG 部分的日志
+
+4. meta in zbs 中 Volume 部分 origin_id 中示例继承树怎么看？
+
+
 
 
 
@@ -17,19 +30,17 @@ metaDB 中的 Vtable 表存储 Volume -> Extent 的关联关系
 
 CreateSession 这个过程 SessionMaster 做什么了
 
-ZBS 中的一个 extent，读的同时不允许写？
-
 
 
 目前 ZBS 仅支持以多副本方式存储数据，适用于对读写延迟比较敏感的业务场景。EC 相比副本占用更少的存储空间，同时提供与副本同等甚至更高的容错能力，其代价是更新或者故障数据恢复的性能略差（注：写不一定比副本差，虽然需要多一次读，但数据量变少了。看最终实现的效果）。EC 非常适合归档、备份等数据量较大且更新很少的业务，也适用于对延迟不敏感而对带宽敏感的业务。需注意，EC 的目标是为了保证完整性而非正确性，只可以用于恢复丢失的数据，而无法修复位翻转等数据正确性问题。需要有其他机制对数据篡改进行检测，例如 CheckSum 检测，被篡改的数据可以视为丢失，再通过 EC 做数据恢复。
 
 ZBS 副本机制采用 Lease Owner + Generation 方式实现数据一致性。1. 通过 Lease Owner，所有的 IO 都被顺序化，客户端的多读者多写者模型被转化为单读者单写者模型；2. 通过 Generation 判断多个副本是否一致，当一个副本成功写入一个 IO 后，Generation 自增，每个 IO 携带当前的 Generation，Chunk 只有在 Generation 匹配时才允许 IO 处理。
 
+https://blog.csdn.net/qq_24406903/article/details/118763610
 
 
 
-
-FunctionalTest::SetUp()  --> new MiniCluster(kNumChunks); gtest 如何开启 VLOG DLOG 部分的日志
+FunctionalTest::SetUp()  --> new MiniCluster(kNumChunks);
 
 
 

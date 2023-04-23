@@ -1,17 +1,44 @@
+用 uint64_t 来声明 ring_id
+
+初始时生成符合 topo_id 次序的 ring_id
+
+当有任意一种拓扑行动时，重新生成 ring_id
+
+ring_id 的生成是按不同 brick/rack 中节点数量的比例配对
+
+双活集群中优先可用域 2 副本，次级可用域 1 副本。
+
+在重新生成 ring_id 时要保持原来的次序
+
+UpdateTopoObj/RegisterChunk/RemoveChunk
+
+以 brick 为粒度算节点数，找到 3 个 brick 中最小的节点数，记得 k，对其他两个 brick k 等分
+
+按 brick 编号挑 3 个节点
+
+
+
+
+
+文档中描述过程并说明算法可以收敛，稳定性
+
+
+
+
+
+机器重启后，zk 要手动重启，selinux 要关闭
+
+
+
 ZBS RPM 和 SMTX ZBS/SMTX OS/IOMesh 等不同产品的产品版本号从 5.0.0 开始已经分离，各有各的版本号
-
-
 
 非首次运行单测
 
-```
-docker run --rm  -v /code/zbs:/zbs -w /zbs/build registry.smtx.io/zbs/zbs-buildtime:el7-x86_64 ninja zbs_test
+```shell
+docker run --rm --privileged=true -v /code/zbs:/zbs -w /zbs/build registry.smtx.io/zbs/zbs-buildtime:el7-x86_64 ninja zbs_test
 cd /code && ./newci-x86_64 -builddir zbs/build/ -p 16 -action "/run 200 FunctionalTest.MarkVolumeAllocEven"
+# 屏幕中会提示出错处的日志信息
 ```
-
-
-
-
 
 
 
