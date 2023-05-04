@@ -1,26 +1,45 @@
 用 uint64_t 来声明 ring_id
 
-初始时生成符合 topo_id 次序的 ring_id
+初始时生成符合 topo_id 次序的 ring_id，遍历一遍
 
 当有任意一种拓扑行动时，重新生成 ring_id
 
-ring_id 的生成是按不同 brick/rack 中节点数量的比例配对
+ring_id 的重新生成是按不同 brick/rack 中节点数量的比例配对，并且要尽可能保持原来的相对次序
+
+不管是首次按照 uuid 生成还是后面按照 ring_id 生成，都要重新考虑 以 brick 为粒度算节点数
+
+
 
 双活集群中优先可用域 2 副本，次级可用域 1 副本。
 
-在重新生成 ring_id 时要保持原来的次序
-
 UpdateTopoObj/RegisterChunk/RemoveChunk
 
-以 brick 为粒度算节点数，找到 3 个 brick 中最小的节点数，记得 k，对其他两个 brick k 等分
+以 brick 为粒度算节点数，找到 3 个 brick 中最小的节点数，记为 k，对其他两个 brick k 等分
 
 按 brick 编号挑 3 个节点
 
 
 
+removeChunk 里面竟然没调用 DeleteTopoObj
+
+Chunk_manager 对外暴露 CreateTopoObj / Delete / update / show / list
+
+CreateTopoObj 只允许创建 rack/brick，不能直接创建 Node（在 RegisterChunk 中实现）
+
+查看节点拓扑 GetChunkTopology（根据 cid 查的）、ShowTopoObj（根据 topo_id 查的） ；
+
+UpdateTotoObj 是允许更新 Node 的 TopoObj，节点的拓扑位置移动也是在这里
+
+1. 节点加入 RegisterChunk。此时没有 ring_id，需要生成；
+2. 节点退出 RemoveChunk。此时删除了对应的 TopoObj，之后还需要引发重新生成 Ring_id；
+3. 节点移动 UpdateTopoObj，Node 类型的 parent_id 被修改为其他 brick_id/CLUSTER，此时需要重新生成 ring_id；
+4. Brick/Rack 位置移动 UpdateTopoObj，如 Brick 从一个 Rack 移动到另一个 Rack（parent_id 变化）也要重新生成 ring_id；
+
+加入新节点，由于存在没有 ring_id 的情况，所以按 topo_id 生成 ring_id
+
+节点退出，由于此时一定是所有节点都有 ring_id，所以按照之前 ring_id 的相对顺序生成这一轮
 
 
-文档中描述过程并说明算法可以收敛，稳定性
 
 
 
@@ -35,9 +54,19 @@ ZBS RPM 和 SMTX ZBS/SMTX OS/IOMesh 等不同产品的产品版本号从 5.0.0 �
 非首次运行单测
 
 ```shell
+# 编译
 docker run --rm --privileged=true -v /code/zbs:/zbs -w /zbs/build registry.smtx.io/zbs/zbs-buildtime:el7-x86_64 ninja zbs_test
+
+# 屏幕中会提示出错处的日志信息，借助 newci 可以避免在本地配置 nvmf/rdma 环境跑单测
 cd /code && ./newci-x86_64 -builddir zbs/build/ -p 16 -action "/run 200 FunctionalTest.MarkVolumeAllocEven"
-# 屏幕中会提示出错处的日志信息
+
+
+# 运行后的测试日志默认保存在 /var/log/zbs/zbs_test.xxx 中 
+cd /code/zbs/build/sr && ./zbs_test --gtest_filter="*FunctionalTest.WriteResize*"
+
+
+# 自动修改格式后再编译
+docker run --rm --privileged=true -v /code/zbs:/zbs -w /zbs registry.smtx.io/zbs/zbs-buildtime:el7-x86_64 sh -c 'sh ./script/format.sh && cd build && ninja zbs_test'
 ```
 
 
