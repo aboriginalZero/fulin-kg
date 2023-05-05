@@ -63,7 +63,7 @@ cd /code && ./newci-x86_64 -builddir zbs/build/ -p 16 -action "/run 200 Function
 
 
 # 运行后的测试日志默认保存在 /var/log/zbs/zbs_test.xxx 中 
-cd /code/zbs/build/sr && ./zbs_test --gtest_filter="*FunctionalTest.WriteResize*"
+cd /code/zbs/build/src && ./zbs_test --gtest_filter="*FunctionalTest.WriteResize*"
 
 
 # 自动修改格式后再编译
@@ -79,19 +79,10 @@ Access 提供的是外部客户端进入 ZBS 系统内的接入点功能。在�
 2. 在获得数据访问权限（如果本地的 Access 不持有 Extent 的访问权限，则会转发至持有权限的 Access 继续后续步骤）和基本信息之后：
     1. 读请求：本地 LSM 在副本列表中，Access 会优先访问本地的 LSM （无需经过网络，本地的内存交换即可），如果成功读取则直接访问，失败则继续尝试逐一其余副本直至成功或者全部失败；
     2. 写请求，并发的向所有副本发出写命令，确认所有副本均写入成功才返回，如果部分失败，则执行副本剔除，保证副本列表中的所有副本数据一致，如果全部失败，则不剔除，返回异常等待上层重试；
-   
 
 
 
 
-```shell
-zbs-meta pextent read -o <output_file> <pextent_id> <offset> <length> 
-zbs-chunk extent list 
-```
-
-显示 2023-04-07 14:58:47,878, ERROR, cmd.py:2967, write() argument must be str, not bytes
-
-zbs-nfs 中难以查看 dir
 
 linux主分区、扩展分区、逻辑分区的区别、磁盘分区、挂载，https://blog.csdn.net/qq_24406903/article/details/118763610
 

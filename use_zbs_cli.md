@@ -1,5 +1,25 @@
 ### ZBS 常用 CLI
 
+写分区并观察 IO 流量和 recover 情况
+
+```shell
+fio -name=warmup -filename=/dev/sdd -bs=256k -direct=1 -numjobs=1 -iodepth=32 -rw=write -ioengine=libaio
+# /dev/sdd 所对应的 volume 的实时 IO 流量
+watch -n 1 zbs-perf-tools volume show 7c58b428-5dc0-4a7a-88d6-9025377c44a0
+# 要确保写的副本有被分配到这台 chunk 上
+watch -n 1 zbs-perf-tools chunk lsm summary
+# 查看 Volume 中各个 extent 的副本分配情况
+zbs-meta volume show_by_id --show_pextents --show_replica_distribution 7c58b428-5dc0-4a7a-88d6-9025377c44a0
+# 强制格式化分区并挂载
+zbs-chunk partition format --force /dev/sdb && zbs-chunk partition mount /dev/sdb
+# 查看正在执行的 recover cmd 
+zbs-meta recover list
+# 查看待执行的 recover cmd
+zbs-meta pextent find need_recover
+# 展示 zbs 版本信息
+cat /etc/smtx-release.yaml && rpm -qa | grep zbs
+```
+
 数据存储 pool -> 存储卷 volume -> 数据块 extent
 
 ```shell
@@ -8,7 +28,7 @@ zbs-meta chunk list
 # 查看集群中全部 pool 信息
 zbs-meta pool list
 # 查看某个 pool 中所有存储卷信息
-zbs-meta pool list <pool_name>
+zbs-meta volume listall <pool_name>
 # 查看某个 volume 信息
 zbs-meta volume show <pool_name> <volume_name> --show_pextents --show_replica_distribution
 # 查看当前集群中的 extent 信息
@@ -104,7 +124,7 @@ zbs-nvmf ns create <subsystem_name> <ns_id_0-256> <Gib_size>
 
    ```shell
    # conv=fsync 执行写同步，实际刷入磁盘 默认的 (bs = 512 Bytes) * (count = 2048k) = 1GB
-   dd if=/dev/zero of=/dev/sdd count=1024k conv=fsync
+   dd if=/dev/random of=/dev/sdd count=1024k conv=fsync
    # 测试读能力
    dd if=/dev/sdd of=/dev/null bs=4k
    ```
