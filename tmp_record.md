@@ -1,3 +1,5 @@
+
+
 允许 RPC 产生恢复/迁移命令，可以指定源和目的地，在运维场景或许会有用。
 
 输入 pid, src, dst 
@@ -5,8 +7,6 @@
 输出 pid, current loc, active loc, dst, owner, mode
 
 搜索 AddRecoverCmdUnlock
-
-
 
 
 
@@ -66,18 +66,20 @@ ZBS RPM 和 SMTX ZBS/SMTX OS/IOMesh 等不同产品的产品版本号从 5.0.0 �
 
 ```shell
 # 编译
-docker run --rm --privileged=true -v /code/zbs:/zbs -w /zbs/build registry.smtx.io/zbs/zbs-buildtime:el7-x86_64 ninja zbs_test
+docker run --rm --privileged=true -v /home/code/zbs:/zbs -w /zbs/build registry.smtx.io/zbs/zbs-buildtime:el7-x86_64 ninja zbs_test
 
 # 屏幕中会提示出错处的日志信息，借助 newci 可以避免在本地配置 nvmf/rdma 环境跑单测
-cd /code && ./newci-x86_64 -builddir zbs/build/ -p 16 -action "/run 200 FunctionalTest.MarkVolumeAllocEven"
-
+# 但是要配好 nvmf/rdma 的相关依赖包/服务
+cd /home/code && ./newci-x86_64 -builddir zbs/build/ -p 16 -action "/run 200 FunctionalTest.MarkVolumeAllocEven"
 
 # 运行后的测试日志默认保存在 /var/log/zbs/zbs_test.xxx 中 
-cd /code/zbs/build/src && ./zbs_test --gtest_filter="*FunctionalTest.WriteResize*"
+cd /home/code/zbs/build/src && ./zbs_test --gtest_filter="*FunctionalTest.WriteResize*"
 
+# 显示指定 main 分支
+git review main
 
 # 自动修改格式后再编译
-docker run --rm --privileged=true -v /code/zbs:/zbs -w /zbs registry.smtx.io/zbs/zbs-buildtime:el7-x86_64 sh -c 'sh ./script/format.sh && cd build && ninja zbs_test'
+docker run --rm --privileged=true -v /home/code/zbs:/zbs -w /zbs registry.smtx.io/zbs/zbs-buildtime:el7-x86_64 sh -c 'sh ./script/format.sh && cd build && ninja zbs_test'
 ```
 
 疑惑

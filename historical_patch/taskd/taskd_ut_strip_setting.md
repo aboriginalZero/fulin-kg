@@ -12,7 +12,7 @@
 
 截至目前版本（5.x ）ZBS 所实现的 Stripe 和 EC 里 Stripe 不同。EC 中的 Stripe 主要的作用是降低副本数，不同分片数据是关联： data + checksum。而 ZBS 的 Stripe 主要用途是帮助 LSM 将 Extent 分散至不同的 Partition 中，以便在顺序吞吐型 IO 击穿缓存后，获得尽可能高的带宽。Stripe 的属性包含 2 个参数 Stripe Size 和 Stripe Num。他们的基本工作方式是 Stripe Size X Stripe Num 的数据区域将成为一个基础的映射单元，被映射到 Stripe Num 数量的 Extent 中。
 
-Stripe 能够帮助 LSM 尽量将连续的 Extent 分散至不同的 Partition的 原因是 Meta 在创建 Volume 时，不论是 Thin 还是 Thick 的 Extent 都会立即将所有的 pid 分配给 Volume，这样保证了 Volume 上的 pid 在分配顺序是严格且紧密的和它们在 Volume 上的逻辑顺序一致。而 Meta 在分配 pid 时会赋予 pid一个全局单调递增的 epoch（uint64 可能会翻转，但在集群生命周期内可以认为是单调递增的）。LSM 在为 Extent 分配空间时就可以根据相邻的 epoch 识别他们大概率来自一个 Volume ，在分配时会尽量（但是不保证一定）将他们分散至不同的磁盘中。这样对于 256k x 4 的默认配置，1 M 大小的连续 IO 就会被切分为 4 个 256k 的 IO 发往 4 个不同的 Partition，从而尽量充分的利用不同 Partition 的带宽，当然因为现在 HDD 的带宽即便是顺序 IO 也与 NVMe 相差悬殊，所以 IO 目前尽量是由 Cache 负责，我们实际上不太从这个策略中获得好处。并且如果 Volume 执行了 COW，部分 pid 相对随机的被替换为新的 pid，Stripe 也就失效了。
+Stripe 能够帮助 LSM 尽量将连续的 Extent 分散至不同的 Partition的原因是 Meta 在创建 Volume 时，不论是 Thin 还是 Thick 的 Extent 都会立即将所有的 pid 分配给 Volume，这样保证了 Volume 上的 pid 在分配顺序是严格且紧密的和它们在 Volume 上的逻辑顺序一致。而 Meta 在分配 pid 时会赋予 pid一个全局单调递增的 epoch（uint64 可能会翻转，但在集群生命周期内可以认为是单调递增的）。LSM 在为 Extent 分配空间时就可以根据相邻的 epoch 识别他们大概率来自一个 Volume ，在分配时会尽量（但是不保证一定）将他们分散至不同的磁盘中。这样对于 256k x 4 的默认配置，1 M 大小的连续 IO 就会被切分为 4 个 256k 的 IO 发往 4 个不同的 Partition，从而尽量充分的利用不同 Partition 的带宽，当然因为现在 HDD 的带宽即便是顺序 IO 也与 NVMe 相差悬殊，所以 IO 目前尽量是由 Cache 负责，我们实际上不太从这个策略中获得好处。并且如果 Volume 执行了 COW，部分 pid 相对随机的被替换为新的 pid，Stripe 也就失效了。
 
 ZBS Client 在收到 UIO 之后会按照 Volume 的 Stripe 设置将其拆分为指定的 BIO。但是在目前看起来我们其实并不建议用户自己调整这个参数，在 HCI 模式下这个参数会被固定为 256K x 4，在 ZBS 模式下会被固定为 256K x 8。尽量减少拆分的层级和次数。
 
