@@ -1,5 +1,21 @@
 ### ZBS 常用 CLI
 
+观察 ELF 集群厚制备副本分配情况
+
+```shell
+# 查看 elf 集群中 2/3 副本、thin/thick 4 种情况的 target
+# 到对应 target 里面找在 tower 界面上创建的指定大小的虚拟卷对应的 lun
+zbs-iscsi target list
+# 查看 lun 的副本分配情况
+zbs-meta volume show_by_id 2cf94874-a119-49ad-8857-c5e5004174fb --show_pextents --show_replica_distribution
+# 查看节点的 chunk 编号
+zbs-meta chunk show 10.1.131.231 10200
+# 查看集群节点容量
+zbs-meta cluster summary
+# 查看 chunk 健康情况
+zbs-meta chunk list
+```
+
 写分区并观察 IO 流量和 recover 情况
 
 ```shell
@@ -42,7 +58,7 @@ zbs-chunk journal/cache/partition list
 # 查看本地所有 extent 的信息
 zbs-chunk extent list
 # 查看当前集群的整体状态及 leader 节点的 IP
-zbs-tool serive list
+zbs-tool service list
 
 # 三个接入协议 nfs, iscsi, nvmf
 zbs-nfs export list
