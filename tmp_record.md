@@ -1,8 +1,52 @@
-在超融合系统中，磁盘故障、网络失联、节点下线等故障都可能导致数据暂时或者彻底丢失。为了保障上层业务持续运转以及提高业务数据的安全性，通常需要使用数据副本冗余技术如多副本和 EC 纠删码。以多副本为例，首先把存储卷按固定大小切分成多个数据分片，再对每个数据分片创建多个副本，把这些副本分配到不同的存储节点上。如果某个存储节点出现故障宕机，其他存储节点上的数据副本仍能服务上层业务，系统还会对故障存储节点上的数据副本进行数据恢复，在其他健康存储节点上重新创建相应的副本。在这个过程中，决定这些数据副本如何在集群内分配的策略就称之为副本分配策略。
+副本迁移相关代码
 
-在超融合系统中，节点可能位于不同城市的不同机房的不同机架的不同机箱。一般情况下，同一机架中的不同机箱共用同一个接入交换机等网络设备，同一个机箱中的不同节点共用同一个 UPS 电源。共享设施如果异常的话，与之相关的所有节点都会受到影响。因此在考虑数据副本分配时，会将同一个数据块的不同副本放置在拓扑距离上尽量远的不同节点上，举个例子，超融合场景下会优先在本地分配副本，考虑 2 副本分配策略，节点 A 上的虚拟机产生数据的副本首先在分配到本地，此时如果有同一个机架上的节点 B 和另一个机架上的节点 C 可供选择时，会优先选择 C 上的节点。以上这种数据副本分配方式称为带有拓扑感知的副本分配方式。
+RecoverManager::DoScan()，正常情况下 60s 检查一次，也可以立即扫描如接受 rpc 请求
 
-当不同物理节点的拓扑等价时，现有的带有拓扑感知的副本分配方式做法是引入 topo id 来作为辅助的分配标准。topo id 是一个可比较大小的字符串，是每个物理节点在超融合集群中的唯一标记，在节点加入集群之后保持稳定、不可重复，因此一定满足同一集群中任意 2 个物理节点一定存在 topo id 的大小关系。在副本分配时如果出现了多个拓扑距离相等的候选节点，则选择其中 topo id 较小的节点作为待分配副本节点。其副本分配策略运行的逻辑图如下所示：
+RecoverManager::ReGenerateWaitingMigrateList()，分别处理均匀分配的副本和有本地化偏好的副本，他们会有不同的初次分配和迁移策略
+
+RecoverManager::ReGenerateMigrateForRebalance()，针对有本地化偏好的副本
+
+1. 当处于低负载时 
+
+   RecoverManager::ReGenerateMigrateForLocalizeInStoragePool()
+
+   RecoverManager::RepairPExtentForLocalization()，满足如下任一条件不触发迁移：1. 副本的 prefer local cid 不是健康状态（status == CHUNK_STATUS_CONNECTED_HEALTHY）；2. 这个 pid 存在临时副本； 3. replace cid 和 dst cid 都是 0；4. dst_cid/src_cid 上被下发的 recover 命令超过 200 条；5. src_cid 上的有限空间不足 256 MB；
+
+   否则通过 RecoverManager::GetRepairCid() 选取 replace_cid 和 dst_cid，初始值为 0，具体规则如下：
+
+   1. 如果 prefer local 有该副本，并且其他活跃副本满足本地化/局部化的分配策略，说明副本满足分配规则，不触发迁移；
+   2. dst_cid 的选取规则是优先选择没有副本且不处于 failsow 的 prefer local，次选符合期望分布（即符合 LocalizedComparator 分配策略） 的下一个副本；
+   3. replaced_cid 的选取规则是从活跃副本中选出不满足期望分布且不是 lease owner 的 cid，如果有多个可选，则选择第一个 failslow 的 cid； 
+
+   选定 dst_cid 和 replaced_cid 后，src cid 的选择规则是默认值为 replace cid，但如果 replace_cid slowfail 或者和 dst_cid 不在同一个可用域，那么会从活跃副本中找跟 dst_cid 在同一个可用域且不是 slow fail 的 cid 作为 src_cid。
+
+2. 当处于中高负载时
+
+   1. 如果集群处于极高负载时，进行容量再均衡扫描
+
+      RecoverManager::ReGenerateMigrateForBalanceInStoragePool()
+
+   2. 否则进行拓扑安全扫描
+
+      RecoverManager::RepairTopoInMediumHighLoad()
+
+      RecoverManager::RepairPextentTopo()
+
+      1. 非双活集群
+
+         RecoverManager::RepairInZone() 
+
+         RecoverManager::GetSrcAndReplace()
+
+      2. 双活集群
+
+         RecoverManager::RepairInStretched()
+
+         RecoverManager::MoveToOtherZone()
+
+         RecoverManager::GetSrcAndReplace()
+
+      
 
 
 
@@ -10,45 +54,9 @@
 
 
 
-目前已有包含拓扑感知的副本分配方式，
+zbs cli 如何快速查看集群负载情况？
 
-节点拓扑信息对于副本分配策略的设计十分重要。
-
-
-
-在数据中心中，每个机框中会安装有若干个物理服务器，这些服务器共享机框的部分关键设置，例如电源，磁盘连接的背板等等。这些共享设施的如果异常，机框内的所有服务器都会受到影响。每个机架上会安装若干个这样的机框。同时也会在机架上安装有交换机及其他的网络设备。机架内的所有服务器都会共享这些网络设备，设备异常时它们都会受到影响。因此在**考虑数据的副本分配时，会需要尽量将同一个数据块的不同副本放置在拓扑距离上尽量远的不同服务器上**（
-
-
-
-
-
-不同于其他分布式系统，分布式存储系统中拥有节点拓扑信息，在
-
-
-
-
-
-在集群内部如果仅仅考虑节点异常，将数据分片创建多个数据副本并分配到不同存储节点的方式，没有额外的考虑其他拓扑因素，例如节点可能位于不同的数据中心、机房、机架、机箱等情况。
-
-虽然可以对个别存储节点故障或者网络异常的场景进行容错，但无法应对分布式存储集群所处的整个数据中心出现断电等异常场景。当上层业务关联的所有数据副本所在数据中心因为意外事故断电或者遭受破坏时，上层业务将无法从存储集群中读写数据。
-
-
-
-在分布式存储系统中，磁盘故障、网络失联、节点下线等故障都可能导致数据暂时或者彻底丢失。为了提高数据可靠性，常用方法有多副本和纠删码机制，
-
-
-
-现有的副本分配方式有 2 副本和 3 副本
-
-现有的拓扑安全的做法是
-
-
-
-
-
-
-
-
+可能有多个 zbs client，但一定只会有一个 access，一个 lease owner 来保证接入点的唯一性
 
 
 
@@ -64,11 +72,9 @@
 
 
 
-命令行中 Replica 和 Alive Replica 的区别
+命令行中 Replica 和 Alive Replica 的区别？前者是 pextent table  中记录的，后者是跟随心跳上报动态变动
 
 
-
-但是 ELF 也存在无法判定的情况，比如虚拟卷是可以脱离 VM 单独创建的。要求在知道的时候传递即可。对应的接口是 Create LUN 的时候是否可以传递 Prefer CID
 
 
 

@@ -252,7 +252,7 @@ GenerateLease，通过 pid、MetaContext（包含这个 pid 的 PExtentEntry）�
 
 1. AccessHandler 借助 access follower 创建跟 meta leader 的 session，并带有对应的 KeepAlive 回调 AccessHandler::HandleKeepAlive --> HandleAccessResponse，所以 recover 命令由 meta leader 发往对应的 session follower
 
-    > meta leader 根据 pid lease 中的 owner 来判断 follower，如果这个 pid 当前没有 lease，那么分配给 src_cid 
+    > meta leader 根据 pid lease 中的 owner 来判断 follower，分配 recover 的 owner，优先使用该 pid 已有的 lease owner，没有 lease owner 且 src_cid 不为空的话优先分配到 src_cid（src），然后是 dst_cid，最后是从非 slow_cids 中选出一个作为 lease owner（这个的选择标准比较多，参考 AccessManager::ChooseOwner）
 
 2. RecoverHandler::NotifyRecover --> HandleRecoverNotification(recover_cmd) 
     这时构造 RecoverContext，其中指定了回调函数是 ctx->done = HandleRecoverEvent
