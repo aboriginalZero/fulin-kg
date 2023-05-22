@@ -329,6 +329,37 @@ generation 代表 extent 副本的写入次数，不论是 ReadVExtent 还是 Wr
 * 请求发起方在首次 IO 时都会执行 sync generation，其中会跟 meta_generation 比较，而每个副本变更的操作（剔除、移动、添加副本）都会去更新 meta_generation，所以如果副本变更，在 sync generation 阶段就会发现，并把不一致的副本剔除。
 * 什么时候该判断 wctx->lease->expired()？好像是当会牵扯到 RemovePExtentReplica ？
 
+[ZBS 网络故障处理改进](https://docs.google.com/document/d/1sPH5BKG9VLoT4CBA6pl3LlT5kBftwVy9kwfJ3OUQ1x0/edit#heading=h.sc3vrebi5hn6)中对 Generation Sync 的描述
+
+Generation Syncor 在获取各个副本的 gen 时，调用 Data Channel Client 发起 Get Generation 请求，并设置超时为 12s。
+
+1. 若个别副本没有成功返回 gen，那么等待 2s 后再进行一次重试。在网络波动时可能比较有用。如果副本失败的原因是由于 GetDataChannelClient 失败或者 Data Channel Client 有累积失败次数（说明最近多个连续请求都失败了），那么不会进行重试；
+2. 若部分副本成功，部分失败，那么以最高的 gen 为准，剔除失败的副本；
+3. 若所有副本都失败，那么返回 ECSyncGeneration。Access IO Handler 会将错误传递给 ZBS Client，ZBS Client 进行重试。Recover Handler 会移除 Recover Command。
+
+recover handler 剔除 dst_cid 的副本
+
+当 Recover Handler 处理 Recover cmd 时，如果本地 Extent Lease 的 location 包含 Recover 的 dst_cid，那么先确定 Recover 的 src_cid 副本能够正常获取 Gen，然后剔除 dst_cid 副本。此时 dst_cid 副本大概率是无法访问的，否则 Meta 不会下发到这个 dst_cid 的 Recover cmd。这种情况是应该剔除 dst_cid 副本的。
+
+dst_cid 副本有小概率能够访问，即 Meta 下发 Recover cmd 后该副本又恢复活跃。剔除 dst_cid 副本的副作用是，如果 src_cid 副本无法正常读取，那么就没有有效副本了。该场景概率非常低（副本 10min 没有上报活跃并且在 Meta 下发 cmd 后副本恢复活跃），可以简单的按照 dst_cid 副本无法访问的场景处理，剔除 dst_cid 副本。
+
+
+
+Generation Syncor Sync Gen 失败
+
+当 Generation Syncor 完成 Sync Gen 时，如果有部分副本成功和部分副本失败，那么会剔除失败副本（同时记录 staging_block_info 用于敏捷恢复）。
+
+1. 对于普通 IO 的 Sync Gen，如果个别副本 Sync 失败，那么会等待 2s 重试一次，这主要用于个别副本由于网络闪断而 Sync 失败。更多的是解决软件导致的网络断开，例如 Data Channel Client IO 超时后主动断开，内部线程卡住导致 ping 超时等；
+2. 对于 Recover Handler 的 Sync Gen，目前没有重试。
+
+由于网络异常也可能导致 sync gen 失败，所以要保证剔除的失败副本是 gen 最小的副本
+
+Sync Gen 的一项重要工作是检查各个副本的 Gen 是否一致，如果不一致那么会仅保留 Gen 一致的副本。出现 Gen 不一致的原因是，该数据曾经被写过，但是有副本成功写入，有副本失败了，失败的副本的 Gen 会更小。如果 Access 在下发 IO 后 Crash，就无法向 Meta 请求剔除写失败的副本，Sync Gen 可以用于修正这种情况。（需要注意的是，如果 Access 在 IO 返回后向 Meta 请求剔除写失败的副本，无论请求成功还是失败，Sync Gen 使用的 Lease Location 都不会包含这个失败副本，不会出现 Gen 不一致情况。）
+
+在目前的实现里，如果 Lease Location 的每个副本都成功返回 Gen，Sync Gen 会剔除 Gen 最小的副本。实际上保留任何一个 Gen 都是可以的，因为之前的写 IO 没有成功返回给用户。但是如果有 Lease Location 的副本由于网络异常没法返回 Gen，那么其 Gen 就有可能跟其他副本不一致。如果不剔除这个 Gen 未知的副本，并且其 Gen 跟其他副本不一致，那么用户连续发起对同一份数据读 IO 时，就有可能从不同 Gen 的副本读取，导致非单调读问题。
+
+
+
 ### 相关问题
 
 1. 快照/克隆时，要收回 lease，但快照也不更改数据，那支持读会有什么问题吗？如果一个 volume 快照后 write ，他到底在哪改了 cow = false？

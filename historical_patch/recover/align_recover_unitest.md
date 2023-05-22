@@ -167,6 +167,11 @@ GenerateLease，通过 pid、MetaContext（包含这个 pid 的 PExtentEntry）�
    3. 往 recover manager 下发一条这个 pid 的 recover cmd。
 3. libmeta。如果 meta leader 操作成功，libmeta 根据 reponse 中的 location 来设置 CachedLeasePtr->location，并用 max_generation 更新 CachedLeasePtr 的 meta_generation()
 
+如何保证剔除副本后的数据安全？
+
+1. 利用敏捷恢复做副本修复减少副本不安全的时间，敏捷恢复将数据恢复的粒度从 extent 降低到 block，通过记录 extent 离线后的 delta block data，在其重新上线后，只恢复记录的 delta block data，通过减少数据恢复量的方式来减少副本不安全的时间；
+2. 利用临时副本来避免最后一个副本丢失。临时副本的基本思路是在副本被剔除时，快速分配临时副本与健康副本数量之和等于期望副本数。临时副本仅包含在副本剔除后新写入的数据，仅能处理写，但是无法处理读。剔除时，还将保留原有副本为失败副本。数据恢复过程中每恢复一个健康副本，就移除 1 个失败副本和临时副本。在所有健康副本均失效且失败副本恢复访问的情况下允许触发特殊恢复机制，将临时副本的数据重放至失败副本上修复为健康副本。
+
 #### AccessIOHandler::SyncGeneration
 
 在 zbs_code_intro_ans.md 中
@@ -308,6 +313,16 @@ GenerateLease，通过 pid、MetaContext（包含这个 pid 的 PExtentEntry）�
     * END
 
         更新 meta  上的副本位置，ReplacePExtentReplica、DropLeaseIfNecessary 
+
+当前如果 recover IO 和 regular IO 并行且有 block 重叠 （这里的 IO 指的是 write），那么：
+
+1. regular IO 需要等待 recover IO 完成之后再执行。这是因为必须要保证 read from src 的数据在整个 block recover 的过程中都是最新的数据，也就是数据一旦被 read 出来之后，这个 block 就不能接受 regular write 了，否则就会有正确性的问题（比如，write to dst 把 read 出来的旧数据覆盖了 regular write 的新数据）。
+
+2. 保证 recover IO 执行完后，regular IO 将 recover dst 加入到 regular IO 的 location 中，以确保这条 IO 能够写入 dst extent。
+
+3. 如果 regular IO 和 recover IO 不重叠，也需要写入 dst extent，以确保 LSM 端的 generation 与 access 端保持一致。
+
+除了重叠的 block 需要阻塞 regular IO，当 recover 处于 START 状态时也需要阻塞 regular IO。原因参见 Agile Recover 正确性保证原则 2
 
 #### 数据结构
 

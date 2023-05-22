@@ -1,4 +1,29 @@
-副本迁移相关代码
+Access 在进行读/写 IO 前先进行一次 Sync Gen，确认所有副本当前的 Gen 是一致的。
+
+
+
+
+
+// TODO 看一下这 3 个方法是怎么构造  recover cmd 的
+
+RecoverManager::GenerateRecoverCmds()、RecoverManager::GenerateMigrateCmds()、RecoverManager::AddSpecialRecoverCmd()
+
+
+
+RecoverManager::AddRecoverCmdUnlock()
+
+1. 若这个 pid 上有 recover cmd，返回 false（每个 pid 上任一时刻只能有 1 条 recover cmd）；
+2. 若这是一条临时副本的 recover cmd，且 src_tmp_replica 的正确版本（通过对比 epoch 确定）是否已经在 pid pextent 上，返回 false；
+3. 若 src 中没有 pid 或者 migrate dst 已经有 pid，返回 false；
+4. 确保 dst 上有足够的空间（能否再放一个 extent，区别对待 thin/thick），更新 dst 的 rx_pids、replaced 的 tx_pids、src 的 recover_src_pids 以及他们的占用空间；
+5. 调用 AccessManager::EnqueueRecoverCmd() 生成 recover cmd 并放入对应命令队列中
+   1. 通过 AccessManager::AllocOwnerForRecover() 分配 recover/migrate 的 lease Owner，与 AccessManager::AllocOwner() 由用户 IO 触发的 Owner Alloc 逻辑不同，分配的优先级是 1. 该 pid 已有的 lease owner；2. src_cid；3. dst_cid；4. 从非 slow_cids 中根据 [owner priority](https://docs.google.com/document/d/1Xro2919inu3brs03wP1pu5gtbTmOf_Tig7H8pfdYPls/edit#heading=h.2hivgtf3odem) 选一个 cid；
+   2. 若此时 lease owner 跟 src_cid 不同，跟 dst_cid 不同，且 lease owner 上有活跃副本（说明它是健康的），为了避免 recover/migrate 的读走本地而非网络，会把 recover cmd 的 src 修改成 lease owner；
+   3. 根据待恢复/迁移副本的 pid 和经过 1 2 步选出的 lease owner，构造 lease 并放入 recover cmd 中，接着将 recover cmd 放入 lease owner 的那个 recover cmd 队列（Access Manager 为每个 session 维护了一个  recover cmd 队列，通过 lease owner 的 uuid 获取。
+
+
+
+集群内部扫描副本状态，副本迁移相关代码
 
 RecoverManager::DoScan()，正常情况下 60s 检查一次，也可以立即扫描如接受 rpc 请求
 
@@ -48,15 +73,9 @@ RecoverManager::ReGenerateMigrateForRebalance()，针对有本地化偏好的副
 
       
 
+IO 下发的流程
 
-
-
-
-
-
-zbs cli 如何快速查看集群负载情况？
-
-可能有多个 zbs client，但一定只会有一个 access，一个 lease owner 来保证接入点的唯一性
+NFS/iSCSI/nvmf -> ZBS Client -> access io handler -> generation syncor -> recover handler
 
 
 
@@ -72,9 +91,61 @@ zbs cli 如何快速查看集群负载情况？
 
 
 
+
+
+疑惑
+
+1. 觉得我最近哪里不行？对我有什么建议？Recover 相关的 patch 修完开始做去重还是分层的工作？
+2. ZBS 中的一个 extent，读的同时不允许写？为啥不用多版本机制来管理（块存储覆盖写的原因？还是块存储没必要提供）
+3. 代码中 [(zbs.labels).as_str = true] 的意思，slack 中 qiuping 提过，
+4. gtest 如何开启 VLOG DLOG 部分的日志
+5. meta in zbs 中 Volume 部分 origin_id 中示例继承树怎么看？
+6. metaDB 中的 Vtable 表存储 Volume -> Extent 的关联关系
+7. 对着 log 梳理一下 zbs 架构，角色在什么位置，哪些要持久化到 metaDB，关键数据结构的类型
+8. CreateSession 这个过程 SessionMaster 做什么了
+
+zbs cli 如何快速查看集群负载情况？
+
+Meta 与 chunk 如何交互？问题来源[减少数据恢复量](https://docs.google.com/document/d/1rDN0bNa-Dw6xo9yCN_gtVg1qrrDx1LVzc5_Dz_23dW8/edit#)
+
+1. 为什么需要 Extent Lease
+2. 为什么第一次拿到 Lease 之后需要 Sync Generation
+3. 为什么 Meta 需要保存一份 generation，什么时候会使用和更新这个 generation
+4. ZBS 如何保证多个副本之间的一致性
+   1. Meta 如何分配副本
+   2. ZBS 如何进行写操作
+   3. 当有副本发生错误时，ZBS 如何保证数据安全
+   4. Meta 中记录的副本和 LSM 中的本地副本之间的关系
+   5. Meta 中记录的 location 和 alive_location 的含义
+   6. 当 snapshot 和 clone volume 的时候 Meta 和 LSM 的元数据发生了什么
+   7. Sync Gen 失败的副本是否必须立即从 meta 中剔除
+   8. 写失败的副本是否必须立即从 meta 中剔除
+
+
+
+可能有多个 zbs client，但一定只会有一个 access，一个 lease owner 来保证接入点的唯一性
+
+
+
 命令行中 Replica 和 Alive Replica 的区别？前者是 pextent table  中记录的，后者是跟随心跳上报动态变动
 
+```
+# 在主分支上
+git pull
+# 将新的 URL 复制到本地配置中
+$ git submodule sync --recursive
+# 从新 URL 更新子模块
+$ git submodule update --init --recursive
+```
 
+双活集群相关问题
+
+虚拟机创建在次级可用域，应该是当前可用域 (次级可用域) 2 副本，远端可用域(优先可用域) 1 副本吧。
+
+副本如果被写过的话，是选择业务虚拟机当前接入点所在可用域作为数据优先写入的可用域，数据会自动向该可用域聚集，达到副本 2: 1 的效果。
+如果是厚置备且从未写入的数据，将选择集群默认的优先可用域（用 zbs-meta session list 可以查看节点的 zone id，zone id = default 说明在集群默认的优先可用域）。
+
+这个是在双活文档中找到的，meta in zbs 等并没有，代码也不知道怎么看
 
 
 
@@ -147,16 +218,6 @@ git review main
 # 自动修改格式后再编译
 docker run --rm --privileged=true -v /home/code/zbs:/zbs -w /zbs registry.smtx.io/zbs/zbs-buildtime:el7-x86_64 sh -c 'sh ./script/format.sh && cd build && ninja zbs_test'
 ```
-
-疑惑
-
-1. ZBS 中的一个 extent，读的同时不允许写？为啥不用多版本机制来管理（块存储覆盖写的原因？还是块存储没必要提供）
-2. 代码中 [(zbs.labels).as_str = true] 的意思
-3. gtest 如何开启 VLOG DLOG 部分的日志
-4. meta in zbs 中 Volume 部分 origin_id 中示例继承树怎么看？
-5. metaDB 中的 Vtable 表存储 Volume -> Extent 的关联关系
-6. 对着 log 梳理一下 zbs 架构，角色在什么位置，哪些要持久化到 metaDB，关键数据结构的类型
-7. CreateSession 这个过程 SessionMaster 做什么了
 
 
 
