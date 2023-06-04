@@ -1,19 +1,18 @@
-// TODO 看一下这 3 个方法是怎么构造  recover cmd 的
+允许 RPC 产生恢复/迁移命令，可以指定源和目的地，在运维场景或许会有用。
 
-RecoverManager::GenerateRecoverCmds()、RecoverManager::GenerateMigrateCmds()、RecoverManager::AddSpecialRecoverCmd()
+输入 pid, src, dst 
+
+输出 pid, current loc, active loc, dst, owner, mode
+
+搜索 AddRecoverCmdUnlock
+
+1. AddMigrateCmd rpc 参考 RecoverManager::MakeMigrateCmd() 和 AddSpecialRecoverCmd() 的就行，再加些判断条件；
+
+2. AddRecoverCmd 参考 AddToWaitingRecover() 和 AddSpecialRecoverCmd() 写法。
 
 
 
-RecoverManager::AddRecoverCmdUnlock()
 
-1. 若这个 pid 上有 recover cmd，返回 false（每个 pid 上任一时刻只能有 1 条 recover cmd）；
-2. 若这是一条临时副本的 recover cmd，且 src_tmp_replica 的正确版本（通过对比 epoch 确定）是否已经在 pid pextent 上，返回 false；
-3. 若 src 中没有 pid 或者 migrate dst 已经有 pid，返回 false；
-4. 确保 dst 上有足够的空间（能否再放一个 extent，区别对待 thin/thick），更新 dst 的 rx_pids、replaced 的 tx_pids、src 的 recover_src_pids 以及他们的占用空间；
-5. 调用 AccessManager::EnqueueRecoverCmd() 生成 recover cmd 并放入对应命令队列中
-   1. 通过 AccessManager::AllocOwnerForRecover() 分配 recover/migrate 的 lease Owner，与 AccessManager::AllocOwner() 由用户 IO 触发的 Owner Alloc 逻辑不同，分配的优先级是 1. 该 pid 已有的 lease owner；2. src_cid；3. dst_cid；4. 从非 slow_cids 中根据 [owner priority](https://docs.google.com/document/d/1Xro2919inu3brs03wP1pu5gtbTmOf_Tig7H8pfdYPls/edit#heading=h.2hivgtf3odem) 选一个 cid；
-   2. 若此时 lease owner 跟 src_cid 不同，跟 dst_cid 不同，且 lease owner 上有活跃副本（说明它是健康的），为了让 recover/migrate 的读走本地而非网络，会把 recover cmd 的 src 修改成 lease owner；
-   3. 根据待恢复/迁移副本的 pid 和经过 1 2 步选出的 lease owner，构造 lease 并放入 recover cmd 中，接着将 recover cmd 放入 lease owner 的那个 recover cmd 队列（Access Manager 为每个 session 维护了一个  recover cmd 队列，通过 lease owner 的 uuid 获取。
 
 
 
@@ -65,25 +64,64 @@ RecoverManager::ReGenerateMigrateForRebalance()，针对有本地化偏好的副
 
          RecoverManager::GetSrcAndReplace()
 
-      
+
+经过以上步骤，生成的 Recover cmd 只是放入 passive_waiting_migrate 中，在等待 60s 或者 scan_recover_immediate = true 时会 swap(active_waiting_migrate, passive_waiting_migrate) 
+
+关于 active_waiting_migrate / passive_waiting_migrate 这两个链表：
+
+1. 只有 RecoverManager::GenerateMigrateCmds() / RevokeRecoverCmds() 会往 active_waiting_migrate 中 erase 元素；
+2. 只有 RecoverManager::MakeMigrateCmd() 会往 passive_waiting_migrate 中 push 元素，调用 MakeMigrateCmd() 的有：
+    1. RecoverManager::RepairPExtentForLocalization()，这是在集群处于低负载时的拓扑安全扫描；
+    2. RecoverManager::RepairPextentTopo()，这是在集群处于中、高负载时的拓扑安全扫描；
+    3. RecoverManager::DoMove()，这是在集群处于极高负载时的容量再均衡扫描；
+    4. RecoverManager::ReGenerateMigrateForRemovingChunk()，针对要退出的 Chunk 上的所有 pid 做迁移。
+
+关于 active_waiting_recover / passive_waiting_recover 这两个链表：
+
+1. 只有 RecoverManager::GenerateRecoverCmds() / RevokeRecoverCmds() 会往 active_waiting_recover 中 erase 元素；
+2. 只有 RecoverManager::AddToWaitingRecoverIfNecessary() 会往 passive_waiting_recover 中 insert 元素，调用 AddToWaitingRecoverIfNecessary() 的有：
+    1. RecoverManager::AddToWaitingRecover(pid_t pid)，recover 给定的 pid ，在 MetaRpcServer::DoRemoveReplica() 指定 pid 时会构建临时副本，并触发这个 pid 的 recover；
+    2. RecoverManager::ReGenerateWaitingRecoverList()，recover pextent table 中所有需要 recover 的 pid，在 DoScan 中被定时执行；
+
+
+
+RecoverManager::DoScan()，正常情况下 60s 检查一次，也可以接受 rpc 请求去立即扫描
+
+在 Scan 的过程中：
+
+1. 通过 RecoverManager::GenerateRecoverCmds() 为 active_waiting_recover 队列中元素构造 recover cmd；
+2. 通过 RecoverManager::GenerateMigrateCmds() 为 active_waiting_migrate 队列中的元素构造 migrate cmd；
+3. 调用 RecoverManager::AddRecoverCmdUnlock() 做 recover 相关检查；
+4. 调用 AccessManager::EnqueueRecoverCmd() 生成 recover cmd 并放入对应 session 命令队列中；
+
+另一种调用 RecoverManager::AddRecoverCmdUnlock() 的方式是 RecoverManager::AddSpecialRecoverCmd() ，接受通过 rpc 的方式来调用。
+
+RecoverManager::AddRecoverCmdUnlock()
+
+1. 若这个 pid 上有 recover cmd，返回 false（每个 pid 上任一时刻只能有 1 条 recover cmd）；
+2. 若这是一条临时副本的 recover cmd，且 src_tmp_replica 的正确版本（通过对比 epoch 确定）是否已经在 pid pextent 上，返回 false；
+3. 若 src 中没有 pid 或者 migrate dst 已经有 pid，返回 false；
+4. 确保 dst 上有足够的空间（能否再放一个 extent，区别对待 thin/thick），更新 dst 的 rx_pids、replaced 的 tx_pids、src 的 recover_src_pids 以及他们的占用空间；
+5. 调用 AccessManager::EnqueueRecoverCmd() 生成 recover cmd 并放入对应命令队列中
+    1. 通过 AccessManager::AllocOwnerForRecover() 分配 recover/migrate 的 lease Owner，与 AccessManager::AllocOwner() 由用户 IO 触发的 Owner Alloc 逻辑不同，分配的优先级是 1. 该 pid 已有的 lease owner；2. src_cid；3. dst_cid；4. 从非 slow_cids 中根据 [owner priority](https://docs.google.com/document/d/1Xro2919inu3brs03wP1pu5gtbTmOf_Tig7H8pfdYPls/edit#heading=h.2hivgtf3odem) 选一个 cid；
+    2. 若此时 lease owner 跟 src_cid 不同，跟 dst_cid 不同，且 lease owner 上有活跃副本（说明它是健康的），为了让 recover/migrate 的读走本地而非网络，会把 recover cmd 的 src 修改成 lease owner；
+    3. 根据待恢复/迁移副本的 pid 和经过 1 2 步选出的 lease owner，构造 lease 并放入 recover cmd 中，接着将 recover cmd 放入 lease owner 的那个 recover cmd 队列（Access Manager 为每个 session 维护了一个  recover cmd 队列，通过 lease owner 的 uuid 获取）。
+
+
+
+
+
+
+
+migrate 和 recover 只是共用 RecoverCmd 这个数据结构，各自的命令队列（recover 是 std::set，migrate 是  std::list）、触发时机、同时触发的命令数都是不同的。
+
+
+
+
 
 IO 下发的流程
 
 NFS/iSCSI/nvmf -> ZBS Client -> access io handler -> generation syncor -> recover handler
-
-
-
-后续读一下临时副本的内容，
-
-允许 RPC 产生恢复/迁移命令，可以指定源和目的地，在运维场景或许会有用。
-
-输入 pid, src, dst 
-
-输出 pid, current loc, active loc, dst, owner, mode
-
-搜索 AddRecoverCmdUnlock
-
-
 
 
 
@@ -96,8 +134,9 @@ NFS/iSCSI/nvmf -> ZBS Client -> access io handler -> generation syncor -> recove
 5. metaDB 中的 Vtable 表存储 Volume -> Extent 的关联关系
 6. 对着 log 梳理一下 zbs 架构，角色在什么位置，哪些要持久化到 metaDB，关键数据结构的类型
 7. CreateSession 这个过程 SessionMaster 做什么了
+7. 生产代码应该少的出现断言，避免引起不必要的 coredump
 
-zbs cli 如何快速查看集群负载情况？
+zbs cli 如何快速查看集群负载情况？用 zbs-meta chunk list 看每个节点的负载然后自己手动算
 
 Meta 与 chunk 如何交互？问题来源[减少数据恢复量](https://docs.google.com/document/d/1rDN0bNa-Dw6xo9yCN_gtVg1qrrDx1LVzc5_Dz_23dW8/edit#)
 
@@ -137,9 +176,9 @@ Access 在进行读/写 IO 前先进行一次 Sync Gen，确认所有副本当�
 # 在主分支上
 git pull
 # 将新的 URL 复制到本地配置中
-$ git submodule sync --recursive
+git submodule sync --recursive
 # 从新 URL 更新子模块
-$ git submodule update --init --recursive
+git submodule update --init --recursive
 ```
 
 用 uint64_t 来声明 ring_id
