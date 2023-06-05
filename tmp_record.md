@@ -1,3 +1,30 @@
+C++ 中 map 嵌套使用，vector 添加一个 vector 中所有元素 https://zhuanlan.zhihu.com/p/121071760
+
+创建一个 elf 的 5 节点集群
+
+1. FOREACH_SAFE 和 FOREACH 的区别？怎么体现 safe 了
+2. access handler 中为啥都以事件回调的形式来注册 Session Handler 的相关接口
+
+
+
+
+
+允许 RPC 产生恢复/迁移命令，可以指定源和目的地，在运维场景或许会有用。
+
+输入 pid, src, dst 
+
+输出 pid, current loc, active loc, dst, owner, mode
+
+搜索 AddRecoverCmdUnlock
+
+对于 pid src dst 有限定规则，外部 rpc 触发的 recover/migrate 优先级应该要更高，插到队列第一条，
+
+recover/migrate 要分开讨论，migrate 要额外指定 replace chunk
+
+做一次冲突检查，合法且和当前恢复不冲突，prefer local 和 topo 相关的不管
+
+
+
 // TODO 看一下这 3 个方法是怎么构造  recover cmd 的
 
 RecoverManager::GenerateRecoverCmds()、RecoverManager::GenerateMigrateCmds()、RecoverManager::AddSpecialRecoverCmd()
@@ -74,14 +101,6 @@ NFS/iSCSI/nvmf -> ZBS Client -> access io handler -> generation syncor -> recove
 
 
 后续读一下临时副本的内容，
-
-允许 RPC 产生恢复/迁移命令，可以指定源和目的地，在运维场景或许会有用。
-
-输入 pid, src, dst 
-
-输出 pid, current loc, active loc, dst, owner, mode
-
-搜索 AddRecoverCmdUnlock
 
 
 
@@ -191,15 +210,11 @@ UpdateTotoObj 是允许更新 Node 的 TopoObj，节点的拓扑位置移动也�
 
 
 
-也要给他分配一个默认的的
 
 
 
 
-
-
-
-机器重启后，zk 要手动重启，selinux 要关闭
+机器重启后，zk 要手动重启，selinux 要关闭，zkServer.sh start、setenforce 0
 
 
 
@@ -225,6 +240,113 @@ git review main
 # 自动修改格式后再编译
 docker run --rm --privileged=true -v /home/code/zbs:/zbs -w /zbs registry.smtx.io/zbs/zbs-buildtime:el7-x86_64 sh -c 'sh ./script/format.sh && cd build && ninja zbs_test'
 ```
+
+
+
+Session Follower 
+
+Session Follower 负责通过心跳循环维持 Session 的状态，它工作在独立的线程中，支持多种方式指定 Meta 中的 Session Master 位置：
+
+1. Leader Loader，目前默认使用的方式，Loader 通过 ZK 集群获取 Meta Server Leader 地址，并会在 Leader 地址更新时同步更新 Lib Meta 中地址；
+2. ZK Host，通过指定的 service name 直接从 ZK 中获取 Master 地址；
+3. Master Address，直接指定 Master 地址；
+
+当 Session 创建时，Meta Server 将返回 Session 有效时间（lease_interval_ns，相对时间，即仅代表 Lease 有效时间长度，而不是有效时间戳） 。Session Follower 记录后， 将进入无限 Keepalive 循环，每轮循环处理逻辑如下（对应代码 SessionFollower::KeepAliveLoop()）：
+
+1. 检查 Session 是否已经异常（根据最新一次完成心跳的时间戳与当前时间戳比较确定）:
+   1. Jeopardy，lease 已经失效，但是失效时长尚未超过 kJeopardyIntervalNS = 30s，上报事件继续处理；
+   2. Expired，lease 失效超过 kJeopardyIntervalNS = 30s，退出循环，上报 Expire 事件，删除当前 Session，等待 Session 重建；
+2. 如果之前出现了异常，将等待一段时间后，尝试重新连接 Master。重连将触发 Master 地址重新更新（如果使用 Master Leader Loader 模式）。等待的时间与当前重试次数有关，重试次数越大，等待时间越久。但最少是 kSessionConnectRetryIntervalMinMs = 1.5s，最长不超过 kSessionConnectRetryIntervalMaxMs = 6s。重连成功并且 Session 依然活跃则继续处理，否则回到步骤 1；
+3. 通过 Session Client 向 Session Master 发送 Keepalive 信息，Session Client 的 timeout 会考虑当前 Lease 的存活时间，保证 timeout 之前 lease 是有效的：
+   1. Master 回复正常，则更新本地的 Lease，继续步骤 1；
+   2. 连接失败则重标记需要重连，继续步骤 1；
+   3. Master 回复 Session 过期，则退出循环，上报 Expire 事件，删除当前 Session，等待 Sesion 重建；
+   4. Master 回复 并非 Leader，标记重连，由重连过程更新 Leader 地址，进入步骤 1；
+   5. Master 回复 Epoch 不匹配，则触发 Master Change 事件，继续步骤 1；
+
+Session Follower 除在重连时可能做等待之外，心跳循环中均为直接处理没有等待，心跳的间隔周期由 Meta Leader 上的 Session Master 控制返回 Keepalive 请求的时机来实现，一般的周期是每 kReplyLeaseLeftNS = 5s 一次心跳，不过如果 Meta 刚重启或有立即下发 recover cmd 的需求，也会直接触发心跳。涉及代码包括：
+
+1. Follower 中调用 AccessHandler::HandleKeepAlive() 来解析 response 中蕴含的 AccessKeepAliveResponse 部分的 recover/migrate/revoke lease/maintenance/clean chunk info/revoke client/volume update/config update cmd，ChunkKeepAliveResponse 部分的 gc cmd；
+2. Follower 中调用 SessionMaster::KeepAlive() 来从 Session Master 那获取心跳结果，即一些待执行的命令放在 response 中。
+
+Session Master 向 Session Follower 下发命令包含 2 种模式：（也可以理解成 Meta Leader 向 Access 下发）
+
+1. 需要确认 Access 收到。例如 Revoke，iSCSI 的配置变更等同步 RPC。Meta 在发出命令后，一定会等待包含对应命令的 Keepalive 请求收到就Access 回应之后才返回命令（依赖心跳交互中 Session 的 Session Epoch 单调递增变化进行确认，例如下发命令时的 session epoch 是 1，当收到 access 回应的 epoch >=1 时即可代表之前产生的所有命令均已经正常接收）；
+2. 无需确认。例如 GC，Recover 等，仅需要放入 Session 的通知队列中下发接口，Meta 中产生命令的逻辑不会等待
+
+> 我理解这两种模式区别在同步/异步上
+
+在目前版本中，Access 实现的均是无状态推送，即便是确认推送才放回结果的模式，Meta 也不感知 Access 对命令的执行结果，仅确保送达。依赖这个模式的业务逻辑需要各自采用其他机制确保正确执行。
+
+心跳是 Meta 给 Access 传递控制指令的过程，而 Chunk 状态信息（Extent 状态、Chunk 网络状态、Chunk 上活跃外部连接状态等）由于信息过于庞大，因此不在心跳中上报，而是剥离出来使用独立的固定间隔循环上报状态数据。（HDFS 中也是这么做的）
+
+
+
+
+
+Access 持有的 Lease 包括三种类型：
+
+1. Session Lease，代表了 Session 的存活状态。由 Keepalive 过程维系，Lease 到期之后 Session 进入异常状态，Access 不再提供 IO 服务。Lease 在心跳过程中会不断续期。只要心跳正常，Lease 就始终有效；
+2. VExtent Lease， 代表着虚拟卷对应数据块的访问权限，通常由 ZBS Client 和 Access 尝试对 Volume 执行 IO 时向 Meta 申请，存储 vExtent Lease 时也会缓存对应的 Extent lease；
+3. Extent Lease，代表着 ZBS 内部的数据对象 Extent 的访问权限，在 Recover/Migrate 等系统内部 IO 事件发生时会如果需要生成 Lease 会产生于独立于 VExtent Lease 的 Extent Lease。
+
+Extent Lease 为每个失败的副本维护了 Staging Block Info（class CachedLease 中持有），自副本第一个失败 IO 起所写过的 Block 都将记录在 Staging Block Info 中。敏捷恢复时，根据 Staging Block Info，读取数据增量恢复到失败副本中 ，Sync 临时副本时也将从临时副本记录的数据增量构建出 Staging Block Info。
+
+VExtent Lease 和 Extent Lease 虽然有很多共同的属性，也都代表着访问权限。但是本质上是两个不同视角和逻辑对象的访问权限。目前版本因为 ZBS Client 和 Access 运行在同一个进程中，他们共享了缓存 Lease 的 Libmeta 结构。因此在大部分场景下， Client 对 Volume 执行 IO 时申请了 VExtent Lease ，Access 就不再需要额外申请一次。当然 Client 访问 Extent Lease owner 未必一定在本地 Chunk 中，此时就会通过网络访问远端 Access。
+
+持有 Lease 的 holder 应该在 yield 之后重新检查 lease，因为在 yield 期间有可能被其他 holder 清理或自身过期
+
+Lease 原理上应该是一个独立的具备时间有效性的机制，出于实现方便地考虑，我们没有对每个 VExtent Lease 和 Extent Lease 做独立的基于时间的生命周期管理。而是将他们的生命周期与 Session Lease 绑定在一起，Session 存活即保证 Lease 存活，仅在必要时通过命令处理逻辑或者异常处理逻辑清理部分 Extent 的 Lease。
+
+Meta Lease 的授予对象是 Session，因此一个 Access 在上一次 Session 生命周期内获得的 Lease 并不可以沿用到下一个 Session 生命周期内。这是因为两个 Session 交替期间内一定发生过集群失连的事件，Lease 在此期间很有可能已经由 Meta 授予给其他 Access 上的 Session。
+
+Access Server 通过 Session 机制与 Meta 建立连接，经过 Session 确保数据访问权限（Extent Lease）的唯一性，提供接入协议转换功能。
+
+Access 中 Session 状态维护机制包括 2 个部分：维持生命周期心跳循环的 Session Follower 与响应状态变化事件的 Session Handler。Session 也有自己的 Lease， 代表 Session 的健康状态，每次 Access 收到 Meta 的心跳回复都会延续自身的 Lease 。如果长时间没有收到正常的心跳回复就会触发状态变化。状态有 Init、KeepAlive、Jeopardy、Expired。
+
+
+
+Session 
+
+
+
+
+
+ZBS 保持副本一致性的方式的是在整体设计中采用了单一接入的策略，包含数据链接上的单一接入点、Access 上实现的数据块粒度的权限控制、Generation 机制。
+
+分布式一致性接入仅是解决用户层面的多点访问带来的数据冲突问题的必要非充分条件。例如 A 和 B 两个程序同时写一个本地文件，文件系统可以保证按序处理 IO 并且返回给 A 和 B 一致的结果，但是如果 A 和 B 没有互相协作，不具备感知使用的存储是一个共享存储的能力，则数据状态很有可能不是他们中任意一个预期的结果。多点接入的数据正确性保证，还需要依赖于应用程序本身支持共享存储，例如 Oracle Rack，SQL Server Cluster，OCFS，VMFS, Hyper-V CSV 等。
+
+块存储系统需要业务方来控制下发的 IO 是有序的，自身并不保证同时下发的 IO 有序。在 ZBS Client 中，不额外的处理 IO 重叠的保序问题，即不会严格的按照收到的 IO 请求顺序下发 IO。因为对于通用的块存储系统收到的并发重叠 IO，A 和 B，语义上并不保证最终结果是 A 或 B 或者 AB 交叠。大部分应用端希望确定某个结果时，会在发送时做合并或者严格的遵循收到 A 成功之后再下发 B 的原则。这样 IO 都成功之后结果就一定是 B。
+
+
+
+
+
+ZBS Client 的核心功能是处理来自用户的 IO 请求。是 ZBS 内部数据对象 Volume 的访问入口，同时也集成了 Libmeta 作为集群 RPC 的访问代理（meta.cc，包含 Lease 管理和集群 RPC 接口两部分功能）。
+
+在 IO 过程中，ZBS Client 不处理副本、数据校验等逻辑，他的主要逻辑是将对一个 Volume 的访问请求转化为对 Extent 的访问请求。ZBS Client 通过 Meta 将 Volume 指定区域（offset + len）映射到对应的 Extent，并从 Meta 返回的 VExtent Lease 中获得 Extent  Lease owner 的位置信息并将 IO 转发过去。
+
+因为 IO 请求的频率过大，每一次都访问 Meta 获取位置信息将对 Meta 产生过大的压力。所以 Libmeta 收到 Lease 后将在本地缓存。ZBS Client 与 Access 不同，与 Meta 之间不会有心跳维护 Lease 的有效性，即 Meta 处的 Lease 变化是不会在意 Client 是否知道的，这样 ZBS Client 缓存的 Lease 可能与 Meta 存在不一致的现象。但是这并不影响正确性，因为 ZBS Client 的 Lease 仅用于路由向 Access Lease owner，只要 Meta 维持了 Access 的 Lease 正确性，如果 ZBS Client 访问了老旧的 Lease Owner，Access 将返回一个 ENotOwner 类型的错误。ZBS Client 收到此类错误后将丢弃本地缓存的 Lease 再向 Meta 获取新的 Lease ，中间过程数据是不会产生任何变化的。
+
+Libmeta 也会监控自身的 Lease 使用情况，在长期未使用时会释放 Lease 以回收内存。但是因为 ZBS Client 自身其实不是 Lease 的持有者（非 Access owner），所以它的清理动作只需要涉及清理自身的缓存即可，不需要通知 Meta 也同步释放（但是因为和 Access 共享 Libmeta，所以会看到清理动作）。
+
+他有两种存在形态：
+
+1. Internal Mode
+
+   Access Server 中集成的 ZBS Client，特点是本地 Client 所在的节点会持有一个 Session，并且本地有 Access 可以处理 IO 请求。Client 自身可以访问到集群内部的服务，例如 Meta，ZK 等。在这个模式下，ZBS Client 会通过 Access 受到 Meta 的控制和管理。
+
+   在 Internal 模式下，IO Client 会将 UIO 按照 Volume 的 stripe 配置将 UIO 拆分为若干 BIO。在发送 BIO 时也会查询 VExtent Lease，将 IO 转发给 Access Owner。如是本地将直接调用 Access 接口将任务交给 Access 队列，如是远端，则通过 Datachannel Client 发送 VExtent IO。
+
+2. External Mode
+
+   集群外部（Taskd 也使用 External 模式，因为他并不在 IO 路径上，可以认为是集群外部）访问 ZBS 集群时使用的 Client 使用的模式，此时仅能访问集群中的 Blockd 服务，它将代理 IO 请求和元数据访问请求。Client 无法直接访问 ZK 或 Meta，在这个模式下，ZBS Client 不会收到任何来自 Meta 主动的控制命令下发。
+
+   在 External 模式下，因为并不在当前的 Client 真的处理 IO，所以不会做拆分，只是简单的将 UIO 转化为 BIO。在发送时，将使用 Datachannel Client 将 Volume IO 发送给随机的一个 Blockd Server（在配置中指定的一组 Blockd Server 中随机选择），在与 Blockd Server 建立连接并且之后都正常通信的情况下，Volume IO 会始终的发往固定的 Blockd Server。需要注意的是，这个模式下通常是以 SDK 形态供外部集成，此时我们并没有一个强的单一接入点限制保证，需要 SDK 的使用方自己处理可能存在的多点接入情况下引发的正确性问题。这是因为这个模式下并没有天然可获得的客户端身份信息（iSCSI 的 initiator IQN， NVMF 的 initiator NQN，vHost 的 Machine ID），需要 SDK 调用者主动注入。如果后续有确切的需求场景我们会增加对应的限制策略。
+
+
+
+
 
 
 
@@ -265,6 +387,10 @@ gtest系列之事件机制
 例如全局事件可以按照下列方式来使用：
 除了要继承testing::Environment类，还要定义一个该全局环境的一个对象并将该对象添加到全局环境测试中去
 原文链接：https://blog.csdn.net/ONEDAY_789/article/details/76718463
+
+
+
+protobuf 中 optional/repeated/ 等用法，https://blog.csdn.net/liuxiao723846/article/details/105564742
 
 
 

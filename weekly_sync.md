@@ -39,11 +39,13 @@
 
    搜索 AddRecoverCmdUnlock
 
-   对于 pid src dst 应该会有限定规则吧？外部 rpc 触发的 recover/migrate 优先级应该要更高吧？插到队列第一条？recover/migrate 应该要分开讨论吧？
+   对于 pid src dst 有限定规则，外部 rpc 触发的 recover/migrate 优先级应该要更高，插到队列第一条，
 
-   合法且和当前恢复不冲突，prefer local 和 topo 相关的不相关
+   recover/migrate 要分开讨论，migrate 要额外指定 replace chunk
 
-   做一次冲突检查，
+   做一次冲突检查，合法且和当前恢复不冲突，prefer local 和 topo 相关的不管
+
+   
 
 8. zbs cli 显示集群整体的负载情况？目前是用 zbs-meta chunk list 看每个节点的负载然后自己手动算
 
