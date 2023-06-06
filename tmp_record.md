@@ -1,21 +1,11 @@
 C++ 中 map 嵌套使用，vector 添加一个 vector 中所有元素 https://zhuanlan.zhihu.com/p/121071760
 
-创建一个 elf 的 5 节点集群
+后续借助 jenkins 创建一个 elf 的 5 节点集群
 
 1. FOREACH_SAFE 和 FOREACH 的区别？怎么体现 safe 了
 2. access handler 中为啥都以事件回调的形式来注册 Session Handler 的相关接口
 
 
-
-
-
-允许 RPC 产生恢复/迁移命令，可以指定源和目的地，在运维场景或许会有用。
-
-输入 pid, src, dst 
-
-输出 pid, current loc, active loc, dst, owner, mode
-
-搜索 AddRecoverCmdUnlock
 
 对于 pid src dst 有限定规则，外部 rpc 触发的 recover/migrate 优先级应该要更高，插到队列第一条，
 
@@ -25,10 +15,9 @@ recover/migrate 要分开讨论，migrate 要额外指定 replace chunk
 
 
 
-
 允许 RPC 产生恢复/迁移命令，可以指定源和目的地，在运维场景或许会有用。
 
-输入 pid, src, dst 
+输入 pid, src, dst, replace
 
 输出 pid, current loc, active loc, dst, owner, mode
 
@@ -37,6 +26,16 @@ recover/migrate 要分开讨论，migrate 要额外指定 replace chunk
 1. AddMigrateCmd rpc 参考 RecoverManager::MakeMigrateCmd() 和 AddSpecialRecoverCmd() 的就行，再加些判断条件；
 
 2. AddRecoverCmd 参考 AddToWaitingRecover() 和 AddSpecialRecoverCmd() 写法。
+
+
+
+// 人工指定后，后续还是有可能会被系统后台程序再次迁移回去
+
+```shell
+zbs-meta migrate create pid <pid> src_chunk <cid> dst_chunk <cid> replaced_chunk <cid>
+```
+
+
 
 
 
@@ -101,7 +100,7 @@ RecoverManager::ReGenerateMigrateForRebalance()，针对有本地化偏好的副
 2. 只有 RecoverManager::MakeMigrateCmd() 会往 passive_waiting_migrate 中 push 元素，调用 MakeMigrateCmd() 的有：
     1. RecoverManager::RepairPExtentForLocalization()，这是在集群处于低负载时的拓扑安全扫描；
     2. RecoverManager::RepairPextentTopo()，这是在集群处于中、高负载时的拓扑安全扫描；
-    3. RecoverManager::DoMove()，这是在集群处于极高负载时的容量再均衡扫描；
+    3. RecoverManager::DoMove()，这是在集群处于中、高负载时的容量再均衡扫描；
     4. RecoverManager::ReGenerateMigrateForRemovingChunk()，针对要退出的 Chunk 上的所有 pid 做迁移。
 
 关于 active_waiting_recover / passive_waiting_recover 这两个链表：
@@ -134,8 +133,6 @@ RecoverManager::AddRecoverCmdUnlock()
     1. 通过 AccessManager::AllocOwnerForRecover() 分配 recover/migrate 的 lease Owner，与 AccessManager::AllocOwner() 由用户 IO 触发的 Owner Alloc 逻辑不同，分配的优先级是 1. 该 pid 已有的 lease owner；2. src_cid；3. dst_cid；4. 从非 slow_cids 中根据 [owner priority](https://docs.google.com/document/d/1Xro2919inu3brs03wP1pu5gtbTmOf_Tig7H8pfdYPls/edit#heading=h.2hivgtf3odem) 选一个 cid；
     2. 若此时 lease owner 跟 src_cid 不同，跟 dst_cid 不同，且 lease owner 上有活跃副本（说明它是健康的），为了让 recover/migrate 的读走本地而非网络，会把 recover cmd 的 src 修改成 lease owner；
     3. 根据待恢复/迁移副本的 pid 和经过 1 2 步选出的 lease owner，构造 lease 并放入 recover cmd 中，接着将 recover cmd 放入 lease owner 的那个 recover cmd 队列（Access Manager 为每个 session 维护了一个  recover cmd 队列，通过 lease owner 的 uuid 获取）。
-
-
 
 
 
@@ -257,8 +254,6 @@ UpdateTotoObj 是允许更新 Node 的 TopoObj，节点的拓扑位置移动也�
 
 
 
-
-
 机器重启后，zk 要手动重启，selinux 要关闭，zkServer.sh start、setenforce 0
 
 
@@ -269,8 +264,12 @@ ZBS RPM 和 SMTX ZBS/SMTX OS/IOMesh 等不同产品的产品版本号从 5.0.0 �
 非首次运行单测
 
 ```shell
-# 编译
-docker run --rm --privileged=true -v /home/code/zbs:/zbs -w /zbs/build registry.smtx.io/zbs/zbs-buildtime:el7-x86_64 ninja zbs_test
+# 首次编译需要进到 Docker 内部执行
+docker run --rm --privileged=true -it -v /home/code/zbs3:/zbs -w /zbs registry.smtx.io/zbs/zbs-buildtime:el7-x86_64
+mkdir build && cd build
+source /opt/rh/devtoolset-7/enable
+cmake -G Ninja ..
+ninja zbs_test
 
 # 屏幕中会提示出错处的日志信息，借助 newci 可以避免在本地配置 nvmf/rdma 环境跑单测
 # 但是要配好 nvmf/rdma 的相关依赖包/服务
@@ -348,12 +347,6 @@ Meta Lease 的授予对象是 Session，因此一个 Access 在上一次 Session
 Access Server 通过 Session 机制与 Meta 建立连接，经过 Session 确保数据访问权限（Extent Lease）的唯一性，提供接入协议转换功能。
 
 Access 中 Session 状态维护机制包括 2 个部分：维持生命周期心跳循环的 Session Follower 与响应状态变化事件的 Session Handler。Session 也有自己的 Lease， 代表 Session 的健康状态，每次 Access 收到 Meta 的心跳回复都会延续自身的 Lease 。如果长时间没有收到正常的心跳回复就会触发状态变化。状态有 Init、KeepAlive、Jeopardy、Expired。
-
-
-
-Session 
-
-
 
 
 
