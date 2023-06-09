@@ -45,23 +45,19 @@
 
    做一次冲突检查，合法且和当前恢复不冲突，prefer local 和 topo 相关的不管
 
-   
-
 8. zbs cli 显示集群整体的负载情况？目前是用 zbs-meta chunk list 看每个节点的负载然后自己手动算
 
-9. 自动拓扑提供一个开关 flag，自动拓扑是会去修改用户设置的 ring id，这个在用户侧要怎么解释？不用开关，允许 ring id，多加点单测。
+9. 副本策略和 recover，access manger/ recover manager，
 
-10. 副本策略和 recover，access manger/ recover manager，
+10. 在看敏捷恢复和临时副本的文档，2 年前看不懂现在才发现 hping 写的文档质量那么高。
 
-11. 在看敏捷恢复和临时副本的文档，2 年前看不懂现在才发现 hping 写的文档质量那么高。
+11. 觉得我最近哪里不行？对我有什么建议？Recover 相关的 patch 修完开始做去重还是分层的工作？
 
-12. 觉得我最近哪里不行？对我有什么建议？Recover 相关的 patch 修完开始做去重还是分层的工作？
+12. 先做分层、然后做 EC、分布式改造、然后去重
 
-13. 先做分层、然后做 EC、分布式改造、然后去重
+13. 7 月会带上 pin in performance，
 
-14. 7 月会带上 pin in performance，
-
-15. 7 8 月才能结束 recover 相关的东西吧，参与去重的子任务
+14. 7 8 月才能结束 recover 相关的东西吧，参与去重的子任务
 
 
 

@@ -1,9 +1,4 @@
-C++ 中 map 嵌套使用，vector 添加一个 vector 中所有元素 https://zhuanlan.zhihu.com/p/121071760
-
-后续借助 jenkins 创建一个 elf 的 5 节点集群
-
-1. FOREACH_SAFE 和 FOREACH 的区别？怎么体现 safe 了
-2. access handler 中为啥都以事件回调的形式来注册 Session Handler 的相关接口
+5 节点集群，172.20.137.141
 
 
 
@@ -25,9 +20,9 @@ recover/migrate 要分开讨论，migrate 要额外指定 replace chunk
 
 1. AddMigrateCmd rpc 参考 RecoverManager::MakeMigrateCmd() 和 AddSpecialRecoverCmd() 的就行，再加些判断条件；
 
+   RecoverManager::AddMigrateCmd() zbs-reader
+
 2. AddRecoverCmd 参考 AddToWaitingRecover() 和 AddSpecialRecoverCmd() 写法。
-
-
 
 // 人工指定后，后续还是有可能会被系统后台程序再次迁移回去
 
@@ -37,7 +32,29 @@ zbs-meta migrate create pid <pid> src_chunk <cid> dst_chunk <cid> replaced_chunk
 
 
 
+非首次运行单测
 
+```shell
+# 首次编译需要进到 Docker 内部执行
+docker run --rm --privileged=true -it -v /home/code/zbs3:/zbs -w /zbs registry.smtx.io/zbs/zbs-buildtime:el7-x86_64
+mkdir build && cd build
+source /opt/rh/devtoolset-7/enable
+cmake -G Ninja ..
+ninja zbs_test
+
+# 屏幕中会提示出错处的日志信息，借助 newci 可以避免在本地配置 nvmf/rdma 环境跑单测
+# 但是要配好 nvmf/rdma 的相关依赖包/服务
+cd /home/code && ./newci-x86_64 -builddir zbs/build/ -p 16 -action "/run 200 FunctionalTest.MarkVolumeAllocEven"
+
+# 运行后的测试日志默认保存在 /var/log/zbs/zbs_test.xxx 中 
+cd /home/code/zbs/build/src && ./zbs_test --gtest_filter="*FunctionalTest.WriteResize*"
+
+# 显示指定 main 分支
+git review main
+
+# 自动修改格式后再编译
+docker run --rm --privileged=true -v /home/code/zbs:/zbs -w /zbs registry.smtx.io/zbs/zbs-buildtime:el7-x86_64 sh -c 'sh ./script/format.sh && cd build && ninja zbs_test'
+```
 
 
 
@@ -136,8 +153,6 @@ RecoverManager::AddRecoverCmdUnlock()
 
 
 
-
-
 migrate 和 recover 只是共用 RecoverCmd 这个数据结构，各自的命令队列（recover 是 std::set，migrate 是  std::list）、触发时机、同时触发的命令数都是不同的。
 
 
@@ -145,10 +160,10 @@ IO 下发的流程
 
 NFS/iSCSI/nvmf -> ZBS Client -> access io handler -> generation syncor -> recover handler
 
-
-
 疑惑
 
+1. FOREACH_SAFE 和 FOREACH 的区别？怎么体现 safe 了
+2. access handler 中为啥都以事件回调的形式来注册 Session Handler 的相关接口
 1. ZBS 中的一个 extent，读的同时不允许写？为啥不用多版本机制来管理（块存储覆盖写的原因？还是块存储没必要提供）
 2. 代码中 [(zbs.labels).as_str = true] 的意思，slack 中 qiuping 提过，
 3. gtest 如何开启 VLOG DLOG 部分的日志
@@ -188,13 +203,7 @@ Meta 与 chunk 如何交互？问题来源[减少数据恢复量](https://docs.g
 
    8. 写失败的副本是否必须立即从 meta 中剔除
 
-
-
-可能有多个 zbs client，但一定只会有一个 access，一个 lease owner 来保证接入点的唯一性
-
-Access 在进行读/写 IO 前先进行一次 Sync Gen，确认所有副本当前的 Gen 是一致的。
-
-```
+```shell
 # 在主分支上
 git pull
 # 将新的 URL 复制到本地配置中
@@ -203,128 +212,9 @@ git submodule sync --recursive
 git submodule update --init --recursive
 ```
 
-用 uint64_t 来声明 ring_id
-
-初始时生成符合 topo_id 次序的 ring_id，遍历一遍
-
-当有任意一种拓扑行动时，重新生成 ring_id
-
-ring_id 的重新生成是按不同 brick/rack 中节点数量的比例配对，并且要尽可能保持原来的相对次序
-
-不管是首次按照 uuid 生成还是后面按照 ring_id 生成，都要重新考虑以 brick 为粒度算节点数
-
-
-
-双活集群中优先可用域 2 副本，次级可用域 1 副本。
-
-UpdateTopoObj/RegisterChunk/RemoveChunk
-
-
-
-removeChunk 里面竟然没调用 DeleteTopoObj
-
-Chunk_manager 对外暴露 CreateTopoObj / Delete / update / show / list
-
-CreateTopoObj 只允许创建 rack/brick，不能直接创建 Node（在 RegisterChunk 中实现）
-
-查看节点拓扑 GetChunkTopology（根据 cid 查的）、ShowTopoObj（根据 topo_id 查的） ；
-
-UpdateTotoObj 是允许更新 Node 的 TopoObj，节点的拓扑位置移动也是在这里
-
-1. 节点加入 RegisterChunk。此时没有 ring_id，需要生成；
-2. 节点退出 RemoveChunk。此时删除了对应的 TopoObj，之后还需要引发重新生成 Ring_id；
-3. 节点移动 UpdateTopoObj，Node 类型的 parent_id 被修改为其他 brick_id/CLUSTER，此时需要重新生成 ring_id；
-4. Brick/Rack 位置移动 UpdateTopoObj，如 Brick 从一个 Rack 移动到另一个 Rack（parent_id 变化）也要重新生成 ring_id；
-
-现在要考虑的是跟已有手动的 ring id 的兼容
-
-1. 节点加入 RegisterChunk。此时没有 ring_id，需要生成；
-2. 节点退出 RemoveChunk。此时删除了对应的 TopoObj，之后还需要引发重新生成 Ring_id；
-3. 节点移动 UpdateTopoObj。Node 类型的 parent_id 被修改为其他 brick_id/CLUSTER，此时需要重新生成 ring_id；
-4. Brick/Rack 位置移动 UpdateTopoObj。如 Brick 从一个 Rack 移动到另一个 Rack（parent_id 变化）也要重新生成 ring_id；
-5. 删除 brick/rack DeleteTopoObj。
-
-如果有不带有 topo 信息的节点，在自动生成 ring id 时是不纳入考虑，还是给他分配一个默认的 zone/rack/brick id，感觉后者更好一些，但这样就跟之前的情况不一样了，
-
-如果用户没添加 topo 信息，所有节点被当作是都在最远的地方，那么让他们的 ring id 顺序递增就好；
-
-如果一部分节点有 topo 信息，一部分没有，首先在 topo distance 那里就会把没有 topo 信息的节点优先级放在很后面，万一真分配到这部分节点，注意要让他们被随机选到（否则还是会出现聚焦在一个节点的情况）；
-
-
-
-
-
-机器重启后，zk 要手动重启，selinux 要关闭，zkServer.sh start、setenforce 0
-
-
+开发机重启后，zk 要手动重启，selinux 要关闭，zkServer.sh start、setenforce 0
 
 ZBS RPM 和 SMTX ZBS/SMTX OS/IOMesh 等不同产品的产品版本号从 5.0.0 开始已经分离，各有各的版本号
-
-
-非首次运行单测
-
-```shell
-# 首次编译需要进到 Docker 内部执行
-docker run --rm --privileged=true -it -v /home/code/zbs3:/zbs -w /zbs registry.smtx.io/zbs/zbs-buildtime:el7-x86_64
-mkdir build && cd build
-source /opt/rh/devtoolset-7/enable
-cmake -G Ninja ..
-ninja zbs_test
-
-# 屏幕中会提示出错处的日志信息，借助 newci 可以避免在本地配置 nvmf/rdma 环境跑单测
-# 但是要配好 nvmf/rdma 的相关依赖包/服务
-cd /home/code && ./newci-x86_64 -builddir zbs/build/ -p 16 -action "/run 200 FunctionalTest.MarkVolumeAllocEven"
-
-# 运行后的测试日志默认保存在 /var/log/zbs/zbs_test.xxx 中 
-cd /home/code/zbs/build/src && ./zbs_test --gtest_filter="*FunctionalTest.WriteResize*"
-
-# 显示指定 main 分支
-git review main
-
-# 自动修改格式后再编译
-docker run --rm --privileged=true -v /home/code/zbs:/zbs -w /zbs registry.smtx.io/zbs/zbs-buildtime:el7-x86_64 sh -c 'sh ./script/format.sh && cd build && ninja zbs_test'
-```
-
-
-
-Session Follower 
-
-Session Follower 负责通过心跳循环维持 Session 的状态，它工作在独立的线程中，支持多种方式指定 Meta 中的 Session Master 位置：
-
-1. Leader Loader，目前默认使用的方式，Loader 通过 ZK 集群获取 Meta Server Leader 地址，并会在 Leader 地址更新时同步更新 Lib Meta 中地址；
-2. ZK Host，通过指定的 service name 直接从 ZK 中获取 Master 地址；
-3. Master Address，直接指定 Master 地址；
-
-当 Session 创建时，Meta Server 将返回 Session 有效时间（lease_interval_ns，相对时间，即仅代表 Lease 有效时间长度，而不是有效时间戳） 。Session Follower 记录后， 将进入无限 Keepalive 循环，每轮循环处理逻辑如下（对应代码 SessionFollower::KeepAliveLoop()）：
-
-1. 检查 Session 是否已经异常（根据最新一次完成心跳的时间戳与当前时间戳比较确定）:
-   1. Jeopardy，lease 已经失效，但是失效时长尚未超过 kJeopardyIntervalNS = 30s，上报事件继续处理；
-   2. Expired，lease 失效超过 kJeopardyIntervalNS = 30s，退出循环，上报 Expire 事件，删除当前 Session，等待 Session 重建；
-2. 如果之前出现了异常，将等待一段时间后，尝试重新连接 Master。重连将触发 Master 地址重新更新（如果使用 Master Leader Loader 模式）。等待的时间与当前重试次数有关，重试次数越大，等待时间越久。但最少是 kSessionConnectRetryIntervalMinMs = 1.5s，最长不超过 kSessionConnectRetryIntervalMaxMs = 6s。重连成功并且 Session 依然活跃则继续处理，否则回到步骤 1；
-3. 通过 Session Client 向 Session Master 发送 Keepalive 信息，Session Client 的 timeout 会考虑当前 Lease 的存活时间，保证 timeout 之前 lease 是有效的：
-   1. Master 回复正常，则更新本地的 Lease，继续步骤 1；
-   2. 连接失败则重标记需要重连，继续步骤 1；
-   3. Master 回复 Session 过期，则退出循环，上报 Expire 事件，删除当前 Session，等待 Sesion 重建；
-   4. Master 回复 并非 Leader，标记重连，由重连过程更新 Leader 地址，进入步骤 1；
-   5. Master 回复 Epoch 不匹配，则触发 Master Change 事件，继续步骤 1；
-
-Session Follower 除在重连时可能做等待之外，心跳循环中均为直接处理没有等待，心跳的间隔周期由 Meta Leader 上的 Session Master 控制返回 Keepalive 请求的时机来实现，一般的周期是每 kReplyLeaseLeftNS = 5s 一次心跳，不过如果 Meta 刚重启或有立即下发 recover cmd 的需求，也会直接触发心跳。涉及代码包括：
-
-1. Follower 中调用 AccessHandler::HandleKeepAlive() 来解析 response 中蕴含的 AccessKeepAliveResponse 部分的 recover/migrate/revoke lease/maintenance/clean chunk info/revoke client/volume update/config update cmd，ChunkKeepAliveResponse 部分的 gc cmd；
-2. Follower 中调用 SessionMaster::KeepAlive() 来从 Session Master 那获取心跳结果，即一些待执行的命令放在 response 中。
-
-Session Master 向 Session Follower 下发命令包含 2 种模式：（也可以理解成 Meta Leader 向 Access 下发）
-
-1. 需要确认 Access 收到。例如 Revoke，iSCSI 的配置变更等同步 RPC。Meta 在发出命令后，一定会等待包含对应命令的 Keepalive 请求收到就Access 回应之后才返回命令（依赖心跳交互中 Session 的 Session Epoch 单调递增变化进行确认，例如下发命令时的 session epoch 是 1，当收到 access 回应的 epoch >=1 时即可代表之前产生的所有命令均已经正常接收）；
-2. 无需确认。例如 GC，Recover 等，仅需要放入 Session 的通知队列中下发接口，Meta 中产生命令的逻辑不会等待
-
-> 我理解这两种模式区别在同步/异步上
-
-在目前版本中，Access 实现的均是无状态推送，即便是确认推送才放回结果的模式，Meta 也不感知 Access 对命令的执行结果，仅确保送达。依赖这个模式的业务逻辑需要各自采用其他机制确保正确执行。
-
-心跳是 Meta 给 Access 传递控制指令的过程，而 Chunk 状态信息（Extent 状态、Chunk 网络状态、Chunk 上活跃外部连接状态等）由于信息过于庞大，因此不在心跳中上报，而是剥离出来使用独立的固定间隔循环上报状态数据。（HDFS 中也是这么做的）
-
-
 
 
 
@@ -348,6 +238,8 @@ Access Server 通过 Session 机制与 Meta 建立连接，经过 Session 确保
 
 Access 中 Session 状态维护机制包括 2 个部分：维持生命周期心跳循环的 Session Follower 与响应状态变化事件的 Session Handler。Session 也有自己的 Lease， 代表 Session 的健康状态，每次 Access 收到 Meta 的心跳回复都会延续自身的 Lease 。如果长时间没有收到正常的心跳回复就会触发状态变化。状态有 Init、KeepAlive、Jeopardy、Expired。
 
+Access 在进行读/写 IO 前先进行一次 Sync Gen，确认所有副本当前的 Gen 是一致的。
+
 
 
 ZBS 保持副本一致性的方式的是在整体设计中采用了单一接入的策略，包含数据链接上的单一接入点、Access 上实现的数据块粒度的权限控制、Generation 机制。
@@ -361,6 +253,8 @@ ZBS 保持副本一致性的方式的是在整体设计中采用了单一接入�
 
 
 ZBS Client 的核心功能是处理来自用户的 IO 请求。是 ZBS 内部数据对象 Volume 的访问入口，同时也集成了 Libmeta 作为集群 RPC 的访问代理（meta.cc，包含 Lease 管理和集群 RPC 接口两部分功能）。
+
+可能有多个 zbs client，但一定只会有一个 access，一个 lease owner 来保证接入点的唯一性
 
 在 IO 过程中，ZBS Client 不处理副本、数据校验等逻辑，他的主要逻辑是将对一个 Volume 的访问请求转化为对 Extent 的访问请求。ZBS Client 通过 Meta 将 Volume 指定区域（offset + len）映射到对应的 Extent，并从 Meta 返回的 VExtent Lease 中获得 Extent  Lease owner 的位置信息并将 IO 转发过去。
 
@@ -392,7 +286,7 @@ Libmeta 也会监控自身的 Lease 使用情况，在长期未使用时会释�
 
 ZBS 副本机制采用 Lease Owner + Generation 方式实现数据一致性。1. 通过 Lease Owner，所有的 IO 都被顺序化，客户端的多读者多写者模型被转化为单读者单写者模型；2. 通过 Generation 判断多个副本是否一致，当一个副本成功写入一个 IO 后，Generation 自增，每个 IO 携带当前的 Generation，Chunk 只有在 Generation 匹配时才允许 IO 处理。
 
-https://blog.csdn.net/qq_24406903/article/details/118763610
+
 
 
 IO 流
@@ -414,7 +308,10 @@ FunctionalTest::SetUp()  --> new MiniCluster(kNumChunks);
 
 
 
+
+
 gtest系列之事件机制
+
 “事件” 本质是框架给你提供了一个机会, 让你能在这样的几个机会来执行你自己定制的代码, 来给测试用例准备/清理数据。gtest提供了多种事件机制，总结一下gtest的事件一共有三种：
 1、TestSuite事件
 需要写一个类，继承testing::Test，然后实现两个静态方法：SetUpTestCase方法在第一个TestCase之前执行；TearDownTestCase方法在最后一个TestCase之后执行。
@@ -428,15 +325,15 @@ gtest系列之事件机制
 
 
 
+C++ 中 map 嵌套使用，vector 添加一个 vector 中所有元素 https://zhuanlan.zhihu.com/p/121071760
+
 protobuf 中 optional/repeated/ 等用法，https://blog.csdn.net/liuxiao723846/article/details/105564742
-
-
 
 linux主分区、扩展分区、逻辑分区的区别、磁盘分区、挂载，https://blog.csdn.net/qq_24406903/article/details/118763610
 
 
 
-centos7 中将 pip 默认是 8.x，升级到 20.3.4（更高版本不支持 Python 2.7）
+centos7 中 pip 默认是 8.x，升级到 20.3.4（更高版本不支持 Python 2.7）
 
 ```
 wget https://bootstrap.pypa.io/pip/2.7/get-pip.py
