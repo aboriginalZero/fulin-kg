@@ -2,6 +2,26 @@
 
 
 
+
+
+context_->topology->IsChunkInDefaultZone(cid)
+
+context_->topology->GetTopoDistance(ori_cids)	vector<cid_t >& cids
+
+context_->topology->IsBestTopoDistanceInZone(cur_topo_distance, ori_cids)  int vector<cid_t >& cids
+
+context_->topology->GetTopoDistance(cid_t , cid_t)
+
+context_->topology->GetChunkTopology(cid, &topo); 实际上是为了去拿 zone_id 
+
+context_->topology->AllChunksHaveTopoInfo()
+
+先拿一下所有 chunk 之间的 topo distance
+
+
+
+
+
 对于 pid src dst 有限定规则，外部 rpc 触发的 recover/migrate 优先级应该要更高，插到队列第一条，
 
 recover/migrate 要分开讨论，migrate 要额外指定 replace chunk
@@ -64,7 +84,9 @@ docker run --rm --privileged=true -v /home/code/zbs:/zbs -w /zbs registry.smtx.i
 
 从快照重建虚拟机：不存在虚拟机，根据快照创建一个虚拟机；
 
-从虚拟机克隆虚拟机：
+从虚拟机克隆虚拟机：等效为对虚拟机配置做快照，磁盘是直接调用的 ZBS volume 克隆来实现；
+
+导入 OVF 创建虚拟机：根据 OVF 创建一个虚拟机；
 
 从快照回滚虚拟机：存在虚拟机，回到快照状态；
 
@@ -72,13 +94,9 @@ docker run --rm --privileged=true -v /home/code/zbs:/zbs -w /zbs registry.smtx.i
 
 从虚拟机转化为虚拟机模板：虚拟机没了，同时生成一个不可变更的虚拟机模板；
 
+虚拟机快照不会被快照/克隆。
 
-
-一个快照能被再次快照吗？
-
-一个快照能被克隆吗？
-
-当一个虚拟卷快照被克隆 10 次或一个虚拟机转化为虚拟机模板时，对应的副本会均匀分配
+当一个虚拟卷快照被克隆 10 次或一个虚拟机转化为虚拟机模板时，对应的副本会均匀分配。
 
 
 
@@ -108,11 +126,9 @@ RecoverManager::ReGenerateMigrateForRebalance()，针对有本地化偏好的副
 
 2. 当处于中高负载时
 
-   1. 如果集群处于极高负载时，进行容量再均衡扫描
+   1. 集群不处于极高负载并且拓扑安全，直接 continue；
 
-      RecoverManager::ReGenerateMigrateForBalanceInStoragePool()
-
-   2. 否则进行拓扑安全扫描
+   2. 否则会先进行目的为拓扑安全的迁移
 
       RecoverManager::RepairTopoInMediumHighLoad()
 
@@ -131,6 +147,18 @@ RecoverManager::ReGenerateMigrateForRebalance()，针对有本地化偏好的副
          RecoverManager::MoveToOtherZone()
 
          RecoverManager::GetSrcAndReplace()
+
+   3. 然后进行目的为容量再均衡的迁移
+   
+      RecoverManager::ReGenerateMigrateForBalanceInStoragePool()，把高负载节点的副本迁移到低负载节点。
+   
+      RecoverManager::Move()，被迁移副本的优先级：1. 厚制备副本；2. 不是被克隆/快照的精简制备副本（没有 origin pid）；3. 被克隆/快照的精简制备副本（有 origin pid）。
+   
+      RecoverManager::DoMove()
+   
+      RecoverManager::ShouldMove()
+   
+      RecoverManager::MakeMigrateCmd()
 
 
 经过以上步骤，生成的 Recover cmd 只是放入 passive_waiting_migrate 中，在等待 60s 或者 scan_recover_immediate = true 时会 swap(active_waiting_migrate, passive_waiting_migrate) 
