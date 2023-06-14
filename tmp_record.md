@@ -2,8 +2,6 @@
 
 
 
-
-
 context_->topology->IsChunkInDefaultZone(cid)
 
 context_->topology->GetTopoDistance(ori_cids)	vector<cid_t >& cids
@@ -20,13 +18,48 @@ context_->topology->AllChunksHaveTopoInfo()
 
 
 
+目前在高负载情况下，数据不再会遵循本地化分配原则，而是会尽量的均匀分布。这可能会造成部分虚拟机在迁移之后和原来的性能有较大的差异。需要考虑改善这个场景，也许有两个方向需要考虑：
+
+- 允许用户用命令行触发一个集中策略（向指定的节点聚集一个副本，不需要完整局部化，仅本地化即可），但是不能让指定节点进入超高负载状态（95%）
+- 调整平衡策略，在中高负载集群相对均衡后，尝试本地化聚集（不需要局部化，仅保证一个副本在 prefer cid 所在节点即可）
+
+改进迁移策略，在节点上待回收数据较多时（已经使用的数据空间占比超过 95%），如果集群没有进入极高负载状态（整体空间分配比例达到 90%），不向该节点迁移数据以保证回收顺利进行。
+
+lsm1 回收空间的速率非常慢，所以如果删除一个 extent，存在 chunk 的 provisioned space 会减少（分配数据空间比例在减小），但 used space 可能仍然很高的情况，如果这时集群上的其他节点向它迁移数据，会进一步降低回收速率。
+
+在 Migrate 时进行检查，如果集群整体尚有可用空间时比如整体 provisioned 比例在 90% 以下，不向 Used Space 比例大于 95% 的节点迁移数据，即便 Provsioned 比较低。
+
+even volume 的 extent count 代表什么？为啥迁移时优先选择 count 大的 extent 
+
+ChunkSpaceInfo 中每个字段的含义分别是什么？
+
+RecoverManager::GetDstCandidates() 中关于 allocated_data_space、valid_data_space、provisioned_data_space 的用法。
+
+chunk_space 当支持 thick 模式时用 allocated_data_space，支持 thin 模式时用 provisioned_data_space
+
+计算可用空间还是用 valid_data_space，
+
+next_repair_scan_pid_ 变量可以去掉，并没有用到
 
 
-对于 pid src dst 有限定规则，外部 rpc 触发的 recover/migrate 优先级应该要更高，插到队列第一条，
 
-recover/migrate 要分开讨论，migrate 要额外指定 replace chunk
+得到一台 chunk 上指定 storage pool 中的 pid 的 prefer local
 
-做一次冲突检查，合法且和当前恢复不冲突，prefer local 和 topo 相关的不管
+```c++
+for (pid_t pid = context_->pid_map->GetNextSetId(next_repair_scan_pids_[storage_pool_id]);
+     pid != IdMap::kInvalidId; pid = context_->pid_map->GetNextSetId(pid + 1)) {
+  PExtentTableEntry entry = context_->pextent_table->GetPExtentTableEntry(pid, nullptr);
+  cid_t prefer_local = entry.PreferredCid();
+}
+```
+
+
+
+
+
+
+
+
 
 
 
@@ -44,18 +77,111 @@ recover/migrate 要分开讨论，migrate 要额外指定 replace chunk
 
 2. AddRecoverCmd 参考 AddToWaitingRecover() 和 AddSpecialRecoverCmd() 写法。
 
-// 人工指定后，后续还是有可能会被系统后台程序再次迁移回去
+人工指定后，后续还是有可能会被系统后台程序再次迁移回去，如何应对？
 
 ```shell
 zbs-meta migrate create pid <pid> src_chunk <cid> dst_chunk <cid> replaced_chunk <cid>
 ```
 
+外部 rpc 触发的 recover/migrate 优先级应该要更高，插到队列第一条（应该不需要）
+
+recover/migrate 要分开讨论，migrate 要额外指定 replace chunk
+
+做一次冲突检查，合法且和当前恢复不冲突，prefer local 和 topo 相关的不管
+
+```c++
+
+Status RecoverManager::AddMigrateCmd(pid_t pid, cid_t src, cid_t dst, cid_t replace) {
+    // 手动 rpc 下发的 migrate cmd 会不会被 doscan 又平衡回来？
+    // 不确定是否需要加锁
+    // 是否需要先把其他 recover/migrate 撤掉呢？因为如果这个 migrate cmd
+    if (PExtentHasCmdUnLock(pid)) {
+        return Status(EDuplicate) << "pid: " << pid << " already has migrate cmd";
+    }
+
+    // 因此此时存在并未执行 doscan，access_manager_ 还没初始化的可能
+    if (UNLIKELY(!access_manager_)) access_manager_ = context_->access_manager;
+    PExtentTableEntry pentry = context_->pextent_table->GetPExtentTableEntry(pid, nullptr);
+    auto now_ms = GetMetaTimeMS();
+    if (pentry.IsDead(now_ms)) {
+        return Status(EBadRequest) << "pid: " << pid << " is dead, maybe can try recover from temporary replica.";
+    }
+    if (pentry.NeedRecover(now_ms)) {
+        return Status(EBadRequest) << "pid: " << pid << " is recovering.";
+    }
+    if (context_->pextent_table->IsTemporaryReplica(it->pid())) {
+        return Status(EBadRequest) << "pid: " << pid << " is temporary replica, does not trigger migration."
+    }
+    // 检查 cmd_slots，避免下发过量的 migrate cmd，因为可能同时运行多条命令行
+    std::unordered_map<cid_t, int> avail_cmd_slots;
+    context_->chunk_table->GetRecoverInfo(&avail_cmd_slots);
+    FOREACH_SAFE(avail_cmd_slots, it) {
+        if ((it->second) >= FLAGS_max_recover_cmds_per_chunk) {
+            avail_cmd_slots.erase(it);
+        } else {
+            it->second = FLAGS_max_recover_cmds_per_chunk - it->second;
+        }
+    }
+    if (avail_cmd_slots.find(src) == avail_cmd_slots.end() || avail_cmd_slots.find(dst) == avail_cmd_slots.end()) {
+        return Status(EBadRequest) << "src chunk " << src << " or dst chunk " << dst << " does not have enough cmd slots.";
+    }
+
+    PExtent extent;
+    context_->pextent_table->GetPExtent(pid, &extent);
+    if (!location_contains(extent.location(), src) || !location_contains(extent.location(), replace)) {
+        return Status(EBadRequest) << "given src/replace chunk does not have the replica of pid: " << pid;
+    }
+    if (location_contains(extent.location(), dst)) {
+        return Status(EBadRequest) << "given dst chunk already has the replica of pid: " << pid;
+    }
+    if (!context_->chunk_table->ReserveSpaceForRecover(pid, src, replace, dst, context_->enable_thick_extent)) {
+        return Status(EBadRequest) << "do not have enough space for this migration.";
+    }
+
+    RecoverCmdPtr cmd_ptr = std::make_shared<RecoverCmd>();
+    cmd_ptr->set_pid(pid);
+    cmd_ptr->set_epoch(pentry.Epoch());
+    cmd_ptr->set_src_chunk(src);
+    cmd_ptr->set_dst_chunk(dst);
+    cmd_ptr->set_replace_chunk(replace);
+    cmd_ptr->set_is_migrate(true);
+    cmd_ptr->set_active_location(pentry.GetAliveLocation(now_ms));
+    cmd_ptr->set_start_ms(0ULL);
+
+    SessionInfo owner;
+    if (!access_manager_->AllocOwnerForRecover(cmd_ptr->pid(), cmd_ptr->src_chunk(), cmd_ptr->dst_chunk(), extent.alive_location(), &owner)) {
+        return Status(EBadRequest) << "fail to alloc migrate owner for recover cmd: " << cmd_ptr->ShortDebugString();
+    }
+
+    access_manager_->EnqueueRecoverCmd(cmd_ptr, owner);
+    pid_cmds_[cmd.pid()] = cmd_ptr;
+
+    LOG(INFO) << "add recover cmd by rpc for pid: " << cmd_ptr->pid() << " src: " << cmd_ptr->src_chunk()
+              << " dst: " << cmd_ptr->dst_chunk() << " replace: " << cmd_ptr->replace_chunk()
+              << " owner: " << cmd_ptr->lease().owner().cid();
+
+    avail_cmd_slots[src_replica]--;
+    avail_cmd_slots[dst_replica]--;
+    if (avail_cmd_slots[src_replica] <= 0) {
+        avail_cmd_slots.erase(src_replica);
+    }
+    if (avail_cmd_slots[dst_replica] <= 0) {
+        avail_cmd_slots.erase(dst_replica);
+    }
+    return Status::OK();
+}
+```
 
 
-非首次运行单测
+
+
+
+
+
+命令使用
 
 ```shell
-# 首次编译需要进到 Docker 内部执行
+# 首次编译，需要进到 Docker 内部执行
 docker run --rm --privileged=true -it -v /home/code/zbs3:/zbs -w /zbs registry.smtx.io/zbs/zbs-buildtime:el7-x86_64
 mkdir build && cd build
 source /opt/rh/devtoolset-7/enable
@@ -72,35 +198,16 @@ cd /home/code/zbs/build/src && ./zbs_test --gtest_filter="*FunctionalTest.WriteR
 # 显示指定 main 分支
 git review main
 
-# 自动修改格式后再编译
+# 非首次编译，自动修改格式后再编译
 docker run --rm --privileged=true -v /home/code/zbs:/zbs -w /zbs registry.smtx.io/zbs/zbs-buildtime:el7-x86_64 sh -c 'sh ./script/format.sh && cd build && ninja zbs_test'
+
+# 在主分支上
+git pull
+# 将新的 URL 复制到本地配置中
+git submodule sync --recursive
+# 从新 URL 更新子模块
+git submodule update --init --recursive
 ```
-
-
-
-创建空白虚拟机：
-
-从模板创建虚拟机：不存在虚拟机，根据模板创建一个虚拟机；
-
-从快照重建虚拟机：不存在虚拟机，根据快照创建一个虚拟机；
-
-从虚拟机克隆虚拟机：等效为对虚拟机配置做快照，磁盘是直接调用的 ZBS volume 克隆来实现；
-
-导入 OVF 创建虚拟机：根据 OVF 创建一个虚拟机；
-
-从快照回滚虚拟机：存在虚拟机，回到快照状态；
-
-从虚拟机克隆为虚拟机模板：虚拟机还保留着，同时生成一个不可变更的虚拟机模板；
-
-从虚拟机转化为虚拟机模板：虚拟机没了，同时生成一个不可变更的虚拟机模板；
-
-虚拟机快照不会被快照/克隆。
-
-当一个虚拟卷快照被克隆 10 次或一个虚拟机转化为虚拟机模板时，对应的副本会均匀分配。
-
-
-
-
 
 集群内部扫描副本状态，副本迁移相关代码
 
@@ -116,39 +223,47 @@ RecoverManager::ReGenerateMigrateForRebalance()，针对有本地化偏好的副
 
    RecoverManager::RepairPExtentForLocalization()，满足如下任一条件不触发迁移：1. 副本的 prefer local cid 不是健康状态（status == CHUNK_STATUS_CONNECTED_HEALTHY）；2. 这个 pid 存在临时副本； 3. replace cid 和 dst cid 都是 0；4. dst_cid/src_cid 上被下发的 recover 命令超过 200 条；5. src_cid 上的有限空间不足 256 MB；
 
-   否则通过 RecoverManager::GetRepairCid() 选取 replace_cid 和 dst_cid，初始值为 0，具体规则如下：
+   否则通过 RecoverManager::GetRepairCid() 选取 replace_cid 和 dst_cid，初始值为 0，具体规则如下（选择顺序 dst_cid --> replaced_cid --> src_cid）：
 
-   1. 如果 prefer local 有该副本，并且其他活跃副本满足本地化/局部化的分配策略，说明副本满足分配规则，不触发迁移；
-   2. dst_cid 的选取规则是优先选择没有副本且不处于 failsow 的 prefer local，次选符合期望分布（即符合 LocalizedComparator 分配策略） 的下一个副本；
-   3. replaced_cid 的选取规则是从活跃副本中选出不满足期望分布且不是 lease owner 的 cid，如果有多个可选，则选择第一个 failslow 的 cid； 
+   1. 如果 prefer local 有该副本，并且其他活跃副本满足本地化/局部化的分配策略，说明副本满足分配规则，直接返回 replace dst 的初始值，不触发迁移；
+   2. dst_cid 的选取规则：首选没有副本且不处于 failsow 的 prefer local，次选符合期望分布（即符合 LocalizedComparator 分配策略） 的下一个副本；
+   3. replaced_cid 的选取规则：从活跃副本中选出不满足期望分布且不是 lease owner 的 cid，如果有多个可选，则选择第一个 failslow 的 cid； 
+   3. src_cid 的选取规则：默认值为 replace cid，在选定 dst_cid 和 replaced_cid 后，如果 replace_cid slowfail 或者和 dst_cid 不在同一个可用域，那么会从活跃副本中找跟 dst_cid 在同一个可用域且不是 slow fail 的 cid 作为 src_cid。
 
-   选定 dst_cid 和 replaced_cid 后，src cid 的选择规则是默认值为 replace cid，但如果 replace_cid slowfail 或者和 dst_cid 不在同一个可用域，那么会从活跃副本中找跟 dst_cid 在同一个可用域且不是 slow fail 的 cid 作为 src_cid。
+   选定 3 要素后调用RecoverManager::MakeMigrateCmd()。
 
 2. 当处于中高负载时
 
-   1. 集群不处于极高负载并且拓扑安全，直接 continue；
-
-   2. 否则会先进行目的为拓扑安全的迁移
+   1. 先做目的为拓扑安全的扫描，如有必要（条件是经过以下步骤选出了非 0 的 src/dst/replace）会产生迁移命令
 
       RecoverManager::RepairTopoInMediumHighLoad()
 
       RecoverManager::RepairPextentTopo()
 
-      1. 非双活集群
-
-         RecoverManager::RepairInZone() 
-
-         RecoverManager::GetSrcAndReplace()
-
-      2. 双活集群
-
-         RecoverManager::RepairInStretched()
-
-         RecoverManager::MoveToOtherZone()
-
-         RecoverManager::GetSrcAndReplace()
-
-   3. 然后进行目的为容量再均衡的迁移
+      1. 非双活集群：RecoverManager::RepairInZone() 
+      2. 双活集群：RecoverManager::RepairInStretched()、RecoverManager::MoveToOtherZone()
+   
+      以上两种情况的 src/dst/replace cid 选取规则是一样的，通过 RecoverManager::GetSrcAndReplace() 选取 src 和 replace、通过 RecoverManager::GetDst() 获取 dst，不过中高负载与低负载情况下的选取规则是不同的，具体规则如下（选择顺序 replace_cid --> src_cid --> dst_cid）：
+   
+      1. replace_cid 的选取规则：将已有副本按照拓扑距离排序后，优先把 failslow 节点放在列表头部，然后如果没有 failslow 节点或者存在多个 failslow 节点，这些节点之间按照节点容量从大到小排序。
+   
+         做好以上准备工作后，从左到后遍历，选择第一个不是 prefer_local 且不是 owner 且命令数未满的节点，如果所有副本所在的节点都不满足这个条件，选择 owner 所在的节点作为 replace_cid，如果副本没有在 owner 上的，那么说明没选到 replace_cid，replace_cid = 0。
+   
+      2. src_cid 的选取规则：默认是 replace_cid，如果 replace_cid = 0，那么 src_cid = 0，如果 replace_cid != 0 且 failslow，那么从所有副本中任选一个不是 failslow 的节点作为 src_cid。
+   
+      3. dst_cid 的选取规则：
+   
+         非双活集群：首选 1. 不处于 failsow且 2. 没有副本且 3. 还有待生成 cmd 配额且 4. 能让拓扑结构更安全的 prefer local，否则对没有副本的 chunk 按照添加之后能让拓扑结构更安全的方式排序并从中选出第一个满足这 4 个条件的 cid 作为 dst_cid。
+   
+         > 现有逻辑如果 prefer local 不能让拓扑结构更健康，迁移的 dst 是不会选 prefer local 的
+   
+         双活集群：与非双活集群略有不同，需要考虑 prefer local 所在的 zone，然后不需要考虑让拓扑结构更安全
+   
+      如果 replace_cid|src_pid = 0，那么不会生成 cmd 的。
+   
+      选定 3 要素后调用 RecoverManager::MakeMigrateCmd()
+   
+   2. 如果集群不处于极高负载并且做过拓扑安全的迁移（生成了 migrate cmd）直接 continue，否则进行目的为容量再均衡的迁移。
    
       RecoverManager::ReGenerateMigrateForBalanceInStoragePool()，把高负载节点的副本迁移到低负载节点。
    
@@ -255,18 +370,33 @@ Meta 与 chunk 如何交互？问题来源[减少数据恢复量](https://docs.g
 
    8. 写失败的副本是否必须立即从 meta 中剔除
 
-```shell
-# 在主分支上
-git pull
-# 将新的 URL 复制到本地配置中
-git submodule sync --recursive
-# 从新 URL 更新子模块
-git submodule update --init --recursive
-```
 
-开发机重启后，zk 要手动重启，selinux 要关闭，zkServer.sh start、setenforce 0
+
+开发机重启后：zk 要手动重启，selinux 要关闭，docker 要手动重启，zkServer.sh start、setenforce 0、service docker start
 
 ZBS RPM 和 SMTX ZBS/SMTX OS/IOMesh 等不同产品的产品版本号从 5.0.0 开始已经分离，各有各的版本号
+
+
+
+创建空白虚拟机：
+
+从模板创建虚拟机：不存在虚拟机，根据模板创建一个虚拟机；
+
+从快照重建虚拟机：不存在虚拟机，根据快照创建一个虚拟机；
+
+从虚拟机克隆虚拟机：等效为对虚拟机配置做快照，磁盘是直接调用的 ZBS volume 克隆来实现；
+
+导入 OVF 创建虚拟机：根据 OVF 创建一个虚拟机；
+
+从快照回滚虚拟机：存在虚拟机，回到快照状态；
+
+从虚拟机克隆为虚拟机模板：虚拟机还保留着，同时生成一个不可变更的虚拟机模板；
+
+从虚拟机转化为虚拟机模板：虚拟机没了，同时生成一个不可变更的虚拟机模板；
+
+虚拟机快照不会被快照/克隆。
+
+当一个虚拟卷快照被克隆 10 次或一个虚拟机转化为虚拟机模板时，对应的副本会均匀分配。
 
 
 
