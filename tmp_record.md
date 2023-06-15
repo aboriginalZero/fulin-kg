@@ -2,6 +2,40 @@
 
 
 
+在静态模式下，做了输入检查，限制为 500 MB/s。但是实际上让各个 Chunk 自己确定最大值即可。 Meta 侧不应该做检查。在 Static 模式下，Meta 调整为显示期望值与各个 Chunk 实际的取值（在硬件支持的最大与 Meta 下发的静态数字中取 Min）即可。
+
+
+
+ZBS 侧对外暴露 MetaRpcServer::SetRecoverModeInfo()
+
+ZBS meta 侧
+
+RecoverManager::SetStaticMigrateLimit()，如果用户传入的 migrate_limit > cluster_max_migrate_limit 会直接返回 EInvalidArgument。
+
+cluster_max_migrate_limit = 所有 session 中的 current_max_migrate_limit() 的最大值
+
+通过 AccessManager::SummarySessionMigrateLimit() 设置的 current_max_migrate_limit，这个值实际上等于 每个 AccessSession 中的 max_migrate_limit，
+
+
+
+ZBS chunk 侧
+
+每个 chunk 通过 AccessHandler::ComposeAccessRequest 上报 max_migrate_limit
+
+
+
+
+
+chunk 上每 4s 调用一次 AccessHandler::AdjustRecoverMigrateLimit()
+
+AccessHandler::GetRecoverMigrateLimit()，在这先计算各个磁盘支持的上限，然后算物理网卡支持的上限，（开启 rmda 情况下是 0.5 * 10GB = 500 MB/s），二者取最小值得到 max_migrate_limit，然后更新 default_migrate_limit = 0.1 * max_migrate_limit
+
+
+
+
+
+
+
 context_->topology->IsChunkInDefaultZone(cid)
 
 context_->topology->GetTopoDistance(ori_cids)	vector<cid_t >& cids
@@ -33,11 +67,19 @@ even volume 的 extent count 代表什么？为啥迁移时优先选择 count �
 
 ChunkSpaceInfo 中每个字段的含义分别是什么？
 
-RecoverManager::GetDstCandidates() 中关于 allocated_data_space、valid_data_space、provisioned_data_space 的用法。
+valid_data_space：健康的持久化存储层的空间（Partition），计算可用空间用到是这个参数；
 
 chunk_space 当支持 thick 模式时用 allocated_data_space，支持 thin 模式时用 provisioned_data_space
 
-计算可用空间还是用 valid_data_space，
+allocated_data_space：
+
+provisioned_data_space：Meta 已经分配给节点上持有的数据空间，Provisioned Space 和节点的实际可用空间可能存在差异，因为节点的实际使用空间有可能尚未回收，特别是 LSM 1 制作大量快照后删除时，但节点的实际使用空间最终会趋向于 Meta 分配给节点的数据空间；
+
+RecoverManager::GetDstCandidates() 中关于 allocated_data_space、valid_data_space、provisioned_data_space 的用法。
+
+
+
+
 
 next_repair_scan_pid_ 变量可以去掉，并没有用到
 
@@ -52,12 +94,6 @@ for (pid_t pid = context_->pid_map->GetNextSetId(next_repair_scan_pids_[storage_
   cid_t prefer_local = entry.PreferredCid();
 }
 ```
-
-
-
-
-
-
 
 
 
@@ -253,11 +289,11 @@ RecoverManager::ReGenerateMigrateForRebalance()，针对有本地化偏好的副
    
       3. dst_cid 的选取规则：
    
-         非双活集群：首选 1. 不处于 failsow且 2. 没有副本且 3. 还有待生成 cmd 配额且 4. 能让拓扑结构更安全的 prefer local，否则对没有副本的 chunk 按照添加之后能让拓扑结构更安全的方式排序并从中选出第一个满足这 4 个条件的 cid 作为 dst_cid。
+         非双活集群：首选 1. 不处于 failsow 且 2. 没有副本且 3. 还有待生成 cmd 配额且 4. 能让拓扑结构更安全的 prefer local，否则对没有副本的 chunk 按照添加之后能让拓扑结构更安全的方式排序并从中选出第一个满足这 4 个条件的 cid 作为 dst_cid。
    
          > 现有逻辑如果 prefer local 不能让拓扑结构更健康，迁移的 dst 是不会选 prefer local 的
    
-         双活集群：与非双活集群略有不同，需要考虑 prefer local 所在的 zone，然后不需要考虑让拓扑结构更安全
+         双活集群：与非双活集群略有不同，需要考虑 prefer local 所在的 zone，然后不需要考虑让拓扑结构更安全，详细见 RepairInStretched()
    
       如果 replace_cid|src_pid = 0，那么不会生成 cmd 的。
    
@@ -467,6 +503,8 @@ Libmeta 也会监控自身的 Lease 使用情况，在长期未使用时会释�
 目前 ZBS 仅支持以多副本方式存储数据，适用于对读写延迟比较敏感的业务场景。EC 相比副本占用更少的存储空间，同时提供与副本同等甚至更高的容错能力，其代价是更新或者故障数据恢复的性能略差（注：写不一定比副本差，虽然需要多一次读，但数据量变少了。看最终实现的效果）。EC 非常适合归档、备份等数据量较大且更新很少的业务，也适用于对延迟不敏感而对带宽敏感的业务。需注意，EC 的目标是为了保证完整性而非正确性，只可以用于恢复丢失的数据，而无法修复位翻转等数据正确性问题。需要有其他机制对数据篡改进行检测，例如 CheckSum 检测，被篡改的数据可以视为丢失，再通过 EC 做数据恢复。
 
 ZBS 副本机制采用 Lease Owner + Generation 方式实现数据一致性。1. 通过 Lease Owner，所有的 IO 都被顺序化，客户端的多读者多写者模型被转化为单读者单写者模型；2. 通过 Generation 判断多个副本是否一致，当一个副本成功写入一个 IO 后，Generation 自增，每个 IO 携带当前的 Generation，Chunk 只有在 Generation 匹配时才允许 IO 处理。
+
+用户可见的副本，是 Meta 认可的 Replica中 Gen 最低的副本，Gen 高不代表它里面的数据有用。
 
 
 

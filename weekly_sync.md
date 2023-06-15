@@ -1,3 +1,136 @@
+2023.6.15
+
+1. 检查 topo obj name 查重的问题，yanlong 写测试脚本时发现 API / cli（zbs-meta topo list）中返回的 name 不一致，有些为 chunkX，有些为 hostname，预期应该是 chunkX（X 表示 cid）。
+
+   调用发现，tower 没有这个问题，但是通过 fisheye 修改确实会同步设置 hostname 为 name，在 pyzbs 那每次调用 updateTopoObj 的时候都会必传 new_name（7 年前的代码），即使只是移动拓扑位置。这个 pyzbs 侧的问题其实 1 周前就发现了，但是当时评估 fisheye 不更新了，所以也就没改。但 smtxauto 那边集成测试还挺多是基于 fisheye 提供的接口，然后就在昨天 qe 的冒烟测试那暴露出这个 bug。
+
+   这个过程主要是发现调用链 tower -> pyzbs -> zbs-client-py -> zbs rpc
+
+   fisheye 调用 api 会映射到底层多个服务： 有些服务是 v2，有些是 v3，zbs 相关的 restful api 都是 v2 的
+
+   tower 是集群上的一个虚拟机，用来管所有的虚拟机（多集群管理），fisheye 只是单机管理（虽然因为历史原因也提供了集群管理能力）。tower 调用 restful，pyzbs 上面起了个 nginx，上面还有 zbs 侧的代码没有剥离出来。
+
+2. 拆分 AccessManager 中的 recover cmd 入队的逻辑，做这个事的时候顺带发现单测里面的 BUG，在 RecoverManagerTest.RebalanceMoveParentInHighLoadMode 单测中没有为 chunk 创建 Session，实际上触发 recover cmd alloc owner fail，但这条 recover cmd 还会被放入每个 extent 的命令列表中，所以单测能通过，相当于负负得正了。
+
+   然后做这个事也顺带发现 RecoverManagerTest 这个单测类的 Setup 里面用 3402 的端口创建了个 session，但后续写单测的人应该并不清楚他们的 chunk 要用到 3401 的端口，以及创建 chunk 的 session 用的端口应该得是 chunk 的 data port。比如单测中如果注册 4 台 chunk 用的是 3402 3412 3422 3432 端口，其实一共调用了 5 次 CreateSession，创建了 5 个 session follower，但这里面其实有 2 个都是用的 3402，造成创建第二个 3402 时，将 session_ 中第一个 3402 的 session 覆盖掉了，进而导致测试退出时，遍历 session_，只退出了 4 个 session follower，而第一个 session follower 没有退出。出现了 memleak。
+
+3. lianpeng 修的一个 bug，2 点那会你刚 +2，这个问题是 Session Lease 从 14s 升级到 7s 的升级兼容问题。在 SessionMaster 初始化的时候开一个定时器每 200ms 查一次所有 session 的 lease 租约，如果所有的 session lease 租约都是 7s，那么才把 7s 租约作为配置信息持久化到 db 中，关掉定时器，这里就出现了在定时器的执行函数中析构定时器他自己的情况，lianpeng 的做法是把析构定时器的操作放在主 loop 中，相当于有 2 个 coroutine，第一个执行完才会执行第二个。
+
+   但我好奇的点是为啥要用定时器去做 lease 租约升级兼容问题，升级的过程是先重启 meta follower 最后重启 meta leader，然后再去重启 chunk，那等到 meta leader 重启的时候，其他所有 meta 都升到最新的了，他们此时就应该是 7s ？
+
+   chunk 正常的情况下，meta 变更，chunk 能感知到，他会主动把之前的旧的 session 撤回的，
+
+   故障、新旧混杂、ability manager
+
+   升级的代码可以参考 iscsi 能力协商的升级过程、空间分配策略调整这两个 patch，这是集群粒度的升级（meta/chunk）更难，更具有参考性。
+
+   因为如果升级一半，集群中出现既有 7s 又有 14s 的 lease 租约，会有什么影响？统一按照 14s 来处理，如果 meta 没有切换，每个 session 记录的 expired time 是对的。（疯狂切换的话是有可能出现 7s 工作，7s 不工作的情况，不过此时 meta 也没法工作，整个集群都没法工作，也没事）
+
+   linux perf 可以看火焰图，看日志发现的 topo distance 计算那边算的慢（由于锁才慢），才做的缓存，是这么发现性能差的。
+
+   因为可能出现升级完但老 session 还在的情况。
+
+4. 在 recover manager 中使用 topo 接口前先建立 topo 缓存，待 review；去重会让 extent 数量狂增，这边可能会有性能问题（是从未来的设计考虑，能够估计出这个问题）
+
+   meta 中哪些需要精确的，哪些可以是模糊的（migrate/recover doscan），需要分开管理
+
+   需要加单测/本地的 benckmark 体现出前后性能对比
+
+5. 支持手动添加 recover/migrate 命令的 patch
+
+   在 recover migrate 静态模式下的最大阈值检查调整，快改完了，今天会提交 patch；
+
+   cmd slot 引入弹性模式，目前都是增量恢复，之前的经验值都是基于全量恢复给的，
+
+   Zbs-25386 如果有个别慢盘，分到这个 chunk 上的 Recover cmd 会执行的慢，让 recover cmd 上限低一点。不然会达到 18min 的上限，造成 timeout
+
+   卸盘或啥时候想挪一下副本到指定文件。
+
+   做完 prefer local 
+
+   prefer local 节点上没有副本的入口有且仅有这 2 个：一个是高负载情况下，prefer local 的数据会被迁移。
+
+   一个是虚拟机热迁移（用户操作、无法干预）且处于高负载，此时不会做 prefer local 的副本迁移。
+
+   整体框架、整体原则、先不考虑细节，最终细节去满足原则，迭代的方式是一次次地明确需求。
+
+   需求来源：1. 对未来功能的展望；2. 售后故事的展望。
+
+   
+
+   在中高负载情况下的迁移目前是允许迁移 prefer local 的，但根据 http://jira.smartx.com/browse/ZBS-13401 的需求，应该关掉。而不是在按目前的策略调整后，再去尝试本地化聚集（副本迁移来迁移去的，太动荡）；
+
+   允许用户用命令行触发一个集中策略（向指定的节点聚集一个副本，不需要完整局部化，仅本地化即可），但是不能让指定节点进入超高负载状态（95%），这个事应该还得考虑不会被 doscan 给迁移回来吧？怎么做升级兼容性考虑呢？
+
+   jiewei 提的需求是希望能够让用户指定对某个卷优先触发此类聚集操作，其实就是对这个卷的所有 pextent 做迁移，但这些迁移的 replace 和 src 要怎么选又要涉及到策略定制。
+
+6. even volume 的 extent count 代表什么？为啥迁移时优先选择 count 大的 extent ？
+
+   chunk_space 当支持 thick 模式时用 allocated_data_space，支持 thin 模式时用 provisioned_data_space
+
+   * provisioned_data_space：Meta 已经分配给节点上持有的数据空间，Provisioned Space 和节点的实际可用空间可能存在差异，因为节点的实际使用空间有可能尚未回收，特别是 LSM 1 制作大量快照后删除时，但节点的实际使用空间最终会趋向于 Meta 分配给节点的数据空间；
+   * allocated_data_space：？？
+   * valid_data_space：健康的持久化存储层的空间（Partition），计算可用空间用到是这个参数；
+
+   RecoverManager::GetMaxMoveForRebalance() 函数中的计算
+
+   ChunkSpaceInfo 中每个字段的含义分别是什么？《数据存储空间概念》文档是否是最新的？我看上一次更新是在 19 年，你在 4.19 号有说会接下来会更新一版。chunk 节点内部的空间划分的两个图是否过时？
+
+   ```protobuf
+   message ChunkSpaceInfo {
+       optional uint64 valid_data_space = 1 [default = 0];
+       optional uint64 used_data_space = 2 [default = 0];
+   
+       // all provisioned space, for internal use, chunk should not set this field
+       optional uint64 provisioned_data_space = 3 [default = 0];
+       optional uint64 total_data_capacity = 14 [default = 0];
+       optional uint64 failure_data_space = 15 [default = 0];
+       optional uint64 allocated_data_space = 24 [default = 0];
+       optional uint64 thin_used_data_space = 25 [default = 0];
+   
+       // id of the chunk, for internal use, chunk should not set this field
+       optional uint32 id = 5;
+   
+       optional uint64 valid_cache_space = 11 [default = 0];
+       optional uint64 used_cache_space = 12 [default = 0];
+       optional uint64 dirty_cache_space = 13 [default = 0];
+       optional uint64 failure_cache_space = 16 [default = 0];
+       optional uint64 total_cache_capacity = 17 [default = 0];
+       optional uint64 temporary_replica_space = 18 [default = 0];
+   
+       optional uint32 num_rx_pids = 21 [default = 0];
+       optional uint32 num_tx_pids = 22 [default = 0];
+       optional uint32 num_reserved_pids = 23 [default = 0];
+   }
+   ```
+
+7. 梳理了中高负载模式下的 src/dst/replace 选取规则（也发现了一个 bug，中高负载模式下为了拓扑安全而做的迁移，replace_cid 永远不会选到 owner，报给 sijie 了），与低负载模式的并不相同。
+
+   策略复杂的点在于要考虑 prefer local、lease owner、failslow、topo distance、节点容量、剩余 cmd 配额，场景的话要考虑 集群负载、是否双活、是否 even volume、是否精简制备、是否有过克隆/快照行为，暂时还不知道如何归类。
+
+   如果要重构 recover manager，还需要考虑兼容 chunk 多线程（fengli 说之后让我做）、pin in perfermance 中高优先级卷（没看到 wenquan 的代码）、EC 单独写 recover manager 不纳入考虑，分层和去重不知道会不会影响（先不考虑）。
+
+   must have ：过滤器
+
+   shoud have ：排序
+
+   根据影响范围从大到小写 if else，然后先过滤器再排序
+
+   1. 集群负载、双活并列
+   2. TBD
+
+   恢复不满足
+
+   可见、可调节、可人工干预
+
+8. 配置中心的概念，应该怎么设计？给大家留什么接口呢？等 patch 都交完，最后完成。
+
+   lease owner、prefer local、failslow
+
+
+
+2023.5.23
+
 1. 厚制备 elf 没有传递 Volume 所属的 Chunk id 给 ZBS，所以副本分配没法使用本地优先，此时第一副本会挑选为分配时集群空间比例最小的节点，然后其他 2 个副本在第一个副本的基础上再按照局部化原则选择。对应的 Extent 有真实 IO 之后会打上 prefer cid 的标记，再被定时扫描触发副本迁移；
 
 2. 2 副本的数据分布，prefer local 是 2，副本分布一开始在 chunk 2 3，stop chunk2 之后，recover 从 3 到 4，副本分布是 3 和 4。此时在 chunk 3 上写 pid1，chunk4 上写 pid2，对应的 lease owner 分别是 3 和 4，chunk2 start，scan immediate，这个时候把 pid1 4 上的副本迁移到 2 上好理解，因为此时满足局部化/本地化期望副本分布是 2 3。
@@ -61,9 +194,7 @@
 
 
 
-
-
-
+2023.4.16
 
 未来开发重点：分层设计、EC、去重、元数据共识改造
 
