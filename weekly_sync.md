@@ -51,7 +51,7 @@
 
    Zbs-25386 如果有个别慢盘，分到这个 chunk 上的 Recover cmd 会执行的慢，让 recover cmd 上限低一点。不然会达到 18min 的上限，造成 timeout
 
-   卸盘或啥时候想挪一下副本到指定文件。
+   支持手动添加 recover/migrate 命令是用于卸盘或啥时候想挪一下副本到指定文件时临时用一下，之后被 doscan 回去也没事。
 
    做完 prefer local 
 
