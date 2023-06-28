@@ -69,8 +69,14 @@
    chunk_space 当支持 thick 模式时用 allocated_data_space，支持 thin 模式时用 provisioned_data_space
 
    * provisioned_data_space：Meta 已经分配给节点上持有的数据空间，Provisioned Space 和节点的实际可用空间可能存在差异，因为节点的实际使用空间有可能尚未回收，特别是 LSM 1 制作大量快照后删除时，但节点的实际使用空间最终会趋向于 Meta 分配给节点的数据空间；
-   * allocated_data_space：？？
+
+       Provisioned Space，Chunk 属性，在 ZBS 中当一个存储对象（Extent）都按照其可能达到的最大体积计算时，不论数据是否写入，在物理节点上这部分空间已经归属于该存储对象，会被 ZBS 系统标记为已经消耗，不再挪作它用；
+
+   * allocated_data_space：Allocated Space 虚拟卷/存储对象（Extent）/ Chunk 均有属性，代表已经真实分配的物理空间大小，已经分配给存储对象的空间将不再可以被分配给其他对象；
+
    * valid_data_space：健康的持久化存储层的空间（Partition），计算可用空间用到是这个参数；
+
+   * used_data_space：Used Space，仅是 Chunk 的属性，在 ZBS 物理节点上真实存储的数据空间大小，如果一个 Volume 是 thick 模式创建的，那么在他真实写入数据之前，ZBS 系统会在关联的存储节点上为它分配物理空间，被标记为已预留和已分配。但是此时存储节点上只是预留了这部分空间给 Volume，直到 Volume 真实写入数据。存储节点上在对应的空间中真实的存储了 Volume 的相关数据之后这部分空间才会被标记为已使用；
 
    RecoverManager::GetMaxMoveForRebalance() 函数中的计算
 

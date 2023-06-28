@@ -22,6 +22,8 @@ cluster_max_migrate_limit = 所有 session 中的 current_max_migrate_limit() �
 
 通过 AccessManager::SummarySessionMigrateLimit() 设置的 current_max_migrate_limit，这个值实际上等于 每个 AccessSession max_migrate_limit 中的最大值
 
+RecoverManager::GetClusterMaxRecoverLimit() 不论是 static mode 还是 auto mode 都会使用，他是用来确定 cluster_max_recover_limit。
+
 
 
 ZBS chunk 侧
