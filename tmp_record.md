@@ -34,6 +34,12 @@ chunk 上每 4s 调用一次 AccessHandler::AdjustRecoverMigrateLimit()，其中
 
 
 
+ZBS-25522
+
+目前弹性恢复策略中的智能模式（auto mode）会根据 APP IO 做快速增减 Recover IO 的限速，但这个智能调节策略目前在发现 APP IO 较高时一次性将限速调整到阈值等于 40MB/s 的做法过于粗暴。这个阈值的选定至少可以根据 1. 硬件能力 2. APP IO 来动态调节，而非一个固定值。
+
+
+
 
 
 
@@ -81,8 +87,6 @@ RecoverManager::GetDstCandidates() 中关于 allocated_data_space、valid_data_s
 
 
 
-
-
 next_repair_scan_pid_ 变量可以去掉，并没有用到
 
 
@@ -96,8 +100,6 @@ for (pid_t pid = context_->pid_map->GetNextSetId(next_repair_scan_pids_[storage_
   cid_t prefer_local = entry.PreferredCid();
 }
 ```
-
-
 
 
 

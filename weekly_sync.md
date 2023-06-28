@@ -1,3 +1,10 @@
+1. 做 meta 的同学，互相 review 或者 CC；
+2. 建议在设计文档中，最终 Owner 能用一个表格的形式体现出策略对比，清晰直接；
+
+
+
+
+
 2023.6.15
 
 1. 检查 topo obj name 查重的问题，yanlong 写测试脚本时发现 API / cli（zbs-meta topo list）中返回的 name 不一致，有些为 chunkX，有些为 hostname，预期应该是 chunkX（X 表示 cid）。
