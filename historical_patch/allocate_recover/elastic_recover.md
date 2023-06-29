@@ -37,3 +37,20 @@ ZBS-25522
 目前弹性恢复策略中的智能模式（auto mode）会根据 APP IO 做快速增减 Recover IO 的限速，但这个智能调节策略目前在发现 APP IO 较高时一次性将限速调整到阈值等于 40MB/s 的做法过于粗暴。这个阈值的选定至少可以根据 1. 硬件能力 2. APP IO 来动态调节，而非一个固定值。
 
 这个代码好写，但是验证代码的有效性需要上集群做实验，留到之后处理。
+
+```
+diff --git a/src/access/access_handler.cc b/src/access/access_handler.cc
+index 44c04070d..b25795fbb 100644
+--- a/src/access/access_handler.cc
++++ b/src/access/access_handler.cc
+@@ -1506,6 +1506,8 @@ void AccessHandler::AdjustRecoverMigrateLimit() {
+         if (total_iops > limit.normal_io_busy_iops_throttle ||
+             total_bandwidth > limit.normal_io_busy_bps_throttle ||
+             dirty_cache_ratio > FLAGS_recover_limit_high_cache_ratio) {
++            // TODO 直接设成固定值 40/50 MB/s，这个值是根据硬件能力得到的，此处还要考虑根据 APP IO 来调节
++            // 这个智能是不是应该考虑把硬件能力完全发挥出来，比如 APP IO 只用了 0.5 的硬件能力，但这边只是固定的 0.1
+             recover_handler_.SetRecoverLimit(limit.default_recover_limit);
+         } else if ((has_cache && dirty_cache_ratio < FLAGS_recover_limit_low_cache_ratio) || !has_cache) {
+             auto recover_bandwidth = recov
+```
+

@@ -1,35 +1,124 @@
-5 节点集群，172.20.137.141
+[ZBS-13059](http://jira.smartx.com/browse/ZBS-13059) 恢复数据允许识别原有数据块的冷热属性
+
+[ZBS-25386](http://jira.smartx.com/browse/ZBS-25386) 修复节点数据迁移速度过慢导致access层无法迁移成功的问题
+
+[ZBS-24563](http://jira.smartx.com/browse/ZBS-24563) 缓存命中率下降，副本恢复任务并发度过高，导致恢复任务执行过慢
+
+[ZBS-13041](http://jira.smartx.com/browse/ZBS-13041)允许在线调整恢复/迁移的命令数量
+
+4 个 ticket 4 件事
+
+1. 冷热数据识别（梳理 lsm 侧的需求给到 lsm 同学做，识别冷热数据）
+
+   recover src 读的热数据要写到 recover dst 上的 cache，冷数据直接写到 recover dst 上的 partition，避免恢复导致的缓存击穿
+
+2. recover 每台 chunk 上执行的并发度默认 32，根据 recover extent 完成情况向上向下调节（auto mode）
+
+   并发度最小应该是 2 4，而不是 1，就 1 个通道的容错率太差了。
+
+   recover extent 完成情况应该是本地的，从 lsm 侧获取到信息
+
+3. recover cmd slot 默认 128，根据 extent 的稀疏情况以及 recover extent 的完成情况向上向下调节（auto mode）
+
+   怎么判断 extent 的稀疏情况？agile recover 的 bitmap？
+
+    recover extent 的完成情况可以是 meta 侧统计的下发出去的命令在单位时间内的完成数量
+
+4. recover 并发度、recover cmd slot 支持通过命令行手动调整该值（static mode）
+
+   recover 并发度跟限速一样，跟随心跳下发，所以不保证立即生效。
+
+   recover cmd slot 是在 recover manager 上的参数，可以立即生效。
 
 
 
-zbs-25386
-
-目前迁移命令下发给access后，access会按FIFO的逻辑依次执行迁移。当lsm读取速度过慢时，会慢慢影响access迁移，造成大部分迁移命令超时，迁移功能卡住的情况。
-
-如果有个别慢盘，分到这个 chunk 上的 Recover cmd 会执行的很慢，让 recover cmd 上限低一点。不然会达到 18min 的上限，造成 timeout
 
 
+chunk recover 执行的慢可能原因：慢盘、缓存击穿、normal instead of agile recover、
 
-context_->topology->IsChunkInDefaultZone(cid)
+考虑到如果是稀疏的 Extent，恢复命令执行的会比较快。所需要的恢复命令会相对较多。如果是 Extent 数据相对饱和。则恢复没有那么快。所需要的命令会较少。
 
-context_->topology->GetTopoDistance(ori_cids)	vector<cid_t >& cids
-
-context_->topology->IsBestTopoDistanceInZone(cur_topo_distance, ori_cids)  int vector<cid_t >& cids
-
-context_->topology->GetTopoDistance(cid_t , cid_t)
-
-context_->topology->GetChunkTopology(cid, &topo); 实际上是为了去拿 zone_id 
-
-context_->topology->AllChunksHaveTopoInfo()
-
-先拿一下所有 chunk 之间的 topo distance
+过去一段时间的恢复速率过慢、recover cmd 完成数量过少、还是 timeout 标记、lsm 侧缓存剩余比例（clean + free 的比例，如果太高的话，说明缓存基本没用上，recover handler 目前已经用了这个值来避免缓存击穿，zbs-chunk cache list 可以看到）、路径很多，先列举出来。PartitionList 有感知 SlowIO 的数量。
 
 
+
+作用于 meta 侧的 recover IO 超时相关的 FLAGS
+
+* recover_timeout_ms = 18 min；
+
+作用于 chunk 侧 IO 超时相关的 FLAGS
+
+* chunk_recover_io_timeout_ms = 9s，chunk recover io timeout ms，这个参数实际上没用到；
+* local_chunk_io_timeout_ms = 8s，local chunk io timeout ms；
+* remote_chunk_io_timeout_ms = 9s，remote chunk io timeout ms，（ZBS 对网络有限制，如果 ping 大包来回超过 1s，认为网络严重故障，系统不工作）。
+
+
+
+敏捷恢复为减少内存使用，是有单次最大数量的限制。不过 100G 的写盘应该不会触发这个上限。
+
+调查为啥升级时触发的敏捷恢复数量不及预期可以从维护模式时是否 lease 没清空的角度出发调查。
+
+
+
+chunk 侧有慢盘标记，早在网络亚健康之前就有了，副本分配策略会考虑节点容量，这个容量是有效数据空间比例，看的是比例，慢盘不算有效数据空间，如果有慢盘，这个值会比较低，所以这个 chunk 被选中的优先级会低一些。
+
+[磁盘异常处理  II](https://docs.google.com/document/d/1NdsdRCPmNciLC8Vj70HEImQKRxLAPIVEzvtTbKqIkZI/edit)，在平均延迟 >= 2s 时，TUNA 将磁盘记录为慢盘 II ，并向本地 Chunk 提示慢盘进入隔离状态。LSM 2 将响应磁盘隔离请求，隔离磁盘：
+
+1. 对于进入隔离状态的磁盘，所有的普通 IO 请求将被拒绝，关键 IO 需要被接受；
+2. 隔离的磁盘上关联的 Extent 都将被标记为异常状态以快速让 Meta 触发数据恢复 （需要确认是否可以标记所有有部分间接 Block 在磁盘上的 Extent，如果实现代价较大，可以不标记这些 Extent）；
+3. 隔离的磁盘不再会被分配新的 Extent，并且 GC 命令可以正常的清理系统中对隔离磁盘的数据状态；特别的，强制 IO 触发的 LSM 内部数据分配，在没有健康磁盘可用的情况下，要允许分配至隔离中的磁盘（比如处理 COW，COW 需要的副本空间只会在本地）；
+4. 在隔离的磁盘上不再具备数据后，隔离磁盘将自动从 Chunk 中移除；
+5. 隔离磁盘的空间将不再被标记为有效空间，需要在向 Meta 上报的有效空间容量中扣减；
+
+隔离状态的磁盘与直接标记为慢盘 I & 坏盘的标记不同，在必要时依然需要处理 IO 请求。对于慢盘 I & 坏盘 & 磁盘消失，可以认为 Chunk 不具备读取数据的能力，在当前阶段只能直接放弃该副本。但是对于慢盘 II，数据是还可以被访问的。
+
+理论上的最优效果是，保留该副本，且外部 IO 行为几乎等同于该磁盘行为。理论上，通过重置 HBA 卡、重启节点的手段来恢复该磁盘，很大几率地，磁盘能重新恢复正常响应，但需要引入较为复杂且不可控的恢复手段。但是在作为最后一个副本时，提供 IO 能力有可能避免用户业务立即中断。因为 LSM 本身并不具备识别副本是否最后一个副本的能力，因此数据副本在 LSM 2 中隔离后需要被标记为异常，由 Access （知晓副本状态）提供 IO 标记，要求 LSM 响应此类 IO。
+
+即当慢盘 II / 健康盘上都有同一个 pid 副本且所有的副本都写失败，才会去写慢盘 II，对应代码 GenerationSyncor::MarkPidIOHard()
+
+
+
+缓存击穿后，大量的恢复任务争抢 IO，恢复任务容易超时被取消，导致实际恢复速率不足 10MB/s。副本恢复的并发度默认是固定值 32，应该作为一个自适应缓存命中率的值
+
+日志中看到的下发 recover 命令和 EXTENT GC CMD ，两者其实并不是我们想象的相互影响，导致谁也无法推进下去，即不是因为 recover 任务在进行时收到了 EXTENT GC CMD，导致 recover 被中止。这里实际发生的情况是：
+
+1. meta leader 下发 recover 命令到 chunk。
+2. chunk 收到命令开始执行，首先创建一个新 pextent（称为 A）作为恢复的目标端。
+3. 17 分钟后，chunk 上 recover 命令未执行完成，报错超时。
+4. meta leader 发现自己下发的 recover 命令已经超时结束，下发 GC 命令将临时 pextent A 给回收掉。
+5. 等待临时 pextent A 回收掉后，meta leader 再次下发新的 recover 命令。（重复步骤 1）
+
+日志上看到的现象：
+
+01:18 下发 recover 命令
+
+01:35 recover 命令超时，收到了 gc 命令
+
+01:36 再次下发 recover 命令
+
+01:53 recover 命令超时，收到了 gc 命令
+
+这里问题的根源在于一个 recover 命令未能在 17 分钟内完成。
+
+
+
+---
+
+
+
+ZBS-13401
 
 目前在高负载情况下，数据不再会遵循本地化分配原则，而是会尽量的均匀分布。这可能会造成部分虚拟机在迁移之后和原来的性能有较大的差异。需要考虑改善这个场景，也许有两个方向需要考虑：
 
 - 允许用户用命令行触发一个集中策略（向指定的节点聚集一个副本，不需要完整局部化，仅本地化即可），但是不能让指定节点进入超高负载状态（95%）
 - 调整平衡策略，在中高负载集群相对均衡后，尝试本地化聚集（不需要局部化，仅保证一个副本在 prefer cid 所在节点即可）
+
+prefer local 节点上没有副本的入口有且仅有这 2 个：
+
+1. 高负载情况下，prefer local 的数据会被迁移；
+2. 虚拟机热迁移（用户操作、无法干预）且处于高负载，此时不会做 prefer local 的副本迁移。
+
+
 
 改进迁移策略，在节点上待回收数据较多时（已经使用的数据空间占比超过 95%），如果集群没有进入极高负载状态（整体空间分配比例达到 90%），不向该节点迁移数据以保证回收顺利进行。
 
@@ -37,17 +126,7 @@ lsm1 回收空间的速率非常慢，所以如果删除一个 extent，存在 c
 
 在 Migrate 时进行检查，如果集群整体尚有可用空间时比如整体 provisioned 比例在 90% 以下，不向 Used Space 比例大于 95% 的节点迁移数据，即便 Provsioned 比较低。
 
-even volume 的 extent count 代表什么？为啥迁移时优先选择 count 大的 extent 
 
-ChunkSpaceInfo 中每个字段的含义分别是什么？
-
-valid_data_space：健康的持久化存储层的空间（Partition），计算可用空间用到是这个参数；
-
-chunk_space 当支持 thick 模式时用 allocated_data_space，支持 thin 模式时用 provisioned_data_space
-
-allocated_data_space：
-
-provisioned_data_space：Meta 已经分配给节点上持有的数据空间，Provisioned Space 和节点的实际可用空间可能存在差异，因为节点的实际使用空间有可能尚未回收，特别是 LSM 1 制作大量快照后删除时，但节点的实际使用空间最终会趋向于 Meta 分配给节点的数据空间；
 
 RecoverManager::GetDstCandidates() 中关于 allocated_data_space、valid_data_space、provisioned_data_space 的用法。
 
@@ -67,9 +146,11 @@ for (pid_t pid = context_->pid_map->GetNextSetId(next_repair_scan_pids_[storage_
 }
 ```
 
-
+ZBS-20993
 
 允许 RPC 产生恢复/迁移命令，可以指定源和目的地，在运维场景或许会有用。
+
+支持手动添加 recover/migrate 命令是用于卸盘或啥时候想挪一下副本到指定文件时临时用一下，之后被 doscan 回去也没事。
 
 输入 pid, src, dst, replace
 
@@ -177,10 +258,6 @@ Status RecoverManager::AddMigrateCmd(pid_t pid, cid_t src, cid_t dst, cid_t repl
     return Status::OK();
 }
 ```
-
-
-
-
 
 
 
