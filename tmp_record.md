@@ -14,21 +14,33 @@
 
 2. recover 每台 chunk 上执行的并发度默认 32，根据 recover extent 完成情况向上向下调节（auto mode）
 
-   并发度最小应该是 2 4，而不是 1，就 1 个通道的容错率太差了。
+   并发度最小应该是 2 4，而不是 1，就 1 个通道的容错率太差了
 
    recover extent 完成情况应该是本地的，从 lsm 侧获取到信息
 
 3. recover cmd slot 默认 128，根据 extent 的稀疏情况以及 recover extent 的完成情况向上向下调节（auto mode）
 
-   怎么判断 extent 的稀疏情况？agile recover 的 bitmap？
+   怎么判断 extent 的稀疏情况？lsm 上报的心跳中有 thin pid 的信息
 
-    recover extent 的完成情况可以是 meta 侧统计的下发出去的命令在单位时间内的完成数量
+   recover extent 的完成情况可以是 meta 侧统计的下发出去的命令在单位时间内的完成数量
 
 4. recover 并发度、recover cmd slot 支持通过命令行手动调整该值（static mode）
 
+   recover cmd slot 是在 recover manager 上的参数，可以立即生效。max_recover_cmds_per_chunk
+
    recover 并发度跟限速一样，跟随心跳下发，所以不保证立即生效。
 
-   recover cmd slot 是在 recover manager 上的参数，可以立即生效。
+
+
+被扫描的 pextent 数量
+
+
+
+1. 包含所有 chunk 的一个整体数量限制
+2. 单 chunk 的数量限制
+3. 时间限制
+
+
 
 
 
@@ -386,10 +398,9 @@ RecoverManager::ReGenerateMigrateForRebalance()，针对有本地化偏好的副
 
 关于 active_waiting_recover / passive_waiting_recover 这两个链表：
 
-1. 只有 RecoverManager::GenerateRecoverCmds() / RevokeRecoverCmds() 会往 active_waiting_recover 中 erase 元素；
-2. 只有 RecoverManager::AddToWaitingRecoverIfNecessary() 会往 passive_waiting_recover 中 insert 元素，调用 AddToWaitingRecoverIfNecessary() 的有：
-    1. RecoverManager::AddToWaitingRecover(pid_t pid)，recover 给定的 pid ，在 MetaRpcServer::DoRemoveReplica() 指定 pid 时会构建临时副本，并触发这个 pid 的 recover；
-    2. RecoverManager::ReGenerateWaitingRecoverList()，recover pextent table 中所有需要 recover 的 pid，在 DoScan 中被定时执行；
+1. MetaRpcServer::DoRemoveReplica() 移除副本会触发这个 pid 的 recover，调用 RecoverManager::AddToWaitingRecover(pid_t pid) ，它会接着调用 AddToWaitingRecoverIfNecessary() 往 active_waiting_recover 中 insert 元素；
+1. RecoverManager::GenerateRecoverCmds() / RevokeRecoverCmds() 会往 active_waiting_recover 中 erase 元素；
+3. RecoverManager::ReGenerateWaitingRecoverList() 会 recover pextent table 中所有需要 recover 的 pid，在 DoScan 中被定时执行，它调用 RecoverManager::AddToWaitingRecoverIfNecessary() 往 passive_waiting_recover 中 insert 元素；
 
 
 
