@@ -32,17 +32,25 @@
 
 
 
-被扫描的 pextent 数量
+区分 recover 还是 recover_migrate
+
+1. 在为容量均衡而做的 migrate  中需要限制被扫描的 pextent 数量吗？
+2. 什么时候留 gflags::Uint64FromEnv()，什么时候允许通过 rpc 修改
 
 
 
-1. 包含所有 chunk 的一个整体数量限制
-2. 单 chunk 的数量限制
-3. 时间限制
+整体设置
 
+1. doscan 线程的唤醒频率是 4s 一次
+2. 单 chunk 的数量限制，recover / migrate 合在一起是 256
+3. 一次扫描的 pids 限制，recover / migrate 分别是 1024 * 1024
+4. recover / migrate 命令执行超时时间是 18 min
 
+recover / migrate 独立设置
 
-
+1. 包含所有 chunk 的一个整体数量限制，recover 是 256，migrate 是 4096
+2. 单 chunk 的数量限制，recover 单独没有限制，migrate 是 200
+3. 触发周期限制，recover 是 1s，migrate 中低负载下是 1h，高负载下是 5min
 
 
 
