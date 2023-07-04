@@ -1,3 +1,69 @@
+1. node3 上没有 meta 服务是正常的吗？4 节点集群中只有 3 个 meta。打快照的行为是在被快照的副本的原地去分配新副本吗？
+
+2. 7-3 12:04 之前没有在日志中找到 migrate 的标记，fanyang 删除快照后各节点容量回归正常，然后才触发 migrate for localization
+
+3. 快照计划对虚拟机做快照，会有优先分配到虚拟机所在节点的偏好吗？（prefer local）
+   我算了一下他一分钟产生一次的快照大概独占空间是 ～20G，高负载情况下 migrate 是 5 min 现
+
+4. 在 7-4 12 点及之前（fanyang 未删除集群中所有快照），分配的 pid 期望 3 副本，结果只分配到 4 和 2（1 和 3 空间不足），触发 recover，但 recover 的 dst 也会选 1 和 3，还是由于空间不足 recover 失败，猜测此时由于 recover cmd 数量过大导致集群没有触发 migrate。
+
+5. 从 0703 22:01:03.398327 开始出现副本分配 2 < 预期副本数 3，pid: 363490，在这前后 2 小时里都没有 migrate，
+
+6. 实际上，更早的时候出现第一条显示空间不足的日志是 chunk 3 ，时间是 22391:E0703 20:59:24.579273，找 pid: 363459 的日志，
+
+   grep -n "FAIL TO COW PEXTENT" zbs-metad.log.20230703-191821.5689 -C 100 | head -n 200
+
+   grep -n "pid: 363459" zbs-metad.log.20230703-191821.5689 -C 5 | head -n 500
+
+   ```c++
+   22391:E0703 20:59:24.579273 12378 pextent_allocator.cc:49] There is no enough space on chunk 3 to cow pextent.
+   22392-I0703 20:59:24.581032 12378 meta_rpc_server.cc:989] [COW PEXTENT]: pid: 363401 new pid: 363459 loc: [1 ] volume: name: "edca71ef-83a6-4f2e-b137-f9be9edb3feb" size: 214748364800 created_time { seconds: 1681060403 nseconds: 513532843 } id: "edca71ef-83a6-4f2e-b137-f9be9edb3feb" parent_id: "6599b64b-9fea-4597-8733-f55097464673" origin_id: "ffd2a616-2deb-4671-b4a5-b8d60c02576f" replica_num: 2 thin_provision: true iops_burst: 0 bps_burst: 0 throttling { } stripe_num: 4 stripe_size: 262144 access_points { cid: 3 }
+   ```
+
+   这个时间点前后最近的 migrate 是 I0703 18:57:56.005661，但也间隔了 2 小时（migrate 正常 1小时触发一次）
+
+   ```
+   zbs-metad.log.20230702-112658.5689:I0703 18:57:56.005661 12635 recover_manager.cc:1232] Migrate for localization in storage pool: system
+   zbs-metad.log.20230704-120523.5689:I0704 13:04:09.009789 12635 recover_manager.cc:1232] Migrate for localization in storage pool: system
+   ```
+
+   跟踪一下 pid: 363459 的生命历程：
+
+   1. 此时快照，对 pid: 363401 COW 得到  new pid: 363459，期望副本在 [3, 1]，由于 chunk 3 空间不足，只分配到 [1]；
+   2. 过了 40s ，下发 recover cmd 从 1 到 4；
+   3. 离上一次快照 1min，下一个快照就来了，对 pid: 363459 COW 得到 new pid: 363568，期望副本在 [3, 1]，由于 chunk 3 空间不足，只分配到 [1]，此时上面那条 recover cmd 还没完成（不知道做的慢还是根本就没做）；
+   4. 过了 8s，又触发从 1 到 2 的 recover（前一次应该是被取消掉了，recover 并没有完成）；
+   5. 又过了 15s，触发从 chunk 0 到 chunk 2 的副本迁移，这个日志也很奇怪，应该是从 1 到 3？不过 3 都满载了，为啥会替换到 3 ？
+   6. 过 1h，对 pid: 363459 释放 lease owner。
+
+   ```c++
+   22391-E0703 20:59:24.579273 12378 pextent_allocator.cc:49] There is no enough space on chunk 3 to cow pextent.
+   22392:I0703 20:59:24.581032 12378 meta_rpc_server.cc:989] [COW PEXTENT]: pid: 363401 new pid: 363459 loc: [1 ] volume: name: "edca71ef-83a6-4f2e-b137-f9be9edb3feb" size: 214748364800 created_time { seconds: 1681060403 nseconds: 513532843 } id: "edca71ef-83a6-4f2e-b137-f9be9edb3feb" parent_id: "6599b64b-9fea-4597-8733-f55097464673" origin_id: "ffd2a616-2deb-4671-b4a5-b8d60c02576f" replica_num: 2 thin_provision: true iops_burst: 0 bps_burst: 0 throttling { } stripe_num: 4 stripe_size: 262144 access_points { cid: 3 }
+   22397:I0703 20:59:24.595217 12378 meta_rpc_server.cc:2079] [SET PEXTENT EXISTENCE]: [REQUEST]: pid: 363459 origin_pid: 0 epoch: 409375 origin_epoch: 0 generation: 1, [RESPONSE]: ST:OK, , [TIME]: 1359 us.
+   22522:I0703 21:00:04.847577 12635 recover_manager.cc:419] add recover cmd for pid: 363459 src: 1 dst: 4 replace: 0
+   22805:I0703 21:00:56.738984 12378 meta_rpc_server.cc:989] [COW PEXTENT]: pid: 363459 new pid: 363568 loc: [1 ] volume: name: "edca71ef-83a6-4f2e-b137-f9be9edb3feb" size: 214748364800 created_time { seconds: 1681060403 nseconds: 513532843 } id: "edca71ef-83a6-4f2e-b137-f9be9edb3feb" parent_id: "6599b64b-9fea-4597-8733-f55097464673" origin_id: "53a5c9e4-ff85-4b17-89cc-3ba7317f2f85" replica_num: 2 thin_provision: true iops_burst: 0 bps_burst: 0 throttling { } stripe_num: 4 stripe_size: 262144 access_points { cid: 3 }
+   22825:I0703 21:01:04.891676 12635 recover_manager.cc:419] add recover cmd for pid: 363459 src: 1 dst: 2 replace: 0
+   23126:I0703 21:01:19.121897 12378 meta_rpc_server.cc:1989] [REPLACE REPLICA]: [REQUEST]: session: "0cdce1ad-b4c3-4412-af9f-90383dd901bc" pid: 363459 src_chunk: 0 dst_chunk: 2 epoch: 409375 reset_location_to_dst: false reset_generation: 18446744073709551615, [RESPONSE]: ST:OK, pid: 363459 location: 513 expected_replica_num: 2 ever_exist: true origin_pid: 363401 epoch: 409375 origin_epoch: 409317 generation: 1 preferred_cid: 3 thin_provision: true alive_location: 513 allocated_space: 108003328, [TIME]: 1361 us.
+   150704:I0703 22:02:15.651685 12378 access_manager.cc:1905] Release owner : pid: 363459 session: 0cdce1ad-b4c3-4412-af9f-90383dd901bc
+   ```
+
+7. 第一条显示空间不足的日志是 chunk 3 ，时间是 22391:E0703 20:59:24.579273
+
+   ```
+   22391:E0703 20:59:24.579273 12378 pextent_allocator.cc:49] There is no enough space on chunk 3 to cow pextent.
+   22392-I0703 20:59:24.581032 12378 meta_rpc_server.cc:989] [COW PEXTENT]: pid: 363401 new pid: 363459 loc: [1 ] volume: name: "edca71ef-83a6-4f2e-b137-f9be9edb3feb" size: 214748364800 created_time { seconds: 1681060403 nseconds: 513532843 } id: "edca71ef-83a6-4f2e-b137-f9be9edb3feb" parent_id: "6599b64b-9fea-4597-8733-f55097464673" origin_id: "ffd2a616-2deb-4671-b4a5-b8d60c02576f" replica_num: 2 thin_provision: true iops_burst: 0 bps_burst: 0 throttling { } stripe_num: 4 stripe_size: 262144 access_points { cid: 3 }
+   ```
+
+   得看一下在这之前的 1 个小时，为啥没有 migrate。
+
+   grep -n -i "recover" -e "I0703 19:5" zbs-metad.log.20230703-191821.5689 -B 200 | head -n 200
+
+8. 
+
+
+
+
+
 [ZBS-13059](http://jira.smartx.com/browse/ZBS-13059) 恢复数据允许识别原有数据块的冷热属性
 
 [ZBS-25386](http://jira.smartx.com/browse/ZBS-25386) 修复节点数据迁移速度过慢导致access层无法迁移成功的问题
@@ -284,7 +350,7 @@ Status RecoverManager::AddMigrateCmd(pid_t pid, cid_t src, cid_t dst, cid_t repl
 命令使用
 
 ```shell
-# 首次编译，需要进到 Docker 内部执行
+# 首次编译/子模块如 spdk 更新，需要删除 build 目录，进到 Docker 内部执行
 docker run --rm --privileged=true -it -v /home/code/zbs3:/zbs -w /zbs registry.smtx.io/zbs/zbs-buildtime:el7-x86_64
 mkdir build && cd build
 source /opt/rh/devtoolset-7/enable
@@ -311,6 +377,7 @@ git pull
 git submodule sync --recursive
 # 从新 URL 更新子模块
 git submodule update --init --recursive
+git submodule update --init --force --recursive --remote
 
 # zbs-client-py 调试，进入项目根目录
 make docker
@@ -630,6 +697,8 @@ C++ 中 map 嵌套使用，vector 添加一个 vector 中所有元素 https://zh
 protobuf 中 optional/repeated/ 等用法，https://blog.csdn.net/liuxiao723846/article/details/105564742
 
 linux主分区、扩展分区、逻辑分区的区别、磁盘分区、挂载，https://blog.csdn.net/qq_24406903/article/details/118763610
+
+git submodule ，https://git-scm.com/book/zh/v2/Git-%E5%B7%A5%E5%85%B7-%E5%AD%90%E6%A8%A1%E5%9D%97，https://zhuanlan.zhihu.com/p/87053283
 
 
 
