@@ -137,8 +137,8 @@
 
 recover / migrate 独立设置
 
-1. 包含所有 chunk 的一个整体数量限制，recover 是 256，migrate 是 4096
-2. 单 chunk 的数量限制，recover 单独没有限制，migrate 是 200
+1. 包含所有 chunk 的一个整体数量限制，recover 是 256，migrate 是 4096（没有貌似没必要，下发多了也没事，在 chunk 侧做限制）
+2. 单 chunk 的数量限制，recover 单独没有限制，migrate 是 200（这个貌似没必要，因为有 recover cmd 在分发的时候不会分发 migrate 的）
 3. 触发周期限制，recover 是 1min，migrate 中低负载下是 1h，高负载下是 5min
 
 
