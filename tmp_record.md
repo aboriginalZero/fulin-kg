@@ -1,4 +1,4 @@
-要么缩小 op，要么改掉 max_message_id 的语义
+
 
 
 
@@ -101,6 +101,8 @@
 
    recover src 读的热数据要写到 recover dst 上的 cache，冷数据直接写到 recover dst 上的 partition，避免恢复导致的缓存击穿
 
+   需要修改 data channel 中的 message 中 max_message_id 的语义，换成 usercode
+
 2. recover 每台 chunk 上执行的并发度默认 32，根据 recover extent 完成情况向上向下调节（auto mode）
 
    并发度最小应该是 2 4，而不是 1，就 1 个通道的容错率太差了
@@ -123,23 +125,78 @@
 
 区分 recover 还是 recover_migrate
 
-1. 在为容量均衡而做的 migrate  中需要限制被扫描的 pextent 数量吗？
+1. 在为容量均衡而做的 migrate 中需要限制被扫描的 pextent 数量吗？
 2. 什么时候留 gflags::Uint64FromEnv()，什么时候允许通过 rpc 修改
+3. meta_grpc_server.h 需要同步添加新的 API 吗？
 
 
 
-整体设置
+recover / migrate 的行为是每次扫描集群中所有的 pextent 时会为需要 recover/migrate 的 pextent 生成 recover / migrate cmd 暂存到下发队列，然后每次 doscan 线程被唤醒的时候下发 recover / migrate cmd 到 recover lease owner 所在 chunk。
 
-1. doscan 线程的唤醒频率是 4s 一次
-2. 单 chunk 的数量限制，recover / migrate 合在一起是 256
-3. 一次扫描的 pids 限制，recover / migrate 分别是 1024 * 1024
-4. recover / migrate 命令执行超时时间是 18 min
+meta 侧 recover / migrate 整体参数：
 
-recover / migrate 独立设置
+1. 【recover_cmd_timeout_ms】recover / migrate 命令执行超时时间是 18 min；
 
-1. 包含所有 chunk 的一个整体数量限制，recover 是 256，migrate 是 4096（没有貌似没必要，下发多了也没事，在 chunk 侧做限制）
-2. 单 chunk 的数量限制，recover 单独没有限制，migrate 是 200（这个貌似没必要，因为有 recover cmd 在分发的时候不会分发 migrate 的）
-3. 触发周期限制，recover 是 1min，migrate 中低负载下是 1h，高负载下是 5min
+    > 默认值保持不变且仅允许通过配置文件修改。
+
+2. 【recover_trigger_interval_ms】doscan 线程的唤醒频率是 4s 一次；
+
+    > 默认值保持不变且仅允许通过配置文件修改。
+
+3. 【max_recover_scan_extents_per_round】单次扫描的 pextent 限制，recover / migrate 都是 1024 * 1024；
+
+    > 值保持不变且仅允许通过配置文件修改。该值设定取决于内存条件，一个 pextent entry 是 80 bytes，此时限制 recover 扫描的 pextents 占用内存不超过 80MB
+
+4. 【max_recover_cmds_per_chunk】单次下发给每台 chunk 的 recover cmd，recover / migrate 合在一起是 256。
+
+    > 默认值保持不变且允许 rpc 修改。考虑到可以在 chunk 侧通过速度/并发度做限制，此处限制是否可以去掉？
+
+meta 侧 recover / migrate 各自参数：
+
+1. 【scan_for_recover_interval_ms / scan_for_migrate_interval_ms / scan_for_migrate_in_high_load_interval_ms】recover 扫描周期 1min，migrate 扫描周期中低负载下是 1h，高负载下是 5min；
+
+    > 默认值保持不变且仅允许通过配置文件修改。
+
+2. 【max_cmds_for_recover_per_round / max_cmds_for_migrate_per_round】单次扫描生成的 recover cmd 不超过 256，migrate cmd 不超过 4096；
+
+    > 默认值需要调大且允许 rpc 修改，此处限制认为二者可以合并，且可以给一个更大的固定值如 8192，因为这只会影响到命令暂存队列的大小，只需要考虑不占用过多内存即可。
+
+3. 【max_cmds_for_migrate_per_chunk】单次下发给每台 chunk 的 migrate cmd 不超过 200，recover cmd 此处没有限制。
+
+    > 此处限制可以去掉，考虑到一次命令下发的过程中要么只有 recover cmd 要么只有 migrate cmd，max_recover_cmds_per_chunk 已经涵盖该限制。
+
+chunk 侧 recover / migrate 整体参数：
+
+1. 【local_chunk_io_timeout_ms / remote_chunk_io_timeout_ms】recover / migrate 命令一次执行超时时间仅走本地是 8s，走网络+本地是 9s；
+
+    > 默认值保持不变且不允许通过配置文件修改。
+
+2. 【chunk_max_concurrent_recover】recover /migrate 命令并发执行数量是 32；
+
+    > 默认值保持不变，需要因引入静态模式下允许 rpc 修改，智能模式下自适应调节。
+
+3. 【recover_limit / migrate_limit】recover /migrate 命令执行限速，默认上限值取决于硬件能力，2 SSD 默认是 400 MB/s。
+
+    > 默认值是否需要调整？静态模式下允许 rpc 修改且已引入智能模式下自适应调节。
+
+
+
+改成
+
+1. 时间间隔保持不变且允许 rpc 修改（但预留通过配置文件读取的方式）
+    1. doscan 线程的唤醒频率是 4s 一次；
+    2. recover 扫描周期 1min；
+    3. migrate 扫描周期中低负载下是 1h，高负载下是 5min。
+    4. recover / migrate 命令执行超时时间是 18 min
+2. 命令数量限制允许 rpc 修改
+    1. 一次扫描的 pextent 数量不超过 1024 * 1024；
+    2. 一次下发的 recover/migrate cmd 数量限制，单 chunk 不超过 256；
+
+暂存队列的 Recover cmd 数量给一个足够大但不会占用过多内存的值比如 4096，然后不允许修改
+
+
+
+
 
 
 
