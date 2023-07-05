@@ -1,15 +1,21 @@
-1. node3 上没有 meta 服务是正常的吗？4 节点集群中只有 3 个 meta。打快照的行为是在被快照的副本的原地去分配新副本吗？
+要么缩小 op，要么改掉 max_message_id 的语义
 
-2. 7-3 12:04 之前没有在日志中找到 migrate 的标记，fanyang 删除快照后各节点容量回归正常，然后才触发 migrate for localization
 
-3. 快照计划对虚拟机做快照，会有优先分配到虚拟机所在节点的偏好吗？（prefer local）
+
+1. node3 上没有 meta 服务是正常的吗？4 节点集群中只有 3 个 meta。目前支持的 meta 是 3 或 5 个。
+
+2. 打快照的行为是在被快照的副本的原地去分配新副本吗？3
+
+3. 7-3 12:04 之前没有在日志中找到 migrate 的标记，fanyang 删除快照后各节点容量回归正常，然后才触发 migrate for localization
+
+4. 快照计划对虚拟机做快照，会有优先分配到虚拟机所在节点的偏好吗？（prefer local）
    我算了一下他一分钟产生一次的快照大概独占空间是 ～20G，高负载情况下 migrate 是 5 min 现
 
-4. 在 7-4 12 点及之前（fanyang 未删除集群中所有快照），分配的 pid 期望 3 副本，结果只分配到 4 和 2（1 和 3 空间不足），触发 recover，但 recover 的 dst 也会选 1 和 3，还是由于空间不足 recover 失败，猜测此时由于 recover cmd 数量过大导致集群没有触发 migrate。
+5. 在 7-4 12 点及之前（fanyang 未删除集群中所有快照），分配的 pid 期望 3 副本，结果只分配到 4 和 2（1 和 3 空间不足），触发 recover，但 recover 的 dst 也会选 1 和 3，还是由于空间不足 recover 失败，猜测此时由于 recover cmd 数量过大导致集群没有触发 migrate。
 
-5. 从 0703 22:01:03.398327 开始出现副本分配 2 < 预期副本数 3，pid: 363490，在这前后 2 小时里都没有 migrate，
+6. 从 0703 22:01:03.398327 开始出现副本分配 2 < 预期副本数 3，pid: 363490，在这前后 2 小时里都没有 migrate，
 
-6. 实际上，更早的时候出现第一条显示空间不足的日志是 chunk 3 ，时间是 22391:E0703 20:59:24.579273，找 pid: 363459 的日志，
+7. 实际上，更早的时候出现第一条显示空间不足的日志是 chunk 3 ，时间是 22391:E0703 20:59:24.579273，找 pid: 363459 的日志，
 
    grep -n "FAIL TO COW PEXTENT" zbs-metad.log.20230703-191821.5689 -C 100 | head -n 200
 
@@ -47,18 +53,35 @@
    150704:I0703 22:02:15.651685 12378 access_manager.cc:1905] Release owner : pid: 363459 session: 0cdce1ad-b4c3-4412-af9f-90383dd901bc
    ```
 
-7. 第一条显示空间不足的日志是 chunk 3 ，时间是 22391:E0703 20:59:24.579273
+8. tower 上显示是 0703 15:49 开始每分钟一次快照，第一条显示空间不足的日志是 chunk 3 ，时间是 22391:E0703 20:59:24.579273
 
    ```
    22391:E0703 20:59:24.579273 12378 pextent_allocator.cc:49] There is no enough space on chunk 3 to cow pextent.
    22392-I0703 20:59:24.581032 12378 meta_rpc_server.cc:989] [COW PEXTENT]: pid: 363401 new pid: 363459 loc: [1 ] volume: name: "edca71ef-83a6-4f2e-b137-f9be9edb3feb" size: 214748364800 created_time { seconds: 1681060403 nseconds: 513532843 } id: "edca71ef-83a6-4f2e-b137-f9be9edb3feb" parent_id: "6599b64b-9fea-4597-8733-f55097464673" origin_id: "ffd2a616-2deb-4671-b4a5-b8d60c02576f" replica_num: 2 thin_provision: true iops_burst: 0 bps_burst: 0 throttling { } stripe_num: 4 stripe_size: 262144 access_points { cid: 3 }
    ```
 
-   得看一下在这之前的 1 个小时，为啥没有 migrate。
+   这个时刻往前 1 小时，没有任何 migrate
 
    grep -n -i "recover" -e "I0703 19:5" zbs-metad.log.20230703-191821.5689 -B 200 | head -n 200
 
-8. 
+   这个时刻往前 2 小时，0703 18:57:56，有 migrate for localization，下发了 59 条命令，其中大量从 2 读，写到 1，根据 session id 不同，replace 分别是 2 或 3。
+
+   chunk 1 3 满，2 4 特别空
+
+   在 0703 18:57:56 到 20:59:24 之间，chunk2 上没有任何的 recover，
+
+   ```c++
+   // 这是上一次 migrate 的最后一条，行号 223494
+   I0703 18:58:33.277525  5052 recover_handler.cc:1024] [NORMAL RECOVER END] pid: 347167 state: END cur_block: 1024 src_cid: 2 dst_cid: 1 is_migrate: true silence_ms: 0 replace_cid: 3 epoch: 393035 gen: 7
+   ```
+
+   应该看 chunk3 的 chunk 日志
+
+   21:00 开始有 recover 1 -> 2/4 的 Failed to recover epextent，ELeaseExpired
+
+   chunk3 从 0703 14:58:09 开始就没有出现 recover extent start/end 的日志 
+
+9. 
 
 
 
@@ -116,7 +139,7 @@ recover / migrate 独立设置
 
 1. 包含所有 chunk 的一个整体数量限制，recover 是 256，migrate 是 4096
 2. 单 chunk 的数量限制，recover 单独没有限制，migrate 是 200
-3. 触发周期限制，recover 是 1s，migrate 中低负载下是 1h，高负载下是 5min
+3. 触发周期限制，recover 是 1min，migrate 中低负载下是 1h，高负载下是 5min
 
 
 
