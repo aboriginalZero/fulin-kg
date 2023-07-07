@@ -128,6 +128,7 @@
 1. 在为容量均衡而做的 migrate 中需要限制被扫描的 pextent 数量吗？
 2. 什么时候留 gflags::Uint64FromEnv()，什么时候允许通过 rpc 修改
 3. meta_grpc_server.h 需要同步添加新的 API 吗？
+3. 已有的 proto 中的 static recover limit 可以改名吗？会有升级兼容性问题吗？
 
 
 
@@ -149,7 +150,7 @@ meta 侧 recover / migrate 整体参数：
 
 4. 【max_recover_cmds_per_chunk】单次下发给每台 chunk 的 recover cmd，recover / migrate 合在一起是 256。
 
-    > 默认值保持不变且允许 rpc 修改。考虑到可以在 chunk 侧通过速度/并发度做限制，此处限制是否可以去掉？
+    > 默认值保持不变且允许 rpc 修改。考虑到可以在 chunk 侧通过速度/并发度做限制，此处限制是否可以去掉？应该不是，如果过多那么被积压的 recover cmd 的超时时间 18min 可能就不够用了。	
 
 meta 侧 recover / migrate 各自参数：
 
@@ -194,7 +195,7 @@ chunk 侧 recover / migrate 整体参数：
 
 暂存队列的 Recover cmd 数量给一个足够大但不会占用过多内存的值比如 4096，然后不允许修改
 
-
+meta 侧不加以限制的话，一次扫描的时间会很长
 
 
 
