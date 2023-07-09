@@ -433,9 +433,7 @@ Status RecoverManager::AddMigrateCmd(pid_t pid, cid_t src, cid_t dst, cid_t repl
 ```shell
 # 首次编译/子模块如 spdk 更新，需要删除 build 目录，进到 Docker 内部执行
 docker run --rm --privileged=true -it -v /home/code/zbs3:/zbs -w /zbs registry.smtx.io/zbs/zbs-buildtime:el7-x86_64
-mkdir build && cd build
-source /opt/rh/devtoolset-7/enable
-cmake -G Ninja ..
+mkdir build && cd build && source /opt/rh/devtoolset-7/enable && cmake -G Ninja ..
 # 编译时给定参数，比如要同时编译 bench，cmake -DBUILD_BENCHMARKS=ON -G Ninja ..
 ninja zbs_test
 
@@ -773,6 +771,8 @@ gtest系列之事件机制
 
 
 
+C++ 中为减少内存/读多写少的情况，可以用 absl::flat_hash_map 代替 std::unordered_map，https://zhuanlan.zhihu.com/p/614105687
+
 C++ 中 map 嵌套使用，vector 添加一个 vector 中所有元素 https://zhuanlan.zhihu.com/p/121071760
 
 protobuf 中 optional/repeated/ 等用法，https://blog.csdn.net/liuxiao723846/article/details/105564742
@@ -806,6 +806,29 @@ pip 更改镜像源
 
 ```shell
 pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
+```
+
+alias 配置
+
+vim ~/.bashrc
+
+```shell
+alias ga='git add .'
+alias gca='git commit --amend'
+alias gr='git review'
+alias gs='git status'
+alias gsu='git submodule update --init --recursive'
+alias gp='git pull'
+
+zbs_compile() {
+docker run --rm --privileged=true -v /home/code/$1:/zbs -w /zbs registry.smtx.io/zbs/zbs-buildtime:el7-x86_64 sh -c "sh ./script/format.sh && cd build && ninja zbs_test $2"
+}
+alias zc=zbs_compile
+
+zbs_run_test() {
+cd /home/code/$1/build/src && ./zbs_test --gtest_filter="*$2*"
+}
+alias zrt=zbs_run_test
 ```
 
 
