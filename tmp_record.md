@@ -1,92 +1,3 @@
-
-
-
-
-1. node3 上没有 meta 服务是正常的吗？4 节点集群中只有 3 个 meta。目前支持的 meta 是 3 或 5 个。
-
-2. 打快照的行为是在被快照的副本的原地去分配新副本吗？3
-
-3. 7-3 12:04 之前没有在日志中找到 migrate 的标记，fanyang 删除快照后各节点容量回归正常，然后才触发 migrate for localization
-
-4. 快照计划对虚拟机做快照，会有优先分配到虚拟机所在节点的偏好吗？（prefer local）
-   我算了一下他一分钟产生一次的快照大概独占空间是 ～20G，高负载情况下 migrate 是 5 min 现
-
-5. 在 7-4 12 点及之前（fanyang 未删除集群中所有快照），分配的 pid 期望 3 副本，结果只分配到 4 和 2（1 和 3 空间不足），触发 recover，但 recover 的 dst 也会选 1 和 3，还是由于空间不足 recover 失败，猜测此时由于 recover cmd 数量过大导致集群没有触发 migrate。
-
-6. 从 0703 22:01:03.398327 开始出现副本分配 2 < 预期副本数 3，pid: 363490，在这前后 2 小时里都没有 migrate，
-
-7. 实际上，更早的时候出现第一条显示空间不足的日志是 chunk 3 ，时间是 22391:E0703 20:59:24.579273，找 pid: 363459 的日志，
-
-   grep -n "FAIL TO COW PEXTENT" zbs-metad.log.20230703-191821.5689 -C 100 | head -n 200
-
-   grep -n "pid: 363459" zbs-metad.log.20230703-191821.5689 -C 5 | head -n 500
-
-   ```c++
-   22391:E0703 20:59:24.579273 12378 pextent_allocator.cc:49] There is no enough space on chunk 3 to cow pextent.
-   22392-I0703 20:59:24.581032 12378 meta_rpc_server.cc:989] [COW PEXTENT]: pid: 363401 new pid: 363459 loc: [1 ] volume: name: "edca71ef-83a6-4f2e-b137-f9be9edb3feb" size: 214748364800 created_time { seconds: 1681060403 nseconds: 513532843 } id: "edca71ef-83a6-4f2e-b137-f9be9edb3feb" parent_id: "6599b64b-9fea-4597-8733-f55097464673" origin_id: "ffd2a616-2deb-4671-b4a5-b8d60c02576f" replica_num: 2 thin_provision: true iops_burst: 0 bps_burst: 0 throttling { } stripe_num: 4 stripe_size: 262144 access_points { cid: 3 }
-   ```
-
-   这个时间点前后最近的 migrate 是 I0703 18:57:56.005661，但也间隔了 2 小时（migrate 正常 1小时触发一次）
-
-   ```
-   zbs-metad.log.20230702-112658.5689:I0703 18:57:56.005661 12635 recover_manager.cc:1232] Migrate for localization in storage pool: system
-   zbs-metad.log.20230704-120523.5689:I0704 13:04:09.009789 12635 recover_manager.cc:1232] Migrate for localization in storage pool: system
-   ```
-
-   跟踪一下 pid: 363459 的生命历程：
-
-   1. 此时快照，对 pid: 363401 COW 得到  new pid: 363459，期望副本在 [3, 1]，由于 chunk 3 空间不足，只分配到 [1]；
-   2. 过了 40s ，下发 recover cmd 从 1 到 4；
-   3. 离上一次快照 1min，下一个快照就来了，对 pid: 363459 COW 得到 new pid: 363568，期望副本在 [3, 1]，由于 chunk 3 空间不足，只分配到 [1]，此时上面那条 recover cmd 还没完成（不知道做的慢还是根本就没做）；
-   4. 过了 8s，又触发从 1 到 2 的 recover（前一次应该是被取消掉了，recover 并没有完成）；
-   5. 又过了 15s，触发从 chunk 0 到 chunk 2 的副本迁移，这个日志也很奇怪，应该是从 1 到 3？不过 3 都满载了，为啥会替换到 3 ？
-   6. 过 1h，对 pid: 363459 释放 lease owner。
-
-   ```c++
-   22391-E0703 20:59:24.579273 12378 pextent_allocator.cc:49] There is no enough space on chunk 3 to cow pextent.
-   22392:I0703 20:59:24.581032 12378 meta_rpc_server.cc:989] [COW PEXTENT]: pid: 363401 new pid: 363459 loc: [1 ] volume: name: "edca71ef-83a6-4f2e-b137-f9be9edb3feb" size: 214748364800 created_time { seconds: 1681060403 nseconds: 513532843 } id: "edca71ef-83a6-4f2e-b137-f9be9edb3feb" parent_id: "6599b64b-9fea-4597-8733-f55097464673" origin_id: "ffd2a616-2deb-4671-b4a5-b8d60c02576f" replica_num: 2 thin_provision: true iops_burst: 0 bps_burst: 0 throttling { } stripe_num: 4 stripe_size: 262144 access_points { cid: 3 }
-   22397:I0703 20:59:24.595217 12378 meta_rpc_server.cc:2079] [SET PEXTENT EXISTENCE]: [REQUEST]: pid: 363459 origin_pid: 0 epoch: 409375 origin_epoch: 0 generation: 1, [RESPONSE]: ST:OK, , [TIME]: 1359 us.
-   22522:I0703 21:00:04.847577 12635 recover_manager.cc:419] add recover cmd for pid: 363459 src: 1 dst: 4 replace: 0
-   22805:I0703 21:00:56.738984 12378 meta_rpc_server.cc:989] [COW PEXTENT]: pid: 363459 new pid: 363568 loc: [1 ] volume: name: "edca71ef-83a6-4f2e-b137-f9be9edb3feb" size: 214748364800 created_time { seconds: 1681060403 nseconds: 513532843 } id: "edca71ef-83a6-4f2e-b137-f9be9edb3feb" parent_id: "6599b64b-9fea-4597-8733-f55097464673" origin_id: "53a5c9e4-ff85-4b17-89cc-3ba7317f2f85" replica_num: 2 thin_provision: true iops_burst: 0 bps_burst: 0 throttling { } stripe_num: 4 stripe_size: 262144 access_points { cid: 3 }
-   22825:I0703 21:01:04.891676 12635 recover_manager.cc:419] add recover cmd for pid: 363459 src: 1 dst: 2 replace: 0
-   23126:I0703 21:01:19.121897 12378 meta_rpc_server.cc:1989] [REPLACE REPLICA]: [REQUEST]: session: "0cdce1ad-b4c3-4412-af9f-90383dd901bc" pid: 363459 src_chunk: 0 dst_chunk: 2 epoch: 409375 reset_location_to_dst: false reset_generation: 18446744073709551615, [RESPONSE]: ST:OK, pid: 363459 location: 513 expected_replica_num: 2 ever_exist: true origin_pid: 363401 epoch: 409375 origin_epoch: 409317 generation: 1 preferred_cid: 3 thin_provision: true alive_location: 513 allocated_space: 108003328, [TIME]: 1361 us.
-   150704:I0703 22:02:15.651685 12378 access_manager.cc:1905] Release owner : pid: 363459 session: 0cdce1ad-b4c3-4412-af9f-90383dd901bc
-   ```
-
-8. tower 上显示是 0703 15:49 开始每分钟一次快照，第一条显示空间不足的日志是 chunk 3 ，时间是 22391:E0703 20:59:24.579273
-
-   ```
-   22391:E0703 20:59:24.579273 12378 pextent_allocator.cc:49] There is no enough space on chunk 3 to cow pextent.
-   22392-I0703 20:59:24.581032 12378 meta_rpc_server.cc:989] [COW PEXTENT]: pid: 363401 new pid: 363459 loc: [1 ] volume: name: "edca71ef-83a6-4f2e-b137-f9be9edb3feb" size: 214748364800 created_time { seconds: 1681060403 nseconds: 513532843 } id: "edca71ef-83a6-4f2e-b137-f9be9edb3feb" parent_id: "6599b64b-9fea-4597-8733-f55097464673" origin_id: "ffd2a616-2deb-4671-b4a5-b8d60c02576f" replica_num: 2 thin_provision: true iops_burst: 0 bps_burst: 0 throttling { } stripe_num: 4 stripe_size: 262144 access_points { cid: 3 }
-   ```
-
-   这个时刻往前 1 小时，没有任何 migrate
-
-   grep -n -i "recover" -e "I0703 19:5" zbs-metad.log.20230703-191821.5689 -B 200 | head -n 200
-
-   这个时刻往前 2 小时，0703 18:57:56，有 migrate for localization，下发了 59 条命令，其中大量从 2 读，写到 1，根据 session id 不同，replace 分别是 2 或 3。
-
-   chunk 1 3 满，2 4 特别空
-
-   在 0703 18:57:56 到 20:59:24 之间，chunk2 上没有任何的 recover，
-
-   ```c++
-   // 这是上一次 migrate 的最后一条，行号 223494
-   I0703 18:58:33.277525  5052 recover_handler.cc:1024] [NORMAL RECOVER END] pid: 347167 state: END cur_block: 1024 src_cid: 2 dst_cid: 1 is_migrate: true silence_ms: 0 replace_cid: 3 epoch: 393035 gen: 7
-   ```
-
-   应该看 chunk3 的 chunk 日志
-
-   21:00 开始有 recover 1 -> 2/4 的 Failed to recover epextent，ELeaseExpired
-
-   chunk3 从 0703 14:58:09 开始就没有出现 recover extent start/end 的日志 
-
-9. 
-
-
-
-
-
 [ZBS-13059](http://jira.smartx.com/browse/ZBS-13059) 恢复数据允许识别原有数据块的冷热属性
 
 [ZBS-25386](http://jira.smartx.com/browse/ZBS-25386) 修复节点数据迁移速度过慢导致access层无法迁移成功的问题
@@ -125,79 +36,10 @@
 
 区分 recover 还是 recover_migrate
 
-1. 在为容量均衡而做的 migrate 中需要限制被扫描的 pextent 数量吗？
-2. 什么时候留 gflags::Uint64FromEnv()，什么时候允许通过 rpc 修改
-3. meta_grpc_server.h 需要同步添加新的 API 吗？
-3. 已有的 proto 中的 static recover limit 可以改名吗？会有升级兼容性问题吗？
+1. meta_grpc_server.h 需要同步添加新的 API 吗？
+2. 已有的 proto 中的 static recover limit 可以改名吗？会有升级兼容性问题吗？
 
-
-
-recover / migrate 的行为是每次扫描集群中所有的 pextent 时会为需要 recover/migrate 的 pextent 生成 recover / migrate cmd 暂存到下发队列，然后每次 doscan 线程被唤醒的时候下发 recover / migrate cmd 到 recover lease owner 所在 chunk。
-
-meta 侧 recover / migrate 整体参数：
-
-1. 【recover_cmd_timeout_ms】recover / migrate 命令执行超时时间是 18 min；
-
-    > 默认值保持不变且仅允许通过配置文件修改。
-
-2. 【recover_trigger_interval_ms】doscan 线程的唤醒频率是 4s 一次；
-
-    > 默认值保持不变且仅允许通过配置文件修改。
-
-3. 【max_recover_scan_extents_per_round】单次扫描的 pextent 限制，recover / migrate 都是 1024 * 1024；
-
-    > 值保持不变且仅允许通过配置文件修改。该值设定取决于内存条件，一个 pextent entry 是 80 bytes，此时限制 recover 扫描的 pextents 占用内存不超过 80MB
-
-4. 【max_recover_cmds_per_chunk】单次下发给每台 chunk 的 recover cmd，recover / migrate 合在一起是 256。
-
-    > 默认值保持不变且允许 rpc 修改。考虑到可以在 chunk 侧通过速度/并发度做限制，此处限制是否可以去掉？应该不是，如果过多那么被积压的 recover cmd 的超时时间 18min 可能就不够用了。	
-
-meta 侧 recover / migrate 各自参数：
-
-1. 【scan_for_recover_interval_ms / scan_for_migrate_interval_ms / scan_for_migrate_in_high_load_interval_ms】recover 扫描周期 1min，migrate 扫描周期中低负载下是 1h，高负载下是 5min；
-
-    > 默认值保持不变且仅允许通过配置文件修改。
-
-2. 【max_cmds_for_recover_per_round / max_cmds_for_migrate_per_round】单次扫描生成的 recover cmd 不超过 256，migrate cmd 不超过 4096；
-
-    > 默认值需要调大且允许 rpc 修改，此处限制认为二者可以合并，且可以给一个更大的固定值如 8192，因为这只会影响到命令暂存队列的大小，只需要考虑不占用过多内存即可。
-
-3. 【max_cmds_for_migrate_per_chunk】单次下发给每台 chunk 的 migrate cmd 不超过 200，recover cmd 此处没有限制。
-
-    > 此处限制可以去掉，考虑到一次命令下发的过程中要么只有 recover cmd 要么只有 migrate cmd，max_recover_cmds_per_chunk 已经涵盖该限制。
-
-chunk 侧 recover / migrate 整体参数：
-
-1. 【local_chunk_io_timeout_ms / remote_chunk_io_timeout_ms】recover / migrate 命令一次执行超时时间仅走本地是 8s，走网络+本地是 9s；
-
-    > 默认值保持不变且不允许通过配置文件修改。
-
-2. 【chunk_max_concurrent_recover】recover /migrate 命令并发执行数量是 32；
-
-    > 默认值保持不变，需要因引入静态模式下允许 rpc 修改，智能模式下自适应调节。
-
-3. 【recover_limit / migrate_limit】recover /migrate 命令执行限速，默认上限值取决于硬件能力，2 SSD 默认是 400 MB/s。
-
-    > 默认值是否需要调整？静态模式下允许 rpc 修改且已引入智能模式下自适应调节。
-
-
-
-改成
-
-1. 时间间隔保持不变且允许 rpc 修改（但预留通过配置文件读取的方式）
-    1. doscan 线程的唤醒频率是 4s 一次；
-    2. recover 扫描周期 1min；
-    3. migrate 扫描周期中低负载下是 1h，高负载下是 5min。
-    4. recover / migrate 命令执行超时时间是 18 min
-2. 命令数量限制允许 rpc 修改
-    1. 一次扫描的 pextent 数量不超过 1024 * 1024；
-    2. 一次下发的 recover/migrate cmd 数量限制，单 chunk 不超过 256；
-
-暂存队列的 Recover cmd 数量给一个足够大但不会占用过多内存的值比如 4096，然后不允许修改
-
-meta 侧不加以限制的话，一次扫描的时间会很长
-
-
+meta 侧的参数在尽可能让 recover 变快的同时，要考虑自身一次的扫描时间
 
 
 
@@ -299,10 +141,6 @@ RecoverManager::GetDstCandidates() 中关于 allocated_data_space、valid_data_s
 
 
 
-next_repair_scan_pid_ 变量可以去掉，并没有用到
-
-
-
 得到一台 chunk 上指定 storage pool 中的 pid 的 prefer local
 
 ```c++
@@ -331,7 +169,7 @@ ZBS-20993
 
 2. AddRecoverCmd 参考 AddToWaitingRecover() 和 AddSpecialRecoverCmd() 写法。
 
-人工指定后，后续还是有可能会被系统后台程序再次迁移回去，如何应对？
+人工指定后，后续还是有可能会被系统后台程序再次迁移回去，如何应对？如果这个要迁移的卷很大，无法快速完成就被定时线程扫描到，或者卡在超高负载的状态。
 
 ```shell
 zbs-meta migrate create pid <pid> src_chunk <cid> dst_chunk <cid> replaced_chunk <cid>
@@ -426,7 +264,88 @@ Status RecoverManager::AddMigrateCmd(pid_t pid, cid_t src, cid_t dst, cid_t repl
 }
 ```
 
+---
 
+1. node3 上没有 meta 服务是正常的吗？4 节点集群中只有 3 个 meta。目前支持的 meta 是 3 或 5 个。
+
+2. 打快照的行为是在被快照的副本的原地去分配新副本吗？3
+
+3. 7-3 12:04 之前没有在日志中找到 migrate 的标记，fanyang 删除快照后各节点容量回归正常，然后才触发 migrate for localization
+
+4. 快照计划对虚拟机做快照，会有优先分配到虚拟机所在节点的偏好吗？（prefer local）
+    我算了一下他一分钟产生一次的快照大概独占空间是 ～20G，高负载情况下 migrate 是 5 min 现
+
+5. 在 7-4 12 点及之前（fanyang 未删除集群中所有快照），分配的 pid 期望 3 副本，结果只分配到 4 和 2（1 和 3 空间不足），触发 recover，但 recover 的 dst 也会选 1 和 3，还是由于空间不足 recover 失败，猜测此时由于 recover cmd 数量过大导致集群没有触发 migrate。
+
+6. 从 0703 22:01:03.398327 开始出现副本分配 2 < 预期副本数 3，pid: 363490，在这前后 2 小时里都没有 migrate，
+
+7. 实际上，更早的时候出现第一条显示空间不足的日志是 chunk 3 ，时间是 22391:E0703 20:59:24.579273，找 pid: 363459 的日志，
+
+    grep -n "FAIL TO COW PEXTENT" zbs-metad.log.20230703-191821.5689 -C 100 | head -n 200
+
+    grep -n "pid: 363459" zbs-metad.log.20230703-191821.5689 -C 5 | head -n 500
+
+    ```c++
+    22391:E0703 20:59:24.579273 12378 pextent_allocator.cc:49] There is no enough space on chunk 3 to cow pextent.
+    22392-I0703 20:59:24.581032 12378 meta_rpc_server.cc:989] [COW PEXTENT]: pid: 363401 new pid: 363459 loc: [1 ] volume: name: "edca71ef-83a6-4f2e-b137-f9be9edb3feb" size: 214748364800 created_time { seconds: 1681060403 nseconds: 513532843 } id: "edca71ef-83a6-4f2e-b137-f9be9edb3feb" parent_id: "6599b64b-9fea-4597-8733-f55097464673" origin_id: "ffd2a616-2deb-4671-b4a5-b8d60c02576f" replica_num: 2 thin_provision: true iops_burst: 0 bps_burst: 0 throttling { } stripe_num: 4 stripe_size: 262144 access_points { cid: 3 }
+    ```
+
+    这个时间点前后最近的 migrate 是 I0703 18:57:56.005661，但也间隔了 2 小时（migrate 正常 1小时触发一次）
+
+    ```
+    zbs-metad.log.20230702-112658.5689:I0703 18:57:56.005661 12635 recover_manager.cc:1232] Migrate for localization in storage pool: system
+    zbs-metad.log.20230704-120523.5689:I0704 13:04:09.009789 12635 recover_manager.cc:1232] Migrate for localization in storage pool: system
+    ```
+
+    跟踪一下 pid: 363459 的生命历程：
+
+    1. 此时快照，对 pid: 363401 COW 得到  new pid: 363459，期望副本在 [3, 1]，由于 chunk 3 空间不足，只分配到 [1]；
+    2. 过了 40s ，下发 recover cmd 从 1 到 4；
+    3. 离上一次快照 1min，下一个快照就来了，对 pid: 363459 COW 得到 new pid: 363568，期望副本在 [3, 1]，由于 chunk 3 空间不足，只分配到 [1]，此时上面那条 recover cmd 还没完成（不知道做的慢还是根本就没做）；
+    4. 过了 8s，又触发从 1 到 2 的 recover（前一次应该是被取消掉了，recover 并没有完成）；
+    5. 又过了 15s，触发从 chunk 0 到 chunk 2 的副本迁移，这个日志也很奇怪，应该是从 1 到 3？不过 3 都满载了，为啥会替换到 3 ？
+    6. 过 1h，对 pid: 363459 释放 lease owner。
+
+    ```c++
+    22391-E0703 20:59:24.579273 12378 pextent_allocator.cc:49] There is no enough space on chunk 3 to cow pextent.
+    22392:I0703 20:59:24.581032 12378 meta_rpc_server.cc:989] [COW PEXTENT]: pid: 363401 new pid: 363459 loc: [1 ] volume: name: "edca71ef-83a6-4f2e-b137-f9be9edb3feb" size: 214748364800 created_time { seconds: 1681060403 nseconds: 513532843 } id: "edca71ef-83a6-4f2e-b137-f9be9edb3feb" parent_id: "6599b64b-9fea-4597-8733-f55097464673" origin_id: "ffd2a616-2deb-4671-b4a5-b8d60c02576f" replica_num: 2 thin_provision: true iops_burst: 0 bps_burst: 0 throttling { } stripe_num: 4 stripe_size: 262144 access_points { cid: 3 }
+    22397:I0703 20:59:24.595217 12378 meta_rpc_server.cc:2079] [SET PEXTENT EXISTENCE]: [REQUEST]: pid: 363459 origin_pid: 0 epoch: 409375 origin_epoch: 0 generation: 1, [RESPONSE]: ST:OK, , [TIME]: 1359 us.
+    22522:I0703 21:00:04.847577 12635 recover_manager.cc:419] add recover cmd for pid: 363459 src: 1 dst: 4 replace: 0
+    22805:I0703 21:00:56.738984 12378 meta_rpc_server.cc:989] [COW PEXTENT]: pid: 363459 new pid: 363568 loc: [1 ] volume: name: "edca71ef-83a6-4f2e-b137-f9be9edb3feb" size: 214748364800 created_time { seconds: 1681060403 nseconds: 513532843 } id: "edca71ef-83a6-4f2e-b137-f9be9edb3feb" parent_id: "6599b64b-9fea-4597-8733-f55097464673" origin_id: "53a5c9e4-ff85-4b17-89cc-3ba7317f2f85" replica_num: 2 thin_provision: true iops_burst: 0 bps_burst: 0 throttling { } stripe_num: 4 stripe_size: 262144 access_points { cid: 3 }
+    22825:I0703 21:01:04.891676 12635 recover_manager.cc:419] add recover cmd for pid: 363459 src: 1 dst: 2 replace: 0
+    23126:I0703 21:01:19.121897 12378 meta_rpc_server.cc:1989] [REPLACE REPLICA]: [REQUEST]: session: "0cdce1ad-b4c3-4412-af9f-90383dd901bc" pid: 363459 src_chunk: 0 dst_chunk: 2 epoch: 409375 reset_location_to_dst: false reset_generation: 18446744073709551615, [RESPONSE]: ST:OK, pid: 363459 location: 513 expected_replica_num: 2 ever_exist: true origin_pid: 363401 epoch: 409375 origin_epoch: 409317 generation: 1 preferred_cid: 3 thin_provision: true alive_location: 513 allocated_space: 108003328, [TIME]: 1361 us.
+    150704:I0703 22:02:15.651685 12378 access_manager.cc:1905] Release owner : pid: 363459 session: 0cdce1ad-b4c3-4412-af9f-90383dd901bc
+    ```
+
+8. tower 上显示是 0703 15:49 开始每分钟一次快照，第一条显示空间不足的日志是 chunk 3 ，时间是 22391:E0703 20:59:24.579273
+
+    ```
+    22391:E0703 20:59:24.579273 12378 pextent_allocator.cc:49] There is no enough space on chunk 3 to cow pextent.
+    22392-I0703 20:59:24.581032 12378 meta_rpc_server.cc:989] [COW PEXTENT]: pid: 363401 new pid: 363459 loc: [1 ] volume: name: "edca71ef-83a6-4f2e-b137-f9be9edb3feb" size: 214748364800 created_time { seconds: 1681060403 nseconds: 513532843 } id: "edca71ef-83a6-4f2e-b137-f9be9edb3feb" parent_id: "6599b64b-9fea-4597-8733-f55097464673" origin_id: "ffd2a616-2deb-4671-b4a5-b8d60c02576f" replica_num: 2 thin_provision: true iops_burst: 0 bps_burst: 0 throttling { } stripe_num: 4 stripe_size: 262144 access_points { cid: 3 }
+    ```
+
+    这个时刻往前 1 小时，没有任何 migrate
+
+    grep -n -i "recover" -e "I0703 19:5" zbs-metad.log.20230703-191821.5689 -B 200 | head -n 200
+
+    这个时刻往前 2 小时，0703 18:57:56，有 migrate for localization，下发了 59 条命令，其中大量从 2 读，写到 1，根据 session id 不同，replace 分别是 2 或 3。
+
+    chunk 1 3 满，2 4 特别空
+
+    在 0703 18:57:56 到 20:59:24 之间，chunk2 上没有任何的 recover，
+
+    ```c++
+    // 这是上一次 migrate 的最后一条，行号 223494
+    I0703 18:58:33.277525  5052 recover_handler.cc:1024] [NORMAL RECOVER END] pid: 347167 state: END cur_block: 1024 src_cid: 2 dst_cid: 1 is_migrate: true silence_ms: 0 replace_cid: 3 epoch: 393035 gen: 7
+    ```
+
+    应该看 chunk3 的 chunk 日志
+
+    21:00 开始有 recover 1 -> 2/4 的 Failed to recover epextent，ELeaseExpired
+
+    chunk3 从 0703 14:58:09 开始就没有出现 recover extent start/end 的日志 
+
+---
 
 命令使用
 
@@ -596,11 +515,7 @@ NFS/iSCSI/nvmf -> ZBS Client -> access io handler -> generation syncor -> recove
 1. ZBS 中的一个 extent，读的同时不允许写？为啥不用多版本机制来管理（块存储覆盖写的原因？还是块存储没必要提供）
 2. 代码中 [(zbs.labels).as_str = true] 的意思，slack 中 qiuping 提过，
 3. gtest 如何开启 VLOG DLOG 部分的日志
-4. meta in zbs 中 Volume 部分 origin_id 中示例继承树怎么看？
-5. metaDB 中的 Vtable 表存储 Volume -> Extent 的关联关系
-6. 对着 log 梳理一下 zbs 架构，角色在什么位置，哪些要持久化到 metaDB，关键数据结构的类型
-7. CreateSession 这个过程 SessionMaster 做什么了
-7. 生产代码应该少的出现断言，避免引起不必要的 coredump
+7. CreateSession 这个过程 SessionMaster 做什么
 
 zbs cli 如何快速查看集群负载情况？用 zbs-meta chunk list 看每个节点的负载然后自己手动算
 
@@ -813,7 +728,11 @@ alias 配置
 vim ~/.bashrc
 
 ```shell
+alias gd='git diff'
+alias gb='git branch'
+alias gl='git log'
 alias ga='git add .'
+alias gc='git checkout'
 alias gca='git commit --amend'
 alias gr='git review'
 alias gs='git status'
