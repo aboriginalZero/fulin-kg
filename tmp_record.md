@@ -18,7 +18,9 @@
 
    并发度最小应该是 2 4，而不是 1，就 1 个通道的容错率太差了
 
-   recover extent 完成情况应该是本地的，从 lsm 侧获取到信息
+   recover extent 完成情况应该是本地的，从 lsm 侧获取到信息。
+
+   这里权衡 Chunk 的负载指标可能采用的有：1）Chunk LSM 是否 Busy，即 LSM 的 IsLSMBusy，根据当前 Journal 可用数量来判别。2）Chunk Node 的各项性能指标，包括 cpu/memory/disk/network，见 node_monitor，但是现在的实现貌似只有全局的指标，例如 cpu 是所有的核心 summary，disk 不好区分是哪个盘需要做读写。不大好设置阈值。3）根据 Recover IO 与 正常 IO 之间的比例来判定，
 
 3. recover cmd slot 默认 128，根据 extent 的稀疏情况以及 recover extent 的完成情况向上向下调节（auto mode）
 
@@ -39,7 +41,7 @@
 1. meta_grpc_server.h 需要同步添加新的 API 吗？
 2. 已有的 proto 中的 static recover limit 可以改名吗？会有升级兼容性问题吗？
 
-meta 侧的参数在尽可能让 recover 变快的同时，要考虑自身一次的扫描时间
+meta 侧的参数在尽可能让 recover 变快的同时，要考虑自身一次的扫描时间，若扫描周期过长，无法立即触发数据的恢复和迁移
 
 
 
