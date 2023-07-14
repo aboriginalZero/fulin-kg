@@ -1,3 +1,7 @@
+http://meta/leader_mgt_ip:9090 账号 prometheus密码 HC!r0cks 
+
+
+
 [ZBS-13059](http://jira.smartx.com/browse/ZBS-13059) 恢复数据允许识别原有数据块的冷热属性
 
 [ZBS-25386](http://jira.smartx.com/browse/ZBS-25386) 修复节点数据迁移速度过慢导致access层无法迁移成功的问题
