@@ -1,3 +1,87 @@
+
+
+写 Volume
+
+1. ALLOC PEXTENT，分配 pid 和预留对应的空间，此时也指明了副本位置；
+2. SYNC GENERATION START，写操作都需要触发 Sync Generation 用以保证数据一致性；
+3. SYNC GENERATION SUCCESS
+4. SET PEXTENT EXISTENCE ，第一次 IO 成功 Access 会用这个接口上报 Extent 存活。
+
+创建快照
+
+1. REVOKE LEASE
+2. CREATE SNAPSHOT
+
+写被快照的 Volume
+
+1. COW PEXTENT，此时已经指明了根据被快照的 pextent 分配的 new pid；
+2. SYNC GENERATION START，对 new pid 做 sync gen；
+3. ALLOC EXTENT，给 new pid 分配 pextent；
+4. COW PARENT EXTENT SUCCESS，此时指明其 parant_id 为 pid
+5. COW EXTENT，
+6. COW PARENT EXTENT SUCCESS，没懂 lsm 这边为啥会执行两遍，inode_id 是 256 KB 为粒度？
+7. COW EXTENT，
+8. SYNC GENERATION SUCCESS
+9. SET PEXTENT EXISTENCE
+
+再次创建快照
+
+1. REVOKE LEASE，meta 通过心跳主动下发给所有 chunk，会指明 vtable id，各个 chunk 上的 libmeta 据此清理 cache lease，在这个期间，触发了 migrate，
+2. CREATE SNAPSHOT，
+
+migrate 的流程
+
+1. Migrate for xxx，指明 migrate 触发原因；
+2. Enqueue recover cmd for session : xxx，可以根据 xxx 往回找日志，可以在 ACCESS SESSION INITIALIZE 的地方得到 cid；
+3. add recover cmd for pid: 8 src: 4 dst: 5 replace: 1 owner: 4，指明 recover src dst replace owner
+4. RECOVER，pid: 8 lease { owner { uuid: "f147d05a-bf65-4efd-955b-e562ec7782be" ip: "127.0.0.1" num_ip: 16777343 port: 10451 cid: 4 secondary_data_ip: "127.0.0.1" zone: "default" scvm_mode_host_data_ip: "" alive_sec: 4 machine_uuid: "test_machine_3" } pid: 8 location: 66562 origin_pid: 4 epoch: 12 origin_epoch: 8 ever_exist: true meta_generation: 1 expected_replica_num: 3 thin_provision: true chunks { id: 2 data_ip: 16777343 data_port: 10351 rpc_ip: 16777343 rpc_port: 10350 zone_id: "default" } chunks { id: 4 data_ip: 16777343 data_port: 10451 rpc_ip: 16777343 rpc_port: 10450 zone_id: "default" } chunks { id: 1 data_ip: 16777343 data_port: 10301 rpc_ip: 16777343 rpc_port: 10300 zone_id: "default" } } dst_chunk: 5 replace_chunk: 1 src_chunk: 4 is_migrate: true epoch: 12 active_location: 66562 start_ms: 1161051811
+5. Get recover notification: pid: 8
+6. RECOVER，Setup for pid: 8
+7. SYNC GENERATION START，
+8. FAIL TO SYNC GENERATION FROM，cid: 1 pid: 8 st: EShutDown
+
+
+
+pid 1 : 5 1 2
+
+pid 2 : 1 3 4
+
+pid 3 : 3 2 5
+
+pid 4 : 4 2 1
+
+pid 5 : 5 1 2
+
+pid 6 : 1 3 4
+
+pid 7 : 3 2 5
+
+pid 8 : 4 2 1
+
+触发 3 条 migrate cmd，说是按照 localization 的策略，这个地方也很奇怪。
+
+pid: 5 src: 5 dst: 3 replace: 2 owner: 5
+
+pid: 7 src: 3 dst: 4 replace: 5 owner: 3
+
+pid: 8 src: 4 dst: 5 replace: 1 owner: 4
+
+
+
+vtable 看起来好像也是从 ptable 中复制来的？MetaRpcServer::GetVTable
+
+Vtable 的内容就是若干个 VExtent，里面只有 3 个字段，vextent_id，location，alive_location，第一个字段是 volume 的 offset 与 pextent 的对应关系，后两个字段就是对应 pextent 的 location 和 alive_location，
+
+快照会将 VTable 复制一份
+
+我们的 COW PEXTENT 的触发时机是 GetVExtentLease rpc，如果 chunk 那里 lease 没有 expire，也就不会调用 GetVExtentLease，
+
+COW 是先 revoke，然后打快照，保证了快照后，extent 无法写入的语意，如果不 revoke lease，快照是可写的
+
+清理 cache lease 的方式有 3 种，一个是通过 session id，一个是通过 vtable id，一个是 pid，详见 Meta::ClearCachedLease
+
+
+
 http://meta/leader_mgt_ip:9090 账号 prometheus密码 HC!r0cks 
 
 
