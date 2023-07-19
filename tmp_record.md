@@ -474,7 +474,7 @@ docker run -it -v $PWD:/zbs-client-py  zbs-client-py-builder:latest
 source scripts/init_build_env.sh
 # 跑单测
 ./scripts/run-test.sh
-# 安装整个项目，就能在容器里使用 zbs 命令
+# 安装整个项目，就能在容器里使用 zbs 命令，可以实时改动代码马上执行验证
 pip install -e .
 # 指定自己嵌套集群的 meta leader ip / chunk ip，用 zbs-tool service list 查看
 zbs-meta --meta_ip <manager_ip> migrate get_recover_info
