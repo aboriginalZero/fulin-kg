@@ -1,5 +1,3 @@
-
-
 写 Volume
 
 1. ALLOC PEXTENT，分配 pid 和预留对应的空间，此时也指明了副本位置；
