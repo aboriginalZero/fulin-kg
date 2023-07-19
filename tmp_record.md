@@ -469,10 +469,11 @@ git submodule update --init --force --recursive --remote
 
 # zbs-client-py 调试，进入项目根目录
 make docker
-dokcer run -it -v $PWD:/zbs-client-py  zbs-client-py-builder:latest
-source scripts/init_build_env.sh
-# 编译项目，生成 proto 文件
+# 编译项目，生成 proto 文件，如果报错有重复的文件，及时删除
 make build
+# 进入容器
+docker run -it -v $PWD:/zbs-client-py  zbs-client-py-builder:latest
+source scripts/init_build_env.sh
 # 跑单测
 ./scripts/run-test.sh
 # 安装整个项目，就能在容器里使用 zbs 命令
