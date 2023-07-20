@@ -82,6 +82,8 @@ COW 是先 revoke，然后打快照，保证了快照后，extent 无法写入�
 
 http://meta/leader_mgt_ip:9090 账号 prometheus密码 HC!r0cks 
 
+记录一下 chunkspaceinfo 上几个字段的意思，参考跟 wangsai yutian 的聊天
+
 
 
 [ZBS-13059](http://jira.smartx.com/browse/ZBS-13059) 恢复数据允许识别原有数据块的冷热属性
@@ -157,24 +159,6 @@ chunk recover 执行的慢可能原因：慢盘、缓存击穿、normal instead 
 
 
 
-chunk 侧有慢盘标记，早在网络亚健康之前就有了，副本分配策略会考虑节点容量，这个容量是有效数据空间比例，看的是比例，慢盘不算有效数据空间，如果有慢盘，这个值会比较低，所以这个 chunk 被选中的优先级会低一些。
-
-[磁盘异常处理  II](https://docs.google.com/document/d/1NdsdRCPmNciLC8Vj70HEImQKRxLAPIVEzvtTbKqIkZI/edit)，在平均延迟 >= 2s 时，TUNA 将磁盘记录为慢盘 II ，并向本地 Chunk 提示慢盘进入隔离状态。LSM 2 将响应磁盘隔离请求，隔离磁盘：
-
-1. 对于进入隔离状态的磁盘，所有的普通 IO 请求将被拒绝，关键 IO 需要被接受；
-2. 隔离的磁盘上关联的 Extent 都将被标记为异常状态以快速让 Meta 触发数据恢复 （需要确认是否可以标记所有有部分间接 Block 在磁盘上的 Extent，如果实现代价较大，可以不标记这些 Extent）；
-3. 隔离的磁盘不再会被分配新的 Extent，并且 GC 命令可以正常的清理系统中对隔离磁盘的数据状态；特别的，强制 IO 触发的 LSM 内部数据分配，在没有健康磁盘可用的情况下，要允许分配至隔离中的磁盘（比如处理 COW，COW 需要的副本空间只会在本地）；
-4. 在隔离的磁盘上不再具备数据后，隔离磁盘将自动从 Chunk 中移除；
-5. 隔离磁盘的空间将不再被标记为有效空间，需要在向 Meta 上报的有效空间容量中扣减；
-
-隔离状态的磁盘与直接标记为慢盘 I & 坏盘的标记不同，在必要时依然需要处理 IO 请求。对于慢盘 I & 坏盘 & 磁盘消失，可以认为 Chunk 不具备读取数据的能力，在当前阶段只能直接放弃该副本。但是对于慢盘 II，数据是还可以被访问的。
-
-理论上的最优效果是，保留该副本，且外部 IO 行为几乎等同于该磁盘行为。理论上，通过重置 HBA 卡、重启节点的手段来恢复该磁盘，很大几率地，磁盘能重新恢复正常响应，但需要引入较为复杂且不可控的恢复手段。但是在作为最后一个副本时，提供 IO 能力有可能避免用户业务立即中断。因为 LSM 本身并不具备识别副本是否最后一个副本的能力，因此数据副本在 LSM 2 中隔离后需要被标记为异常，由 Access （知晓副本状态）提供 IO 标记，要求 LSM 响应此类 IO。
-
-即当慢盘 II / 健康盘上都有同一个 pid 副本且所有的副本都写失败，才会去写慢盘 II，对应代码 GenerationSyncor::MarkPidIOHard()
-
-
-
 缓存击穿后，大量的恢复任务争抢 IO，恢复任务容易超时被取消，导致实际恢复速率不足 10MB/s。副本恢复的并发度默认是固定值 32，应该作为一个自适应缓存命中率的值
 
 日志中看到的下发 recover 命令和 EXTENT GC CMD ，两者其实并不是我们想象的相互影响，导致谁也无法推进下去，即不是因为 recover 任务在进行时收到了 EXTENT GC CMD，导致 recover 被中止。这里实际发生的情况是：
@@ -196,8 +180,6 @@ chunk 侧有慢盘标记，早在网络亚健康之前就有了，副本分配�
 01:53 recover 命令超时，收到了 gc 命令
 
 这里问题的根源在于一个 recover 命令未能在 17 分钟内完成。
-
-
 
 ---
 
@@ -435,50 +417,7 @@ Status RecoverManager::AddMigrateCmd(pid_t pid, cid_t src, cid_t dst, cid_t repl
 
 ---
 
-命令使用
 
-```shell
-# 首次编译/子模块如 spdk 更新，需要删除 build 目录，进到 Docker 内部执行
-docker run --rm --privileged=true -it -v /home/code/zbs3:/zbs -w /zbs registry.smtx.io/zbs/zbs-buildtime:el7-x86_64
-mkdir build && cd build && source /opt/rh/devtoolset-7/enable && cmake -G Ninja ..
-# 编译时给定参数，比如要同时编译 bench，cmake -DBUILD_BENCHMARKS=ON -G Ninja ..
-ninja zbs_test
-
-# 屏幕中会提示出错处的日志信息，借助 newci 可以避免在本地配置 nvmf/rdma 环境跑单测
-# 但是要配好 nvmf/rdma 的相关依赖包/服务
-cd /home/code && ./newci-x86_64 -builddir zbs/build/ -p 16 -action "/run 200 FunctionalTest.MarkVolumeAllocEven"
-
-# 运行后的测试日志默认保存在 /var/log/zbs/zbs_test.xxx 中 
-cd /home/code/zbs/build/src && ./zbs_test --gtest_filter="*FunctionalTest.WriteResize*"
-
-# 显示指定 main 分支
-git review main
-
-# 非首次编译，自动修改格式后再编译
-docker run --rm --privileged=true -v /home/code/zbs:/zbs -w /zbs registry.smtx.io/zbs/zbs-buildtime:el7-x86_64 sh -c 'sh ./script/format.sh && cd build && ninja zbs_test'
-
-# 在主分支上
-git pull
-# 将新的 URL 复制到本地配置中
-git submodule sync --recursive
-# 从新 URL 更新子模块
-git submodule update --init --recursive
-git submodule update --init --force --recursive --remote
-
-# zbs-client-py 调试，进入项目根目录
-make docker
-# 编译项目，生成 proto 文件，如果报错有重复的文件，及时删除
-make build
-# 进入容器
-docker run -it -v $PWD:/zbs-client-py  zbs-client-py-builder:latest
-source scripts/init_build_env.sh
-# 跑单测
-./scripts/run-test.sh
-# 安装整个项目，就能在容器里使用 zbs 命令，可以实时改动代码马上执行验证
-pip install -e .
-# 指定自己嵌套集群的 meta leader ip / chunk ip，用 zbs-tool service list 查看
-zbs-meta --meta_ip <manager_ip> migrate get_recover_info
-```
 
 集群内部扫描副本状态，副本迁移相关代码
 
@@ -666,6 +605,26 @@ ZBS RPM 和 SMTX ZBS/SMTX OS/IOMesh 等不同产品的产品版本号从 5.0.0 �
 
 
 
+
+
+chunk 侧有慢盘标记，早在网络亚健康之前就有了，副本分配策略会考虑节点容量，这个容量是有效数据空间比例，看的是比例，慢盘不算有效数据空间，如果有慢盘，这个值会比较低，所以这个 chunk 被选中的优先级会低一些。
+
+[磁盘异常处理  II](https://docs.google.com/document/d/1NdsdRCPmNciLC8Vj70HEImQKRxLAPIVEzvtTbKqIkZI/edit)，在平均延迟 >= 2s 时，TUNA 将磁盘记录为慢盘 II ，并向本地 Chunk 提示慢盘进入隔离状态。LSM 2 将响应磁盘隔离请求，隔离磁盘：
+
+1. 对于进入隔离状态的磁盘，所有的普通 IO 请求将被拒绝，关键 IO 需要被接受；
+2. 隔离的磁盘上关联的 Extent 都将被标记为异常状态以快速让 Meta 触发数据恢复 （需要确认是否可以标记所有有部分间接 Block 在磁盘上的 Extent，如果实现代价较大，可以不标记这些 Extent）；
+3. 隔离的磁盘不再会被分配新的 Extent，并且 GC 命令可以正常的清理系统中对隔离磁盘的数据状态；特别的，强制 IO 触发的 LSM 内部数据分配，在没有健康磁盘可用的情况下，要允许分配至隔离中的磁盘（比如处理 COW，COW 需要的副本空间只会在本地）；
+4. 在隔离的磁盘上不再具备数据后，隔离磁盘将自动从 Chunk 中移除；
+5. 隔离磁盘的空间将不再被标记为有效空间，需要在向 Meta 上报的有效空间容量中扣减；
+
+隔离状态的磁盘与直接标记为慢盘 I & 坏盘的标记不同，在必要时依然需要处理 IO 请求。对于慢盘 I & 坏盘 & 磁盘消失，可以认为 Chunk 不具备读取数据的能力，在当前阶段只能直接放弃该副本。但是对于慢盘 II，数据是还可以被访问的。
+
+理论上的最优效果是，保留该副本，且外部 IO 行为几乎等同于该磁盘行为。理论上，通过重置 HBA 卡、重启节点的手段来恢复该磁盘，很大几率地，磁盘能重新恢复正常响应，但需要引入较为复杂且不可控的恢复手段。但是在作为最后一个副本时，提供 IO 能力有可能避免用户业务立即中断。因为 LSM 本身并不具备识别副本是否最后一个副本的能力，因此数据副本在 LSM 2 中隔离后需要被标记为异常，由 Access （知晓副本状态）提供 IO 标记，要求 LSM 响应此类 IO。
+
+即当慢盘 II / 健康盘上都有同一个 pid 副本且所有的副本都写失败，才会去写慢盘 II，对应代码 GenerationSyncor::MarkPidIOHard()
+
+
+
 Access 持有的 Lease 包括三种类型：
 
 1. Session Lease，代表了 Session 的存活状态。由 Keepalive 过程维系，Lease 到期之后 Session 进入异常状态，Access 不再提供 IO 服务。Lease 在心跳过程中会不断续期。只要心跳正常，Lease 就始终有效；
@@ -811,33 +770,4 @@ pip 更改镜像源
 ```shell
 pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
 ```
-
-alias 配置
-
-vim ~/.bashrc
-
-```shell
-alias gd='git diff'
-alias gb='git branch'
-alias gl='git log'
-alias ga='git add .'
-alias gc='git checkout'
-alias gca='git commit --amend'
-alias gr='git review'
-alias gs='git status'
-alias gsu='git submodule update --init --recursive'
-alias gp='git pull'
-
-zbs_compile() {
-docker run --rm --privileged=true -v /home/code/$1:/zbs -w /zbs registry.smtx.io/zbs/zbs-buildtime:el7-x86_64 sh -c "sh ./script/format.sh && cd build && ninja zbs_test $2"
-}
-alias zc=zbs_compile
-
-zbs_run_test() {
-cd /home/code/$1/build/src && ./zbs_test --gtest_filter="*$2*"
-}
-alias zrt=zbs_run_test
-```
-
-
 

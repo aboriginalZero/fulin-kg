@@ -1,5 +1,96 @@
 ### ZBS 常用 CLI
 
+命令使用
+
+```shell
+# 首次编译/子模块如 spdk 更新，需要删除 build 目录，进到 Docker 内部执行
+docker run --rm --privileged=true -it -v /home/code/zbs3:/zbs -w /zbs registry.smtx.io/zbs/zbs-buildtime:el7-x86_64
+mkdir build && cd build && source /opt/rh/devtoolset-7/enable && cmake -G Ninja ..
+# 编译时给定参数，比如要同时编译 bench，cmake -DBUILD_BENCHMARKS=ON -G Ninja ..
+ninja zbs_test
+
+# 屏幕中会提示出错处的日志信息，借助 newci 可以避免在本地配置 nvmf/rdma 环境跑单测
+# 但是要配好 nvmf/rdma 的相关依赖包/服务
+cd /home/code && ./newci-x86_64 -builddir zbs/build/ -p 16 -action "/run 200 FunctionalTest.MarkVolumeAllocEven"
+
+# 运行后的测试日志默认保存在 /var/log/zbs/zbs_test.xxx 中 
+cd /home/code/zbs/build/src && ./zbs_test --gtest_filter="*FunctionalTest.WriteResize*"
+
+# 显示指定 main 分支
+git review main
+
+# 非首次编译，自动修改格式后再编译
+docker run --rm --privileged=true -v /home/code/zbs:/zbs -w /zbs registry.smtx.io/zbs/zbs-buildtime:el7-x86_64 sh -c 'sh ./script/format.sh && cd build && ninja zbs_test'
+
+# 在主分支上
+git pull
+# 将新的 URL 复制到本地配置中
+git submodule sync --recursive
+# 从新 URL 更新子模块
+git submodule update --init --recursive
+git submodule update --init --force --recursive --remote
+
+# pyzbs 即 zbs-rest-server 调试，
+```
+
+zbs-client-py 调试方法
+
+```shell
+# make 命令都是在项目根目录执行
+
+# 编译项目，生成 proto 文件，如果报错有重复的文件，及时删除
+make build
+
+# 在 ./dist/ 目录下生成的 zbs_client_py_xxx.whl 文件，可以 scp 到测试集群并通过以下命令替换
+/usr/local/venv/zbs-client-py/bin/pip install /tmp/zbs_client_py-xxx.whl
+
+# 另一种方式是进入配套的容器，在这里面跑单测和测试嵌套集群的效果
+make docker
+docker run -it -v $PWD:/zbs-client-py  zbs-client-py-builder:latest
+source scripts/init_build_env.sh
+# 跑单测
+./scripts/run-test.sh
+# 安装整个项目，就能在容器里使用 zbs 命令，可以实时改动代码马上执行验证
+pip install -e .
+# 指定自己嵌套集群的 meta leader ip，存储 IP 或管理 IP 都可以
+# 如果 zbs-chunk 的命令，填的 chunk ip 如果下线，请求就会失败
+zbs-meta --meta_ip <manager_ip> migrate get_recover_info
+```
+
+pyzbs 原来是一个 monorepo，里面包含了很多模块，elf，network，tuna，deploy，他们之间的依赖关系非常的重，在 py2 -> py3 的升级过程中，将各个模块独立了 venv，现在 pyzbs 里面只有 zbs-rest-server，专门负责 zbs 相关的 http 接口，tuna 是 ops 相关的模块，里面有所有的硬件，部署，配置变更，集群变更等 API，有自己的 web server，早期整个 pyzbs 只有一个 web server，但是耦合太严重了，各个组件升级完全没办法独立运维。
+
+pyzbs 即 zbs-rest-server 调试方法
+
+目前 python3 所有 venv 环境都放在 /usr/local/venv/ 目录下，包含 ansible、elf、job-center、pyzbs、tuna、zbs-client-py，每个 venv 包含自己的 bin、lib 等子目录。
+
+```shell
+# 在 README.md 中有很清晰的使用说明
+# make 命令都是在项目根目录执行
+
+# 执行代码静态检查，输出格式错误，并自动修复代码格式问题
+make lint/fix 
+
+# 生成 wheel 文件，输出路径在 .build/dist/wheel/tuna_xxx.whl 
+# wheel 包与 RPM 的区别在于，wheel 只更新了服务代码及其依赖，没有更新系统配置等。
+make build/wheel APPS=tuna
+
+# 添加注释输出到 /var/log/zbs/tuna-rest.INFO
+logging.info() 
+
+# pyzbs 依赖 zbs-client-py，zbs-client-py 依赖 zbs-proto，要保证版本跟 zbs 用的一致
+# 更新 pyzbs 依赖的 zbs-client-py 版本，修改 zbs-client-py 字段的值
+vim venv/tuna/pyproject.toml
+
+# 在 tuna 的 venv 同时更新 zbs-client-py wheel 和 tuna wheel
+/usr/local/venv/tuna/bin/pip install /tmp/zbs_client_py-xxx.whl
+/usr/local/venv/tuna/bin/pip install /tmp/tuna-xxx.whl
+
+# 每次改动后需要重启对应的 rest-server
+systemctl restart tuna-rest-server zbs-rest-server
+
+# 如果要批量测试，需要借助 postman 批量访问 restful api，记得填 zbs token 和 smartx token
+```
+
 观察 ELF 集群厚制备副本分配情况
 
 ```shell
