@@ -124,7 +124,7 @@ http://meta/leader_mgt_ip:9090 账号 prometheus密码 HC!r0cks
 
    recover src 读的热数据要写到 recover dst 上的 cache，冷数据直接写到 recover dst 上的 partition，避免恢复导致的缓存击穿
 
-   需要修改 data channel 中的 message 中 max_message_id 的语义，换成 usercode
+   需要修改 data channel 中的 message 中 max_message_id 的语义，换成 usercode，然后就可以带上返回的数据是否冷热的 flag
 
    参考 patch ZBS-21288
 
@@ -147,6 +147,10 @@ http://meta/leader_mgt_ip:9090 账号 prometheus密码 HC!r0cks
    recover cmd slot 是在 recover manager 上的参数，可以立即生效。max_recover_cmds_per_chunk
 
    recover 并发度跟限速一样，跟随心跳下发，所以不保证立即生效。
+   
+   用一个 metadb 放下所有相关的参数
+   
+   目前的写法好像都是先更新内存再更新 metaDB，需要调整顺序吗？
 
 
 
@@ -567,7 +571,7 @@ NFS/iSCSI/nvmf -> ZBS Client -> access io handler -> generation syncor -> recove
 1. FOREACH_SAFE 和 FOREACH 的区别？怎么体现 safe 了
 2. access handler 中为啥都以事件回调的形式来注册 Session Handler 的相关接口
 1. ZBS 中的一个 extent，读的同时不允许写？为啥不用多版本机制来管理（块存储覆盖写的原因？还是块存储没必要提供）
-2. 代码中 [(zbs.labels).as_str = true] 的意思，slack 中 qiuping 提过，
+2. 代码中 [(zbs.labels).as_str = true] 的意思，标记一个可以被安全转换为str 的 bytes field，对于之后向 zbs-proto 提交的新字段，除了明确需要使用 bytes类型存放的字段，其他字符串类型都建议直接使用 “string” 关键字标记，减少不必要的 bytes 类型的使用。引入这个功能的原因是 python2 中 string 为 bytes 的 alias, 但 python3 中 string 和 bytes 则完全不同。 zbs-client-py 的下游用户如果直接适配这种改变需要编写很多针对性的垃圾代码。
 3. gtest 如何开启 VLOG DLOG 部分的日志
 7. CreateSession 这个过程 SessionMaster 做什么
 
@@ -769,6 +773,8 @@ protobuf 中 optional/repeated/ 等用法，https://blog.csdn.net/liuxiao723846/
 linux主分区、扩展分区、逻辑分区的区别、磁盘分区、挂载，https://blog.csdn.net/qq_24406903/article/details/118763610
 
 git submodule ，https://git-scm.com/book/zh/v2/Git-%E5%B7%A5%E5%85%B7-%E5%AD%90%E6%A8%A1%E5%9D%97，https://zhuanlan.zhihu.com/p/87053283
+
+protobuf 用法，https://bbs.huaweicloud.com/blogs/289568，参考我写的 reposition 中的 patch 
 
 
 
