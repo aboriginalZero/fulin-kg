@@ -205,7 +205,7 @@ zbs-nvmf ns create <subsystem_name> <ns_id_0-256> <Gib_size>
    ssh root@192.168.27.30
    # 下载 iscsi 工具的
    yum install iscsi-initiator-utils -y
-   # 查找目标
+   # 查找目标，必须执行这条指令后面才能登入
    iscsiadm -m discovery -t st -p 192.168.27.37:3260
    # 登入目标
    iscsiadm -m node -T iqn.2016-02.com.smartx:system:zp-iscsi -l

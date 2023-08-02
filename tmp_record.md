@@ -1,3 +1,23 @@
+为什么低负载下，replace_cid 要尽量跟 dst_cid 在一个域，考虑同时有 2 副本不符合拓扑安全的场景。
+
+1. 如果已有副本和 dst 在不同 zone，replace 随便选
+
+2. 如果已有副本和 dst 在同一个 zone，replace 也得选这个 zone 的，如果没有这个 zone 的，说明在这之前 3 个副本
+
+只要 topo 不变，符合拓扑安全的副本位置也不变，LocalizedComparator 得到的排序结果是不变的，因此虽然选样本是连锁反应，但就算第 2 个副本位置不对，第 3 个副本位置还是正确的。
+
+
+
+ZBS-25666
+
+一个是希望 prefe local 尽快能够变成正常节点
+
+另一个是根据老的 prefer local 得到的符合 LocalizedComparator 的 chunk list 的第 3 个希望能跟 prefer local 在一个可用域上，（要么遇到 prefer local 不存在的情况，放宽一次限制的阈值，不只 3 个，要么要去修改 LocalizedComparator 的逻辑，让它的第 4 个选跟 prefer local 在同一个可用域的）
+
+话说双活的选，为啥是先 2 个 prefer local zone 再 1 个 secondary zone？是不是该 1 ：1 ：1 的挑？
+
+
+
 写 Volume
 
 1. ALLOC PEXTENT，分配 pid 和预留对应的空间，此时也指明了副本位置；
@@ -17,7 +37,7 @@
 3. ALLOC EXTENT，给 new pid 分配 pextent；
 4. COW PARENT EXTENT SUCCESS，此时指明其 parant_id 为 pid
 5. COW EXTENT，
-6. COW PARENT EXTENT SUCCESS，没懂 lsm 这边为啥会执行两遍，inode_id 是 256 KB 为粒度？
+6. COW PARENT EXTENT SUCCESS，没懂 lsm 这边为啥会执行两遍，因为 inode_id 是 256 KB 为粒度？
 7. COW EXTENT，
 8. SYNC GENERATION SUCCESS
 9. SET PEXTENT EXISTENCE
@@ -78,6 +98,30 @@ COW 是先 revoke，然后打快照，保证了快照后，extent 无法写入�
 
 清理 cache lease 的方式有 3 种，一个是通过 session id，一个是通过 vtable id，一个是 pid，详见 Meta::ClearCachedLease
 
+ZBS 目前（ <= 5.4.0 ）的快照实现方式分为两部分， Meta 在元数据层更新 COW 标记。即 Volume V [pid = 1, location = [x] ] 制作快照 Snapshot S 时，Snapshot S 会完整的复制一份 V 的 vTable，同时 V 和 S 的 vTable 中所有的 vExtent 都会打上 COW 标记变为 [ pid = 1+, location = [x] ]。当 V 对产生写入请求时，触发一次 COW，V 的 vtable 变化为 [pid = 2 , location = [x] ]，此时 2 的 Parent 为 1 ，并且 Location 需要和 1 完全一致。当 IO 被发往 X 时， X 上的 LSM 会使用 COW 的方式构建 2 -> 1 的关联关系。此时如果是写入请求，LSM 会按需从 1 中获取数据块进行 COW。如果后续有读取请求，则在 2 没有自身独立数据的情况下会访问 1 曾经持有的数据（在 LSM 1 中是以逐级查找 Block bitmap 标记位的方式实现，LSM 2 中以复制 Pblob Table 的方式实现，本质是一样的）。
+
+
+
+
+
+ChunkTableEntry 的 last_succeed_heartbeat_ms 字段没用上
+
+连续快照的 allocated_data_space 不对劲
+
+chunk.chunk_space_info.thin_used_data_space 包含这个 chunk 最近一次上报的 thin extent 总空间消耗，用于在 meta 切换后进行集群 used_data_space 计算，在该 chunk 未再次上报 used space 前也能显示较为合理的集群空间消耗，空间分配改进中引入的字段。
+
+
+
+把 COW 生命周期了解一下
+
+实现命令行
+
+多个参数用一个 DB、考虑升级兼容性问题、reposition 跟 recover migrate 分开、额外添加 rpc 用法
+
+1. 能够观察 recover 真正 IO 的数据量，block 粒度的（比如如果有敏捷恢复，这个 pextent 就不会恢复 256 MB）
+2. 能够查看 generate/pending_recover 的数量
+3. 能够查看 need_migrate 的数量
+
 
 
 http://meta/leader_mgt_ip:9090 账号 prometheus密码 HC!r0cks 
@@ -101,6 +145,8 @@ http://meta/leader_mgt_ip:9090 账号 prometheus密码 HC!r0cks
    recover src 读的热数据要写到 recover dst 上的 cache，冷数据直接写到 recover dst 上的 partition，避免恢复导致的缓存击穿
 
    需要修改 data channel 中的 message 中 max_message_id 的语义，换成 usercode，然后就可以带上返回的数据是否冷热的 flag
+
+   参考 patch ZBS-21288
 
 2. recover 每台 chunk 上执行的并发度默认 32，根据 recover extent 完成情况向上向下调节（auto mode）
 
@@ -441,7 +487,7 @@ RecoverManager::ReGenerateMigrateForRebalance()，针对有本地化偏好的副
 
    1. 如果 prefer local 有该副本，并且其他活跃副本满足本地化/局部化的分配策略，说明副本满足分配规则，直接返回 replace dst 的初始值，不触发迁移；
    2. dst_cid 的选取规则：首选没有副本且不处于 failsow 的 prefer local，次选符合期望分布（即符合 LocalizedComparator 分配策略） 的下一个副本；
-   3. replaced_cid 的选取规则：从活跃副本中选出不满足期望分布且不是 lease owner 的 cid，如果有多个可选，则选择第一个 failslow 的 cid； 
+   3. replaced_cid 的选取规则：从活跃副本中选出不满足期望分布且不是 lease owner 的 cid，如果有多个可选，则选择第一个 failslow 的 cid，如果都不是 faislow，那么会选到 location 中的最后一个； 
    3. src_cid 的选取规则：默认值为 replace cid，在选定 dst_cid 和 replaced_cid 后，如果 replace_cid slowfail 或者和 dst_cid 不在同一个可用域，那么会从活跃副本中找跟 dst_cid 在同一个可用域且不是 slow fail 的 cid 作为 src_cid。
 
    选定 3 要素后调用RecoverManager::MakeMigrateCmd()。
@@ -751,6 +797,22 @@ git submodule ，https://git-scm.com/book/zh/v2/Git-%E5%B7%A5%E5%85%B7-%E5%AD%90
 protobuf 用法，https://bbs.huaweicloud.com/blogs/289568，参考我写的 reposition 中的 patch 
 
 遍历 repeat，https://blog.51cto.com/u_5650011/5389330
+
+
+
+
+
+网卡随开机自启动
+
+挂载用于存放代码的磁盘
+
+指定公司的 yum 源
+
+生成 ssh key 并上传到 gerrit
+
+yum install -y git224 yum-utils rpm-build
+
+安装 docker，https://blog.csdn.net/zzhongcy/article/details/131402389，设置成随开机自启
 
 
 
