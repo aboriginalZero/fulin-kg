@@ -8,7 +8,13 @@
 
 
 
+ZBS-25666
 
+一个是希望 prefe local 尽快能够变成正常节点
+
+另一个是根据老的 prefer local 得到的符合 LocalizedComparator 的 chunk list 的第 3 个希望能跟 prefer local 在一个可用域上，（要么遇到 prefer local 不存在的情况，放宽一次限制的阈值，不只 3 个，要么要去修改 LocalizedComparator 的逻辑，让它的第 4 个选跟 prefer local 在同一个可用域的）
+
+话说双活的选，为啥是先 2 个 prefer local zone 再 1 个 secondary zone？是不是该 1 ：1 ：1 的挑？
 
 
 
@@ -789,6 +795,22 @@ linux主分区、扩展分区、逻辑分区的区别、磁盘分区、挂载，
 git submodule ，https://git-scm.com/book/zh/v2/Git-%E5%B7%A5%E5%85%B7-%E5%AD%90%E6%A8%A1%E5%9D%97，https://zhuanlan.zhihu.com/p/87053283
 
 protobuf 用法，https://bbs.huaweicloud.com/blogs/289568，参考我写的 reposition 中的 patch 
+
+
+
+
+
+网卡随开机自启动
+
+挂载用于存放代码的磁盘
+
+指定公司的 yum 源
+
+生成 ssh key 并上传到 gerrit
+
+yum install -y git224 yum-utils rpm-build
+
+安装 docker，https://blog.csdn.net/zzhongcy/article/details/131402389，设置成随开机自启
 
 
 
