@@ -1,6 +1,20 @@
 ### ZBS 常用 CLI
 
-命令使用
+本地编译命令使用
+
+```shell
+# 格式化再编译
+cd /home/code/zbs && ./script/format.sh && cd build && ninja zbs_test
+
+cd /home/code && rm -rf build/ && mkdir build && cd build && cmake -G Ninja ..
+ninja zbs_test zbs-metad
+
+--gtest_filter="*FunctionalTest.WriteResize*"
+```
+
+
+
+docker 中命令使用
 
 ```shell
 # 首次编译/子模块如 spdk 更新，需要删除 build 目录，进到 Docker 内部执行

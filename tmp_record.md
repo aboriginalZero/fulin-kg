@@ -1,3 +1,13 @@
+抽空写一个脚本，能够进 docker 之后把所有环境配好并在 docker 中运行单测
+
+vscode 中用 vim 插件，这样可以按区域替换代码
+
+一个遗留问题是，单测里面想要触发两次 recover cmd，怎么让 entry 的 GetLocation() 得到及时更新，试了 sleep(9) 不行，可能不止需要一个心跳周期，还有其他条件没触发。
+
+
+
+
+
 为什么低负载下，replace_cid 要尽量跟 dst_cid 在一个域，考虑同时有 2 副本不符合拓扑安全的场景。
 
 1. 如果已有副本和 dst 在不同 zone，replace 随便选
@@ -5,6 +15,21 @@
 2. 如果已有副本和 dst 在同一个 zone，replace 也得选这个 zone 的，如果没有这个 zone 的，说明在这之前 3 个副本
 
 只要 topo 不变，符合拓扑安全的副本位置也不变，LocalizedComparator 得到的排序结果是不变的，因此虽然选样本是连锁反应，但就算第 2 个副本位置不对，第 3 个副本位置还是正确的。
+
+scan_extents_num 应该放在 ReGenerateMigrateForUnevenVolume 这个函数中去做统计，虽然实际上 all_pool 中就一个，且一次只会因为一种方式去 migrate(本地化/容量均衡)。
+
+GenerateRecoverCmds 里面的 src 也可以有选择策略的，目前的写法太乱了。
+
+recover manager 代码中有些地方用 `pextent_table_`，有些用 `context_->pextent_table`，或许可以统一起来
+
+低负载没有区分双活，中高负载开始有区分
+
+
+
+对于 cmp
+1. 若想让 l 的优先级更高，那就 return true，
+2. 若想让 r 的优先级更高，那就 return false，
+3. 其他情况想要保持相对顺序不变，那就 return false
 
 
 
@@ -810,7 +835,9 @@ protobuf 用法，https://bbs.huaweicloud.com/blogs/289568，参考我写的 rep
 
 生成 ssh key 并上传到 gerrit
 
-yum install -y git224 yum-utils rpm-build
+yum install -y git224 yum-utils rpm-build zookeeper rpcbind
+
+
 
 安装 docker，https://blog.csdn.net/zzhongcy/article/details/131402389，设置成随开机自启
 
