@@ -750,6 +750,8 @@ git submodule ，https://git-scm.com/book/zh/v2/Git-%E5%B7%A5%E5%85%B7-%E5%AD%90
 
 protobuf 用法，https://bbs.huaweicloud.com/blogs/289568，参考我写的 reposition 中的 patch 
 
+遍历 repeat，https://blog.51cto.com/u_5650011/5389330
+
 
 
 centos7 中 pip 默认是 8.x，升级到 20.3.4（更高版本不支持 Python 2.7）
