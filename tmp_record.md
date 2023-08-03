@@ -1,3 +1,57 @@
+pid 3133 的 prefer local 全程都是 4 吗？
+
+I0802 21:45:27.201884 ， I0802 23:16:11.647876，这 2 个时间内没有过任何 topo 变化吗？
+
+低负载、非双活、没有 failslow、topo 结构不变的话，topo 安全终态是 4 2 5，我看不明白为啥他想要去变成 4 2 1，发起一个 5 -> 1 的 migrate cmd。
+
+```shell
+# 之后没有对应的 access manager 侧的日志，同批次的 pid 2969 成功把 cmd 放到心跳回响，不过是发给 c2
+22060:I0802 23:16:11.647876 58510 recover_manager.cc:414] add recover cmd for pid: 3133 src: 5 dst: 1 replace: 5 owner: 5
+
+# 在把 cmd 放到心跳回响之前，发生了 topo 变更，chunk5 被移到 topo 了
+I0802 23:16:12.213858  9843 chunk_manager.cc:992] [UPDATE TOPO OBJ]: [REQUEST]: id: "36e273e2-3406-4de1-b648-31dacb01e0c7" new_parent_id: "topo", [RESPONSE]: ST:OK, type: NODE id: "36e273e2-3406-4de1-b648-31dacb01e0c7" parent_id: "topo" name: "chunk-5-36e273e2-3406-4de1-b648-31dacb01e0c7" create_time: 1690797099 position { row: 2 column: 2 } dimension { row: 1 column: 1 } ring_id: 2, [TIME]: 19379 us.
+
+# topo 变更会让 chunk5 RevokeRecoverCmds，不论是在 passive/active_waiting_migrate_、pid_cmds_ 还是 session 的 waiting_recover_cmds，都会被清空，所以 pid 3133 的 cmd 没有被放入心跳回响。
+
+# 隔了7s 有 3314 的 cmd，顺利下发，且 recover 成功，c5 主动向 meta leader 发替换副本的 rpc
+22207:I0802 23:16:19.662549 58510 recover_manager.cc:414] add recover cmd for pid: 3134 src: 5 dst: 1 replace: 5 owner: 5
+22405:I0802 23:16:20.750061 58511 access_manager.cc:1060] [RECOVER]: pid: 3134 lease { owner { uuid: "afe6d52a-94dd-4534-bacd-e1a130382bbf" ip: "10.0.134.135" num_ip: 2273705994 port: 10201 cid: 5 secondary_data_ip: "20.0.134.135" zone: "default" scvm_mode_host_data_ip: "" alive_sec: 27028 machine_uuid: "93506396-2f6c-11ee-903c-525400bdd182" } pid: 3134 location: 328196 origin_pid: 0 epoch: 4354 origin_epoch: 0 ever_exist: true meta_generation: 1 expected_replica_num: 3 thin_provision: true chunks { id: 4 data_ip: 2223374346 data_port: 10201 rpc_ip: 2223374346 rpc_port: 10200 zone_id: "default" } chunks { id: 2 data_ip: 2206597130 data_port: 10201 rpc_ip: 2206597130 rpc_port: 10200 zone_id: "default" } chunks { id: 5 data_ip: 2273705994 data_port: 10201 rpc_ip: 2273705994 rpc_port: 10200 zone_id: "default" } } dst_chunk: 1 replace_chunk: 5 src_chunk: 5 is_migrate: true epoch: 4354 active_location: 328196 start_ms: 203965757
+22682:I0802 23:16:43.267257  9843 meta_rpc_server.cc:1987] [REPLACE REPLICA]: [REQUEST]: session: "afe6d52a-94dd-4534-bacd-e1a130382bbf" pid: 3134 src_chunk: 5 dst_chunk: 1 epoch: 4354 reset_location_to_dst: false reset_generation: 18446744073709551615, [RESPONSE]: ST:OK, pid: 3134 location: 66052 expected_replica_num: 3 ever_exist: true origin_pid: 0 epoch: 4354 origin_epoch: 0 generation: 1 preferred_cid: 4 thin_provision: true alive_location: 66052 allocated_space: 47972352, [TIME]: 56069 us.
+```
+
+触发条件：在生成 cmd 并放入 session waiting cmd list 到通过心跳下发之前，cmd owner 拓扑变更。
+
+
+
+1. 首先的问题是他为什么要生成 5 -> 1 的 migrate cmd，之前我得到的信息一直是 topo 安全都没变，会有这个 migrate cmd 就很蹊跷，但是如果有 topo 变更，那是有可能会有 migrate cmd 的；
+2. 观察到 meta leader 没有给 c5 下发这条 migrate cmd （否则会有 [RECOVER] 开头的 access manager 侧日志），但 5 的 session 一直是正常且没替换过的，这个地方有问题。调查发现，在生成 cmd 并放入 session waiting cmd list 到通过心跳下发之前，cmd owner 拓扑变更，所有 cmd 中如果有 src 或 dst = 这个变更的 chunk 的话都需要被 revoke，不论 cmd 是在 passive/active_waiting_migrate、pid_cmds 还是 session 的 waiting_recover_cmds，都会被清空，所以 pid 3133 的 cmd 没有被放入心跳回响。
+3. 但当 cmd 被放入 session 的 waiting_recover_cmds 之前，需要确认 cmd 的 lease owner（通过 owner uuid 才知道往哪个 session 的 cmd 队列发），因为在 1 个小时前，pid 3133 的 lease owner 被 release 了，所以会新生成一个让 migrate src (c5) 做 owner 的 pid owner。
+4. 第 2 步中只 revoke cmd，没有去 revoke lease owner，后续也没有他的 app io 或 reposition io，所以 lease owner 一直在那。 
+
+
+
+1. 如果后续有 app io / reposition io 都会去释放 lease 吧？看看代码确认下。
+2. 并且在这之后没有去主动写 pid 3133，而 pid 的副本又符合本地化策略，不会触发 migrate，所以这个 pid 的 lease owner 就一直保留着。
+
+
+
+```shell
+$ rpm -q zbs
+zbs-4.0.13-rc6.0.release.git.g933c12831.el7.SMTX.HCI.x86_64
+
+$ curl http://192.168.91.19/s/zbs-debuginfo-4.0.13-rc6.0.release.git.g933c12831.el7.SMTX.HCI.x86_64
+
+http://192.168.17.20/repo/pub/smartxos/el7/smtx/x86_64/zbs-debuginfo-4.0.13-rc6.0.release.git.g933c12831.el7.SMTX.HCI.x86_64.rpm
+http://192.168.31.215/mirror/centos/7/smartxos-smtx/x86_64/zbs-debuginfo-4.0.13-rc6.0.release.git.g933c12831.el7.SMTX.HCI.x86_64.rpm
+http://192.168.91.19/zbs-debuginfo-4.0.13-rc6.0.release.git.g933c12831.el7.SMTX.HCI.x86_64.rpm
+```
+
+
+
+
+
+
+
 抽空写一个脚本，能够进 docker 之后把所有环境配好并在 docker 中运行单测
 
 vscode 中用 vim 插件，这样可以按区域替换代码

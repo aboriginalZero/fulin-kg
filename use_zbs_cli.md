@@ -9,7 +9,7 @@ cd /home/code/zbs && ./script/format.sh && cd build && ninja zbs_test
 cd /home/code && rm -rf build/ && mkdir build && cd build && cmake -G Ninja ..
 ninja zbs_test zbs-metad
 
---gtest_filter="*FunctionalTest.WriteResize*"
+./src/zbs_test --gtest_filter="*FunctionalTest.WriteResize*"
 ```
 
 
