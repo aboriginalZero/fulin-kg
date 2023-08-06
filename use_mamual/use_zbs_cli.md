@@ -1,20 +1,20 @@
-### ZBS 常用 CLI
+## ZBS 常用 CLI
 
-本地编译命令使用
+### 本地编译
 
 ```shell
-# 格式化再编译
-cd /home/code/zbs && ./script/format.sh && cd build && ninja zbs_test
-
-cd /home/code/zbs && rm -rf build/ && mkdir build && cd build && cmake -G Ninja ..
+# 格式化 + 非首次编译
+cd /home/code/zbs3 && ./script/format.sh && cd build && ninja zbs_test
+zc zbs3
+# 首次编译
+cd /home/code/zbs3 && rm -rf build/ && mkdir build && cd build && cmake -G Ninja ..
 ninja zbs_test zbs-metad
-
-./src/zbs_test --gtest_filter="*FunctionalTest.WriteResize*"
+# 运行单测
+cd /home/code/zbs3 && ./src/zbs_test --gtest_filter="*FunctionalTest.WriteResize*"  --gtest_repeat=100
+zrt zbs3 FunctionalTest.WriteResize
 ```
 
-
-
-docker 中命令使用
+### docker 使用
 
 ```shell
 # 首次编译/子模块如 spdk 更新，需要删除 build 目录，进到 Docker 内部执行
@@ -47,7 +47,7 @@ git submodule update --init --force --recursive --remote
 # pyzbs 即 zbs-rest-server 调试，
 ```
 
-zbs-client-py 调试方法
+### zbs-client-py 调试
 
 ```shell
 # make 命令都是在项目根目录执行
@@ -73,9 +73,9 @@ zbs-meta --meta_ip <manager_ip> migrate get_recover_info
 
 pyzbs 原来是一个 monorepo，里面包含了很多模块，elf，network，tuna，deploy，他们之间的依赖关系非常的重，在 py2 -> py3 的升级过程中，将各个模块独立了 venv，现在 pyzbs 里面只有 zbs-rest-server，专门负责 zbs 相关的 http 接口，tuna 是 ops 相关的模块，里面有所有的硬件，部署，配置变更，集群变更等 API，有自己的 web server，早期整个 pyzbs 只有一个 web server，但是耦合太严重了，各个组件升级完全没办法独立运维。
 
-pyzbs 即 zbs-rest-server 调试方法
+### pyzbs 调试
 
-目前 python3 所有 venv 环境都放在 /usr/local/venv/ 目录下，包含 ansible、elf、job-center、pyzbs、tuna、zbs-client-py，每个 venv 包含自己的 bin、lib 等子目录。
+即 zbs-rest-server 调试，目前 python3 所有 venv 环境都放在 /usr/local/venv/ 目录下，包含 ansible、elf、job-center、pyzbs、tuna、zbs-client-py，每个 venv 包含自己的 bin、lib 等子目录。
 
 ```shell
 # 在 README.md 中有很清晰的使用说明
@@ -104,6 +104,10 @@ systemctl restart tuna-rest-server zbs-rest-server
 
 # 如果要批量测试，需要借助 postman 批量访问 restful api，记得填 zbs token 和 smartx token
 ```
+
+### 测试集群调试
+
+可参考，https://docs.google.com/document/d/1ctc_g51UC_yBsHOkUM4iRzjlYrN8y6buDuxJ6oLg4lU/edit#heading=h.efb25l4u0lco
 
 观察 ELF 集群厚制备副本分配情况
 
@@ -250,4 +254,13 @@ zbs-nvmf ns create <subsystem_name> <ns_id_0-256> <Gib_size>
    dd if=/dev/sdd of=/dev/null bs=4k
    ```
 
-   
+
+### ZK 使用
+
+* 连接 zk：`zkCli.sh -server 10.1.242.103:2181`
+* 开启 / 查看 / 停止 / 重启 zk 服务：` zkServer.sh start / status / stop / restart`
+* 创建节点：`create  [-s] [-e] path data acl`，如`create /zk-book content123`
+* 删除节点：`delete path [version]`
+* 修改节点：`set path data [version]`
+* 查看节点：列出指定节点下的所有子节点`ls path [watch]`、查看指定节点的数据内容和属性信息`get path [watch]`
+* zk 遵循环形选举，zbs 中各服务的 leader 之间不一定相同、且和 zk 也不一定相同（查看当前各服务的 leader，`zbs-tool service list`）

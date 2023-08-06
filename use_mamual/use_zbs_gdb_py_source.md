@@ -1,4 +1,4 @@
-把这个脚本放到代码文件里 source 一下。
+vim /tmp/for-debug.py
 
 ```python
 """GDB Pretty-printers for MongoDB."""
@@ -593,6 +593,4 @@ def build_pretty_printer():
 gdb.printing.register_pretty_printer(gdb.current_objfile(), build_pretty_printer(), True)
 
 print("MongoDB GDB pretty-printers loaded")
-
 ```
-
