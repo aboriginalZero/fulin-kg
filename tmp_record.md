@@ -1,3 +1,22 @@
+1. 问 jiewei gdb 中看 std::unoredered_map
+2. 问 wenquan 代码细节，http://gerrit.smartx.com/c/zbs/+/53609
+3. 把 LOG_FIRST_N 的日志换回原来的，http://gerrit.smartx.com/c/zbs/+/52551，补一下 src 可能会被 owner 替换的日志，migrate 下发的日志除了 lease owner 之外带上 prefer local 
+4. RecoverManager::ShowRecoverParameter 调整
+    parameter->set_recover_trigger_inteval_s(FLAGS_reposition_trigger_interval_ms / 1000);
+5. 问 fanyang，一个集群中默认创建的 3 个 pool 是干嘛用的？zbs-images、nfs-volume-template、zbs-volumes
+6. 已有的选择 replace 逻辑有误，replace cid 不一定是 alive 的，他只是从 location 中选，不一定在 alive location（虽然大概率在），所以我们要从 alive 中选，改对应代码， RecoverManager::GetSrcAndReplace() ，https://smartx1.slack.com/archives/D01U7SLCBPY/p1690881969586999
+7. python 侧做正整数判断，
+8. http://gerrit.smartx.com/c/zbs/+/53689 代码更新，并补充对应的 zbs cli
+9. zbs cli 中加上 reposition cli，并添加 rpc
+    1. 能够观察 recover 真正 IO 的数据量，block 粒度的（比如如果有敏捷恢复，这个 pextent 就不会恢复 256 MB）
+    2. 能够查看 generate/pending_recover 的数量
+    3. 能够查看 need_migrate 的数量
+10. 智能模式中，值变化的时候添加 log
+11. zhiwei 发现的已有几个 bug 修完
+12. thread 里面给解释，不再继续调查了。
+
+
+
 
 
 为什么低负载下，replace_cid 要尽量跟 dst_cid 在一个域，考虑同时有 2 副本不符合拓扑安全的场景。
