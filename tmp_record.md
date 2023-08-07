@@ -1,6 +1,6 @@
 1. 问 jiewei gdb 中看 std::unoredered_map
 2. 问 wenquan 代码细节，http://gerrit.smartx.com/c/zbs/+/53609
-3. 把 LOG_FIRST_N 的日志换回原来的，http://gerrit.smartx.com/c/zbs/+/52551，补一下 src 可能会被 owner 替换的日志，migrate 下发的日志除了 lease owner 之外带上 prefer local 
+3. 把 LOG_FIRST_N 的日志换回原来的，http://gerrit.smartx.com/c/zbs/+/52551，补一下 src 可能会被 owner 替换的日志，migrate 下发的日志除了 lease owner 之外带上 prefer local
 4. RecoverManager::ShowRecoverParameter 调整
     parameter->set_recover_trigger_inteval_s(FLAGS_reposition_trigger_interval_ms / 1000);
 5. 问 fanyang，一个集群中默认创建的 3 个 pool 是干嘛用的？zbs-images、nfs-volume-template、zbs-volumes
@@ -110,9 +110,9 @@ chunk.chunk_space_info.thin_used_data_space 包含这个 chunk 最近一次上�
    recover cmd slot 是在 recover manager 上的参数，可以立即生效。max_recover_cmds_per_chunk
 
    recover 并发度跟限速一样，跟随心跳下发，所以不保证立即生效。
-   
+
    用一个 metadb 放下所有相关的参数
-   
+
    目前的写法好像都是先更新内存再更新 metaDB，需要调整顺序吗？
 
 
@@ -339,7 +339,7 @@ RecoverManager::ReGenerateWaitingMigrateList()，分别处理均匀分配的副�
 
 RecoverManager::ReGenerateMigrateForRebalance()，针对有本地化偏好的副本
 
-1. 当处于低负载时 
+1. 当处于低负载时
 
    RecoverManager::ReGenerateMigrateForLocalizeInStoragePool()
 
@@ -349,7 +349,7 @@ RecoverManager::ReGenerateMigrateForRebalance()，针对有本地化偏好的副
 
    1. 如果 prefer local 有该副本，并且其他活跃副本满足本地化/局部化的分配策略，说明副本满足分配规则，直接返回 replace dst 的初始值，不触发迁移；
    2. dst_cid 的选取规则：首选没有副本且不处于 failsow 的 prefer local，次选符合期望分布（即符合 LocalizedComparator 分配策略） 的下一个副本；
-   3. replaced_cid 的选取规则：从活跃副本中选出不满足期望分布且不是 lease owner 的 cid，如果有多个可选，则选择第一个 failslow 的 cid，如果都不是 faislow，那么会选到 location 中的最后一个； 
+   3. replaced_cid 的选取规则：从活跃副本中选出不满足期望分布且不是 lease owner 的 cid，如果有多个可选，则选择第一个 failslow 的 cid，如果都不是 faislow，那么会选到 location 中的最后一个；
    3. src_cid 的选取规则：默认值为 replace cid，在选定 dst_cid 和 replaced_cid 后，如果 replace_cid slowfail 或者和 dst_cid 不在同一个可用域，那么会从活跃副本中找跟 dst_cid 在同一个可用域且不是 slow fail 的 cid 作为 src_cid。
 
    选定 3 要素后调用RecoverManager::MakeMigrateCmd()。
@@ -362,43 +362,43 @@ RecoverManager::ReGenerateMigrateForRebalance()，针对有本地化偏好的副
 
       RecoverManager::RepairPextentTopo()
 
-      1. 非双活集群：RecoverManager::RepairInZone() 
+      1. 非双活集群：RecoverManager::RepairInZone()
       2. 双活集群：RecoverManager::RepairInStretched()、RecoverManager::MoveToOtherZone()
-   
+
       以上两种情况的 src/dst/replace cid 选取规则是一样的，通过 RecoverManager::GetSrcAndReplace() 选取 src 和 replace、通过 RecoverManager::GetDst() 获取 dst，不过中高负载与低负载情况下的选取规则是不同的，具体规则如下（选择顺序 replace_cid --> src_cid --> dst_cid）：
-   
+
       1. replace_cid 的选取规则：将已有副本按照拓扑距离排序后，优先把 failslow 节点放在列表头部，然后如果没有 failslow 节点或者存在多个 failslow 节点，这些节点之间按照节点容量从大到小排序。
-   
+
          做好以上准备工作后，从左到后遍历，选择第一个不是 prefer_local 且不是 owner 且命令数未满的节点，如果所有副本所在的节点都不满足这个条件，选择 owner 所在的节点作为 replace_cid，如果副本没有在 owner 上的，那么说明没选到 replace_cid，replace_cid = 0。
-   
+
       2. src_cid 的选取规则：默认是 replace_cid，如果 replace_cid = 0，那么 src_cid = 0，如果 replace_cid != 0 且 failslow，那么从所有副本中任选一个不是 failslow 的节点作为 src_cid。
-   
+
       3. dst_cid 的选取规则：
-   
+
          非双活集群：首选 1. 不处于 failsow 且 2. 没有副本且 3. 还有待生成 cmd 配额且 4. 能让拓扑结构更安全的 prefer local，否则对没有副本的 chunk 按照添加之后能让拓扑结构更安全的方式排序并从中选出第一个满足这 4 个条件的 cid 作为 dst_cid。
-   
+
          > 现有逻辑如果 prefer local 不能让拓扑结构更健康，迁移的 dst 是不会选 prefer local 的
-   
+
          双活集群：与非双活集群略有不同，需要考虑 prefer local 所在的 zone，然后不需要考虑让拓扑结构更安全，详细见 RepairInStretched()
-   
+
       如果 replace_cid|src_pid = 0，那么不会生成 cmd 的。
-   
+
       选定 3 要素后调用 RecoverManager::MakeMigrateCmd()
-   
+
    2. 如果集群不处于极高负载并且做过拓扑安全的迁移（生成了 migrate cmd）直接 continue，否则进行目的为容量再均衡的迁移。
-   
+
       RecoverManager::ReGenerateMigrateForBalanceInStoragePool()，把高负载节点的副本迁移到低负载节点。
-   
+
       RecoverManager::Move()，被迁移副本的优先级：1. 厚制备副本；2. 不是被克隆/快照的精简制备副本（没有 origin pid）；3. 被克隆/快照的精简制备副本（有 origin pid）。
-   
+
       RecoverManager::DoMove()
-   
+
       RecoverManager::ShouldMove()
-   
+
       RecoverManager::MakeMigrateCmd()
 
 
-经过以上步骤，生成的 Recover cmd 只是放入 passive_waiting_migrate 中，在等待 60s 或者 scan_recover_immediate = true 时会 swap(active_waiting_migrate, passive_waiting_migrate) 
+经过以上步骤，生成的 Recover cmd 只是放入 passive_waiting_migrate 中，在等待 60s 或者 scan_recover_immediate = true 时会 swap(active_waiting_migrate, passive_waiting_migrate)
 
 关于 active_waiting_migrate / passive_waiting_migrate 这两个链表：
 
@@ -486,7 +486,7 @@ linux主分区、扩展分区、逻辑分区的区别、磁盘分区、挂载，
 
 git submodule ，https://git-scm.com/book/zh/v2/Git-%E5%B7%A5%E5%85%B7-%E5%AD%90%E6%A8%A1%E5%9D%97，https://zhuanlan.zhihu.com/p/87053283
 
-protobuf 用法，https://bbs.huaweicloud.com/blogs/289568，参考我写的 reposition 中的 patch 
+protobuf 用法，https://bbs.huaweicloud.com/blogs/289568，参考我写的 reposition 中的 patch
 
 遍历 repeat，https://blog.51cto.com/u_5650011/5389330
 

@@ -27,7 +27,7 @@ ninja zbs_test
 # 但是要配好 nvmf/rdma 的相关依赖包/服务
 cd /home/code && ./newci-x86_64 -builddir zbs/build/ -p 16 -action "/run 200 FunctionalTest.MarkVolumeAllocEven"
 
-# 运行后的测试日志默认保存在 /var/log/zbs/zbs_test.xxx 中 
+# 运行后的测试日志默认保存在 /var/log/zbs/zbs_test.xxx 中
 cd /home/code/zbs/build/src && ./zbs_test --gtest_filter="*FunctionalTest.WriteResize*"
 
 # 显示指定 main 分支
@@ -52,7 +52,7 @@ git submodule update --init --force --recursive --remote
 ```shell
 # make 命令都是在项目根目录执行
 
-# 编译项目，生成 proto 文件，如果报错有重复的文件，及时删除
+# 编译项目，生成 proto 文件，如果报错有重复的文件，及时删除（以下 2 个步骤都需要这么做）
 make build
 
 # 在 ./dist/ 目录下生成的 zbs_client_py_xxx.whl 文件，可以 scp 到测试集群并通过以下命令替换
@@ -60,7 +60,7 @@ make build
 
 # 另一种方式是进入配套的容器，在这里面跑单测和测试嵌套集群的效果
 make docker
-docker run -it -v $PWD:/zbs-client-py  zbs-client-py-builder:latest
+docker run -it -v $PWD:/zbs-client-py registry.smtx.io/zbs-py-dev/zbs-client-py3/runtime:el7-x86_64
 source scripts/init_build_env.sh
 # 跑单测
 ./scripts/run-test.sh
@@ -68,7 +68,7 @@ source scripts/init_build_env.sh
 pip install -e .
 # 指定自己嵌套集群的 meta leader ip，存储 IP 或管理 IP 都可以
 # 如果 zbs-chunk 的命令，填的 chunk ip 如果下线，请求就会失败
-zbs-meta --meta_ip <manager_ip> migrate get_recover_info
+zbs-meta --meta_ip <manager_ip> migrate get_mode_info
 ```
 
 pyzbs 原来是一个 monorepo，里面包含了很多模块，elf，network，tuna，deploy，他们之间的依赖关系非常的重，在 py2 -> py3 的升级过程中，将各个模块独立了 venv，现在 pyzbs 里面只有 zbs-rest-server，专门负责 zbs 相关的 http 接口，tuna 是 ops 相关的模块，里面有所有的硬件，部署，配置变更，集群变更等 API，有自己的 web server，早期整个 pyzbs 只有一个 web server，但是耦合太严重了，各个组件升级完全没办法独立运维。
@@ -82,14 +82,14 @@ pyzbs 原来是一个 monorepo，里面包含了很多模块，elf，network，t
 # make 命令都是在项目根目录执行
 
 # 执行代码静态检查，输出格式错误，并自动修复代码格式问题
-make lint/fix 
+make lint/fix
 
-# 生成 wheel 文件，输出路径在 .build/dist/wheel/tuna_xxx.whl 
+# 生成 wheel 文件，输出路径在 .build/dist/wheel/tuna_xxx.whl
 # wheel 包与 RPM 的区别在于，wheel 只更新了服务代码及其依赖，没有更新系统配置等。
 make build/wheel APPS=tuna
 
 # 添加注释输出到 /var/log/zbs/tuna-rest.INFO
-logging.info() 
+logging.info()
 
 # pyzbs 依赖 zbs-client-py，zbs-client-py 依赖 zbs-proto，要保证版本跟 zbs 用的一致
 # 更新 pyzbs 依赖的 zbs-client-py 版本，修改 zbs-client-py 字段的值
@@ -108,6 +108,18 @@ systemctl restart tuna-rest-server zbs-rest-server
 ### 测试集群调试
 
 可参考，https://docs.google.com/document/d/1ctc_g51UC_yBsHOkUM4iRzjlYrN8y6buDuxJ6oLg4lU/edit#heading=h.efb25l4u0lco
+
+指定 meta leader 节点位置
+
+```shell
+zbs-tool service set_priority --force meta 10.0.0.222:10100:2
+```
+
+根据 pid 查 volume，elf 或 server san 都可以。对于 VMware 环境，由 pid 关联的 volume 可以找到 nfs file，文件名即对应 VM，所以没有提供额外的命令行查询
+
+```shell
+zbs-tool elf get_vm_by_pid [pid]
+```
 
 观察 ELF 集群厚制备副本分配情况
 
@@ -137,7 +149,7 @@ watch -n 1 zbs-perf-tools chunk lsm summary
 zbs-meta volume show_by_id --show_pextents --show_replica_distribution 7c58b428-5dc0-4a7a-88d6-9025377c44a0
 # 强制格式化分区并挂载
 zbs-chunk partition format --force /dev/sdb && zbs-chunk partition mount /dev/sdb
-# 查看正在执行的 recover cmd 
+# 查看正在执行的 recover cmd
 zbs-meta recover list
 # 查看待执行的 recover cmd
 zbs-meta pextent find need_recover
@@ -149,7 +161,7 @@ cat /etc/smtx-release.yaml && rpm -qa | grep zbs
 
 ```shell
 # 查看集群中连通的 chunk 列表
-zbs-meta chunk list 
+zbs-meta chunk list
 # 查看集群中全部 pool 信息
 zbs-meta pool list
 # 查看某个 pool 中所有存储卷信息
@@ -191,7 +203,7 @@ zbs-iscsi target create <target_name>
 zbs-iscsi lun create [--lun_name <LUN_NAME>] <target_name> <lun_id_0-256> <Gib_size>
 # 创建 nvmf subsystem
 zbs-nvmf subsystem create <name>
-# 创建 nvmf namespace 
+# 创建 nvmf namespace
 zbs-nvmf ns create <subsystem_name> <ns_id_0-256> <Gib_size>
 ```
 
@@ -211,12 +223,12 @@ zbs-nvmf ns create <subsystem_name> <ns_id_0-256> <Gib_size>
 2. 在嵌套集群中使用 zbs-iscsi 命令行创建一个 Target ，并在 Target 中创建一个 LUN；
 
    ```shell
-   ssh smartx@192.168.27.37 
+   ssh smartx@192.168.27.37
    zbs-iscsi target create zp-iscsi
    # 创建 zp-iscsi 下的 lun_id 为 1，size = 3 GB 的 LUN
    zbs-iscsi lun create zp-iscsi 1 3
    ```
-   
+
 3. 在 Linux VM 中使用 iscsiadm discovery 并 login 对应的 LUN；
 
    ```shell
@@ -238,10 +250,10 @@ zbs-nvmf ns create <subsystem_name> <ns_id_0-256> <Gib_size>
    # 查看本机所有挂载设备
    df -h 或者 lsblk
    # 如果要在系统启动时自动挂载，启动守护进程，并在/etc/fstab 中加入一行
-   service iscsi start 
+   service iscsi start
    /dev/sdd /mnt/iscsi ex3 default 0 0
    # 首先解除挂载，然后登出节点
-   umount /mnt/iscsi 
+   umount /mnt/iscsi
    iscsiadm -m node -T iqn.2016-02.com.smartx:system:zp-iscsi -u
    ```
 
