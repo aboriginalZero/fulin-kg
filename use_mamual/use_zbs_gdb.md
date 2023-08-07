@@ -2,20 +2,13 @@
 
 GDB 是一款可以用来调试 C/C++/Java/Go 的调试工具，在类 Unix 系统中广泛使用。
 
-* 下载：yum install devtoolset-7-gdb
-* 开启 gdb 调试：. /opt/rh/devtoolset-7/enable
+* 下载：yum install devtoolset-10-gdb
+* 开启 gdb 调试：. /opt/rh/devtoolset-10/enable
 * gcc 编译时需要带上 -g 参数，才能保留调试信息
 
 ### ZBS 调试
 
-1. 将源码打包发到待调试节点上并解压
-
-    ```shell
-    tar zcvf zbs.tar.gz zbs
-    scp zbs.tar.gz smartx@172.20.134.135:/tmp
-    ```
-
-2. 在集群安装 debuginfo
+1. 在测试集群待调试节点安装 debuginfo
 
     ```shell
     # 查看 zbs 版本
@@ -34,54 +27,50 @@ GDB 是一款可以用来调试 C/C++/Java/Go 的调试工具，在类 Unix 系�
 
     ```shell
     grep "CHUNK SERVER PTR" /var/log/zbs/zbs-chunkd*
-    grep "services of meta" /var/log/zbs/zbs-metad*
+    grep "Starting the services of meta" /var/log/zbs/zbs-metad*
     ```
 
-4. 让 gdb 支持解析 stl 容器
-
-    ```shell
-    # 在 ~/.gdbinit 添加如下，其中路径为 find / -name "*libstdcxx*" 结果
-    python
-    import sys
-    sys.path.insert(0, '/usr/share/gcc-4.8.2/python/libstdcxx')
-    from v6.printers import register_libstdcxx_printers
-    register_libstdcxx_printers (None)
-    end
-    ```
+4. （选做）支持查看 stl 容器简易命令
 
     wget [dbinit_stl_views](http://www.yolinux.com/TUTORIALS/src/dbinit_stl_views-1.03.txt) ，并将其内容追加到 ~/.gdbinit
-
+    
     ```shell
     wget http://www.yolinux.com/TUTORIALS/src/dbinit_stl_views-1.03.txt
     cat dbinit_stl_views-1.03.txt >> ~/.gdbinit
     ```
-
+    
     代码注释中有对应命令使用方法，比如 vector
-
+    
     ```shell
     (gdb) pvector <my_vec> <idx>
     (gdb) pvector  ((zbs::meta::MetaServer)*0x562f6297c000)->context_->recover_manager->topo_distance_ 513
     
     (gdb) pmap <my_map> <key_type> <value_type> <key>
     ```
-
-    但并不支持 std::array、std::unordered_map（问问其他同学）
-
-5. 运行 gdb
+    
+    支持的容器不包括 std::array、std::unordered_map
+    
+    如果将容器所有内容都打印到日志中再去检索倒是不需要这么做。
+    
+4. 运行 gdb
 
     ```shell
-    gdb /usr/sbin/zbs-chunkd core.xxx
+    /opt/rh/devtoolset-10/root/bin/gdb /usr/sbin/zbs-chunkd core.xxx | tee /tmp/your_gdb.log
+    (gdb) set height 0							# 多行输出时会全部输出
+    (gdb) set print elements 0			# 多列输出时不会有默认的 200 个元素限制
     ```
 
-    如果忘记加载符号表会有提示 missing 
+    如果忘记加载符号表会有提示 missing，另外将所有 gdb 输出也重定向到 /tmp/your_gdb.log 中方便查询。
 
-6. 在 gdb 中执行命令
+    如果只想保存指定部分日志的话
 
     ```shell
-    # 加载 zbs 源码
-    (gdb) source /tmp/zbs/src
-    # 加载简易命令
-    (gdb) source for-debug.py
+    (gdb) set logging file /tmp/your_gdb.log
+    (gdb) set logging on
+    (gdb) set height 0
+    (gdb) set print elements 0	
+    (gdb) do what you want...
+    (gdb) set logging off
     ```
 
 7. 打印 zbs 变量

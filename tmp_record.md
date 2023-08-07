@@ -1,19 +1,11 @@
-1. 问 jiewei gdb 中看 std::unoredered_map
-2. 问 wenquan 代码细节，http://gerrit.smartx.com/c/zbs/+/53609
-3. 把 LOG_FIRST_N 的日志换回原来的，http://gerrit.smartx.com/c/zbs/+/52551，补一下 src 可能会被 owner 替换的日志，migrate 下发的日志除了 lease owner 之外带上 prefer local
-4. RecoverManager::ShowRecoverParameter 调整
-    parameter->set_recover_trigger_inteval_s(FLAGS_reposition_trigger_interval_ms / 1000);
-5. 问 fanyang，一个集群中默认创建的 3 个 pool 是干嘛用的？zbs-images、nfs-volume-template、zbs-volumes
-6. 已有的选择 replace 逻辑有误，replace cid 不一定是 alive 的，他只是从 location 中选，不一定在 alive location（虽然大概率在），所以我们要从 alive 中选，改对应代码， RecoverManager::GetSrcAndReplace() ，https://smartx1.slack.com/archives/D01U7SLCBPY/p1690881969586999
-7. python 侧做正整数判断，
-8. http://gerrit.smartx.com/c/zbs/+/53689 代码更新，并补充对应的 zbs cli
-9. zbs cli 中加上 reposition cli，并添加 rpc
+1. python 侧做正整数判断，
+2. http://gerrit.smartx.com/c/zbs/+/53689 代码更新，并补充对应的 zbs cli
+3. zbs cli 中加上 reposition cli，并添加 rpc
     1. 能够观察 recover 真正 IO 的数据量，block 粒度的（比如如果有敏捷恢复，这个 pextent 就不会恢复 256 MB）
     2. 能够查看 generate/pending_recover 的数量
     3. 能够查看 need_migrate 的数量
-10. 智能模式中，值变化的时候添加 log
-11. zhiwei 发现的已有几个 bug 修完
-12. thread 里面给解释，不再继续调查了。
+4. 智能模式中，值变化的时候添加 log
+5. zhiwei 发现的已有几个 bug 修完（prefer local 变更逻辑放到最后）
 
 
 
@@ -30,8 +22,6 @@
 scan_extents_num 应该放在 ReGenerateMigrateForUnevenVolume 这个函数中去做统计，虽然实际上 all_pool 中就一个，且一次只会因为一种方式去 migrate(本地化/容量均衡)。
 
 GenerateRecoverCmds 里面的 src 也可以有选择策略的，目前的写法太乱了。
-
-recover manager 代码中有些地方用 `pextent_table_`，有些用 `context_->pextent_table`，或许可以统一起来
 
 低负载没有区分双活，中高负载开始有区分
 
@@ -490,7 +480,7 @@ protobuf 用法，https://bbs.huaweicloud.com/blogs/289568，参考我写的 rep
 
 遍历 repeat，https://blog.51cto.com/u_5650011/5389330
 
-
+stl 容器迭代器失效问题，https://stackoverflow.com/questions/6438086/iterator-invalidation-rules-for-c-containers
 
 对于 cmp
 
