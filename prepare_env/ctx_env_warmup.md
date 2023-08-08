@@ -35,18 +35,22 @@ alias gs='git status'
 alias gsu='git submodule update --init --recursive'
 alias gp='git pull'
 
+zbs_compile_prepare() {
+cd /home/code/$1 && rm -rf build/ && mkdir build && cd build && cmake3 -DBUILD_MOLD_LINKER=ON -G Ninja ..
+}
+alias zcp=zbs_compile_prepare
+
 zbs_compile() {
-docker run --rm --privileged=true -v /home/code/$1:/zbs -w /zbs registry.smtx.io/zbs/zbs-buildtime:el7-x86_64 sh -c "sh ./script/format.sh && cd build && ninja zbs_test $2"
+cd /home/code/$1 && ./script/format.sh && cd build && mold -run ninja zbs_test $2
 }
 alias zc=zbs_compile
 
+# 第三个参数用来添加 --gtest_repeat=100
 zbs_run_test() {
-cd /home/code/$1/build/src && ./zbs_test --gtest_filter="*$2*"
+cd /home/code/$1/build/src && ./zbs_test --gtest_filter="*$2*" $3
 }
 alias zrt=zbs_run_test
 ```
-
-
 
 #### Iterms2
 

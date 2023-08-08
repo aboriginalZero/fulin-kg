@@ -220,7 +220,7 @@ pick 到非 master 分支如 v5.4.x 时
 
 1. git rebase -i HEAD^^，有几个 commit 就打几个 ^，
 2. 然后把要改的 commit 设置为 edit，就可以直接在 vs code 上改被设成 edit 的 n 个 patch；
-3. 每个 patch 改完都需要 gca 再 git rebase --continue；
+3. 每个 patch 改完都需要 ga gca 再 git rebase --continue；
 4. 全部改完后，再 git review，会把所有 commit 都更新到 gerrit，需要手动去每个 patch 执行 /runtest。
 
 

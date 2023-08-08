@@ -1,13 +1,32 @@
-1. python 侧做正整数判断，
-2. http://gerrit.smartx.com/c/zbs/+/53689 代码更新，并补充对应的 zbs cli
-3. zbs cli 中加上 reposition cli，并添加 rpc
+1. http://gerrit.smartx.com/c/zbs/+/53689 代码更新，并补充对应的 zbs cli
+2. zbs cli 中加上 reposition cli，并添加 rpc
     1. 能够观察 recover 真正 IO 的数据量，block 粒度的（比如如果有敏捷恢复，这个 pextent 就不会恢复 256 MB）
     2. 能够查看 generate/pending_recover 的数量
     3. 能够查看 need_migrate 的数量
-4. 智能模式中，值变化的时候添加 log
-5. zhiwei 发现的已有几个 bug 修完（prefer local 变更逻辑放到最后）
+3. python 侧做限速的正整数判断，智能模式中，值变化的时候添加 log
 
 
+
+如果都给了 topology 且两个副本的 zone distance, topo distance 都相同的情况下，LocalizedComparator 和 TopoAwareComparator 区别在于：
+
+1. 前者只有在 owner = 0 时，选第一个 cid 时会用 recover_comparator，否则用 ring id 比较；
+2. 后者全部用 recover_comparator 比较，也就是先 recover cmd num 再容量。
+
+就一个副本并且跟 prefer local 不在一个 zone，那么 recover_prefer = 剩下的这个副本。如果就一个副本，并且跟 prefer local 在一个 zone，又会怎么样呢？
+
+comparator->UpdateChunkSet 这个地方，如果还剩的 2 副本并不符合 topo 安全，那么是会按照放进去的第 2 个副本来选择后面的第 3 个副本
+
+```c++
+LOOP(candidate_dst_chunks.size()) {
+        LOG(INFO) << "yiwu candidate_dst_chunks " << i << " " << candidate_dst_chunks[i].id();
+    }
+
+LOOP(comparator->cids.size()) { LOG(INFO) << "yiwu push in cids " << comparator->cids[i].first; }
+
+LOG(INFO) << (all_in_same_zone ? "all_in_same_zone" : "not");
+LOG(INFO) << "all_zone_idx " << all_zone_idx;
+LOG(INFO) << "prefer_zone_idx " << prefer_zone_idx;
+```
 
 
 
