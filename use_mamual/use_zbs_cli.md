@@ -3,12 +3,21 @@
 ### 本地编译
 
 ```shell
+# alias 命令
+zcp zbs; zc zbs3
+
 # 格式化 + 非首次编译
-cd /home/code/zbs3 && ./script/format.sh && cd build && ninja zbs_test
-zc zbs3
+cd /home/code/zbs3 && ./script/format.sh && cd build && mold -run ninja zbs_test
+
 # 首次编译
-cd /home/code/zbs3 && rm -rf build/ && mkdir build && cd build && cmake -G Ninja ..
-ninja zbs_test zbs-metad
+cd /home/code/zbs3 && rm -rf build/ && mkdir build && cd build && cmake -DBUILD_MOLD_LINKER=ON -G Ninja ..
+mold -run ninja zbs_test zbs-metad
+
+# 清空缓存，显示缓存统计信息
+ccache -z; 	ccache -s;
+
+# 开启多种编译特性
+cmake3 -DCMAKE_BUILD_TYPE=Release -DUSE_SANITIZE=address -DBUILD_BENCHMARKS=ON -GNinja ..; 
 # 运行单测
 cd /home/code/zbs3 && ./src/zbs_test --gtest_filter="*FunctionalTest.WriteResize*"  --gtest_repeat=100
 zrt zbs3 FunctionalTest.WriteResize
