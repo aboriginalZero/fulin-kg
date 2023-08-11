@@ -1,9 +1,13 @@
 1. http://gerrit.smartx.com/c/zbs/+/53689 代码更新，并补充对应的 zbs cli
-2. zbs cli 中加上 reposition cli，并添加 rpc
+2. zbs cli 中加上 reposition cli，并添加 rpc，跟手动触发 mgirate rpc 指令一起做
     1. 能够观察 recover 真正 IO 的数据量，block 粒度的（比如如果有敏捷恢复，这个 pextent 就不会恢复 256 MB）
     2. 能够查看 generate/pending_recover 的数量
     3. 能够查看 need_migrate 的数量
-3. python 侧做限速的正整数判断，智能模式中，值变化的时候添加 log
+3. 智能模式中，值变化的时候添加 log
+
+
+
+
 
 
 
@@ -123,6 +127,8 @@ chunk.chunk_space_info.thin_used_data_space 包含这个 chunk 最近一次上�
    用一个 metadb 放下所有相关的参数
 
    目前的写法好像都是先更新内存再更新 metaDB，需要调整顺序吗？
+   
+   ZBS-25386 有描述一个当 lsm 读取速度过慢时，会导致大部分迁移命令超时的问题，因此并发度也可以根据 lsm 读取速率来调节
 
 
 
