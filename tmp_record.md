@@ -1,13 +1,84 @@
+策略类梳理（seq means prior）
+
+1. 通过 rpc 显示指定的 recover cmd（这个不一定要支持）
+
+2. 周期性扫描产生的 recover cmd
+
+    待做 [ZBS-21199](http://jira.smartx.com/browse/ZBS-21199)，支持设置允许 recover 的时段，不在该时段内仅做 partial recover。在判断每个 pid 是否需要 recover 时，每个 pid 拿到 pentry 的时候就可以判断如果期望副本是 3 而目前副本是 2 时，不用触发 recover。
+
+    往 UpdatableRecoverParams 中增加 2 个字段，start hour  end_hour。同时，通过这个 patch 改 recover 的触发策略，IsNeedRecover。
+
+3. 预期内的节点下线
+
+    ReGenerateMigrateForRemovingChunk()
+
+    待做 [ZBS-21443](http://jira.smartx.com/browse/ZBS-21443)，节点移除还要考虑其他节点的负载情况。
+
+    因为节点移除时，他上面的副本需要马上迁移完，否则那条 cli 就一直执行不完。从存储池中移除节点的时候，仅考虑 migrate dst cid 在不迁出副本的情况下是否可以容纳待迁移的数据，但这样可能导致 dst cid 超高负载或满载后，副本还没迁移完。
+
+    例如节点 a b c d ，存在大量 extent 的 3 副本分布在 b c d，此时如果移除 c ，那么只能向 a 迁移，a 如果容量较小，可能会被 c 来的数据填满。
+
+    这个过程中，当 a 进入高负载，可以考虑将部分副本移出，以腾出空间给 c 要移动过来的副本。需要确认一下 a 在作为 migrate dst 且进入高负载时，是否有机会把自己可迁移的数据迁移出去。
+
+    要在这个逻辑里加上，到了超高负载时，先执行 ReGenerateMigrateForBalanceInStoragePool()
+
+4. 通过 rpc 显示指定的 migrate cmd
+
+    待做 [ZBS-20993](http://jira.smartx.com/browse/ZBS-20993)，允许 rpc 触发 migrate 命令，应该可以和预期内的节点下线合在一起做，因为他们的优先级都会更高，需要马上看到迁移效果
+
+    可以对外做 2 个接口，一个是 pid 为粒度的，一个是 volume 为粒度的（MigrateForVolumeRemoving）
+
+5. 低负载
+
+    ReGenerateMigrateForLocalizeInStoragePool()，让副本位置符合 LocalizedComparator
+
+6. 中高负载
+
+    中高负载目前实际上的区别仅在：
+
+    1. 中负载每 1h 扫描一次，高负载每 5min 扫描一次；
+    2. 中负载不移动 local 和 parent 的 pextent，高负载会移动；
+
+    如果 ReGenerateMigrateForRepairTopo 生成了 cmd，那么只生成这个目标的 cmd，否则试图去生成 ReGenerateMigrateForBalanceInStoragePool 的 cmd
+
+    需要对 ReGenerateMigrateForBalanceInStoragePool() 改进，先保证都有本地副本，再去做容量均衡
+
+    待做 [ZBS-13401](http://jira.smartx.com/browse/ZBS-13401)，让中高负载的容量均衡策略都要保证 prefer local 本地的副本不会被迁移，且如果 prefer local 变了，那么也要让他所在的 chunk 有一个本地副本（有个上限是保留归保留，但如果超过 95%，超过的 部分不考虑 prefero local 一定有对应的副本）。
+
+7. 超高负载
+
+    跳过 topo repair 扫描，只做 ReGenerateMigrateForBalanceInStoragePool()
+
+所以，先做
+
+1. ZBS-13401
+
+   目前在高负载情况下，数据不再会遵循本地化分配原则，而是会尽量的均匀分布。这可能会造成部分虚拟机在迁移之后和原来的性能有较大的差异。需要考虑改善这个场景，也许有两个方向需要考虑：
+
+   - 允许用户用命令行触发一个集中策略（向指定的节点聚集一个副本，不需要完整局部化，仅本地化即可），但是不能让指定节点进入超高负载状态（95%）
+   - 调整平衡策略，在中高负载集群相对均衡后，尝试本地化聚集（不需要局部化，仅保证一个副本在 prefer cid 所在节点即可）
+
+   prefer local 节点上没有副本的入口有且仅有这 2 个：
+
+   1. 高负载情况下，prefer local 的数据会被迁移；
+   2. 虚拟机热迁移（用户操作、无法干预）且处于高负载，此时不会做 prefer local 的副本迁移。
+
+2. ZBS-21443、ZBS-20993
+
+3. ZBS-21199
+
+
+
+
+
 1. http://gerrit.smartx.com/c/zbs/+/53689 代码更新，并补充对应的 zbs cli
 2. zbs cli 中加上 reposition cli，并添加 rpc，跟手动触发 mgirate rpc 指令一起做
     1. 能够观察 recover 真正 IO 的数据量，block 粒度的（比如如果有敏捷恢复，这个 pextent 就不会恢复 256 MB）
     2. 能够查看 generate/pending_recover 的数量
     3. 能够查看 need_migrate 的数量
 3. 智能模式中，值变化的时候添加 log
-
-
-
-
+3. ZBS-25666 pick 到 v5.5.x
+3. 改 recover manager 中的函数名，比如 GenerateRecoverCmds 实际代表 DistributeRecoverCmds，还有计数相关的，recover 处有 2 个，可以精简的，把 recover 和 migrate 做到对称。
 
 
 
@@ -50,18 +121,6 @@ GenerateRecoverCmds 里面的 src 也可以有选择策略的，目前的写法�
 
 
 
-ZBS-25666
-
-一个是希望 prefe local 尽快能够变成正常节点
-
-另一个是根据老的 prefer local 得到的符合 LocalizedComparator 的 chunk list 的第 3 个希望能跟 prefer local 在一个可用域上，（要么遇到 prefer local 不存在的情况，放宽一次限制的阈值，不只 3 个，要么要去修改 LocalizedComparator 的逻辑，让它的第 4 个选跟 prefer local 在同一个可用域的）
-
-话说双活的选，为啥是先 2 个 prefer local zone 再 1 个 secondary zone？是不是该 1 ：1 ：1 的挑？
-
-
-
-
-
 ChunkTableEntry 的 last_succeed_heartbeat_ms 字段没用上
 
 连续快照的 allocated_data_space 不对劲
@@ -77,8 +136,6 @@ chunk.chunk_space_info.thin_used_data_space 包含这个 chunk 最近一次上�
 1. 能够观察 recover 真正 IO 的数据量，block 粒度的（比如如果有敏捷恢复，这个 pextent 就不会恢复 256 MB）
 2. 能够查看 generate/pending_recover 的数量
 3. 能够查看 need_migrate 的数量
-
-
 
 
 
@@ -134,8 +191,8 @@ chunk.chunk_space_info.thin_used_data_space 包含这个 chunk 最近一次上�
 
 区分 recover 还是 recover_migrate
 
-1. meta_grpc_server.h 需要同步添加新的 API 吗？
-2. 已有的 proto 中的 static recover limit 可以改名吗？会有升级兼容性问题吗？
+1. meta_grpc_server.h 需要同步添加新的 API 吗？不需要
+2. 已有的 proto 中的 static recover limit 可以改名吗？会有升级兼容性问题吗？不会
 
 meta 侧的参数在尽可能让 recover 变快的同时，要考虑自身一次的扫描时间，若扫描周期过长，无法立即触发数据的恢复和迁移
 
@@ -190,22 +247,6 @@ chunk recover 执行的慢可能原因：慢盘、缓存击穿、normal instead 
 这里问题的根源在于一个 recover 命令未能在 17 分钟内完成。
 
 ---
-
-
-
-ZBS-13401
-
-目前在高负载情况下，数据不再会遵循本地化分配原则，而是会尽量的均匀分布。这可能会造成部分虚拟机在迁移之后和原来的性能有较大的差异。需要考虑改善这个场景，也许有两个方向需要考虑：
-
-- 允许用户用命令行触发一个集中策略（向指定的节点聚集一个副本，不需要完整局部化，仅本地化即可），但是不能让指定节点进入超高负载状态（95%）
-- 调整平衡策略，在中高负载集群相对均衡后，尝试本地化聚集（不需要局部化，仅保证一个副本在 prefer cid 所在节点即可）
-
-prefer local 节点上没有副本的入口有且仅有这 2 个：
-
-1. 高负载情况下，prefer local 的数据会被迁移；
-2. 虚拟机热迁移（用户操作、无法干预）且处于高负载，此时不会做 prefer local 的副本迁移。
-
-
 
 改进迁移策略，在节点上待回收数据较多时（已经使用的数据空间占比超过 95%），如果集群没有进入极高负载状态（整体空间分配比例达到 90%），不向该节点迁移数据以保证回收顺利进行。
 
@@ -456,12 +497,99 @@ RecoverManager::AddRecoverCmdUnlock()
 
 
 
-migrate 和 recover 只是共用 RecoverCmd 这个数据结构，各自的命令队列（recover 是 std::set，migrate 是  std::list）、触发时机、同时触发的命令数都是不同的。
+migrate 和 recover 只是共用 RecoverCmd 这个数据结构，各自的命令队列（recover 是 std::set，migrate 是  std::list）、触发时机。
 
 
 IO 下发的流程
 
 NFS/iSCSI/nvmf -> ZBS Client -> access io handler -> generation syncor -> recover handler
+
+
+
+低负载，ReGenerateMigrateForLocalizeInStoragePool，没有对是否双活显式区分，都被封装到 LocalizedComparator 里了
+
+```c++
+dst_cid
+// dst_cid should meet: (seq means priority)
+//   1. prefer local;
+  
+// dst_cid must meet:
+//   - not failslow
+//   - enough cmd quota
+//   - enough remain valid space
+replace_cid
+// replace_cid should meet: (seq means priority)
+//   1. same zone with dst_cid;
+//   2. failslow;
+
+// replace_cid must meet:
+//   - not owner
+src_cid
+// src_cid should meet: (seq means priority)
+//   1. same zone with dst_cid;
+//   2. not failslow;
+
+// src_cid must meet:
+//   - enough cmd quota
+```
+
+节点移除
+
+```cpp
+dst_cid
+// dst_cid should meet: (seq means priority)
+//   1. not failslow
+//   2. same zone with prefer local
+//   3. comparator above
+
+// dst_cid must meet:
+//   - not in alive loc
+//   - not in exclude_cids
+//   - enough remain valid space
+//   - not in the same zone where in stretch cluster and size(all_src_chunks) > 	
+//     kMinReplicaNum, and all src chunks except replace_cid are located in
+ 
+src_cid
+// src_cid should meet: (seq means priority)
+//   1. not failslow
+//   2. same zone with dst_cid
+
+// src_cid must meet:
+//   - none
+```
+
+中高负载以 topo 安全为目的
+
+```cpp
+replace_cid
+// replace cid must meet
+//   - not prefer local
+//   - engough cmd quota
+
+// replace cid should meet
+//   1. not owner
+//   2. failslow
+//   3. lower available capacity
+
+src_cid
+// src_cid must meet:
+//   - not failslow
+
+// src_cid should meet:
+//   - none
+
+dst_cid
+// dst_cid must meet:
+//   - not failslow
+//   - not src_cid
+//   - enough remain valid space
+//   - better topo safety than replace cid
+
+// dst_cid should meet:
+//   1. prefer local
+```
+
+中高负载，在 topo 安全不降级的情况下，优先选 prefer local，在这里我只需要调一下顺序就好，先 dst_cid 再 src_cid 再 replace_cid
 
 
 
