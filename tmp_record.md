@@ -1,13 +1,69 @@
+策略类梳理（seq means prior）
+
+1. 通过 rpc 显示指定的 recover cmd（这个不一定要支持）
+
+2. 周期性扫描产生的 recover cmd
+
+    待做 [ZBS-21199](http://jira.smartx.com/browse/ZBS-21199)，支持设置允许 recover 的时段，不在该时段内仅做 partial recover。在判断每个 pid 是否需要 recover 时，每个 pid 拿到 pentry 的时候就可以判断如果期望副本是 3 而目前副本是 2 时，不用触发 recover。
+
+    往 UpdatableRecoverParams 中增加 2 个字段，start hour  end_hour。同时，通过这个 patch 改 recover 的触发策略，IsNeedRecover。
+
+3. 预期内的节点下线
+
+    ReGenerateMigrateForRemovingChunk()
+
+    待做 [ZBS-21443](http://jira.smartx.com/browse/ZBS-21443)，节点移除还要考虑其他节点的负载情况。
+
+    因为节点移除时，他上面的副本需要马上迁移完，否则那条 cli 就一直执行不完。从存储池中移除节点的时候，仅考虑 migrate dst cid 在不迁出副本的情况下是否可以容纳待迁移的数据，但这样可能导致 dst cid 超高负载或满载后，副本还没迁移完。
+
+    例如节点 a b c d ，存在大量 extent 的 3 副本分布在 b c d，此时如果移除 c ，那么只能向 a 迁移，a 如果容量较小，可能会被 c 来的数据填满。
+
+    这个过程中，当 a 进入高负载，可以考虑将部分副本移出，以腾出空间给 c 要移动过来的副本。需要确认一下 a 在作为 migrate dst 且进入高负载时，是否有机会把自己可迁移的数据迁移出去。
+
+    要在这个逻辑里加上，到了超高负载时，先执行 ReGenerateMigrateForBalanceInStoragePool()
+
+4. 通过 rpc 显示指定的 migrate cmd
+
+    待做 [ZBS-20993](http://jira.smartx.com/browse/ZBS-20993)，允许 rpc 触发 migrate 命令，应该可以和预期内的节点下线合在一起做，因为他们的优先级都会更高，需要马上看到迁移效果
+
+    可以对外做 2 个接口，一个是 pid 为粒度的，一个是 volume 为粒度的（MigrateForVolumeRemoving）
+
+5. 低负载
+
+    ReGenerateMigrateForLocalizeInStoragePool()，让副本位置符合 LocalizedComparator
+
+6. 中高负载
+
+    （中高负载目前实际上的区别仅在：中负载每 1h 扫描一次，高负载每 5min 扫描一次，其他没有任何区别）
+
+    如果 ReGenerateMigrateForRepairTopo 生成了 cmd，那么只生成这个目标的 cmd，否则试图去生成 ReGenerateMigrateForBalanceInStoragePool 的 cmd
+
+    需要对 ReGenerateMigrateForBalanceInStoragePool() 改进，先保证都有本地副本，再去做容量均衡
+
+    待做 [ZBS-13401](http://jira.smartx.com/browse/ZBS-13401)，中高负载下执行的容量均衡迁移时，保留本地副本不迁移
+
+7. 超高负载
+
+    跳过 topo repair 扫描，只做 ReGenerateMigrateForBalanceInStoragePool()
+
+所以，先做
+
+1. ZBS-13401
+2. ZBS-21443、ZBS-20993
+3. ZBS-21199
+
+
+
+
+
 1. http://gerrit.smartx.com/c/zbs/+/53689 代码更新，并补充对应的 zbs cli
 2. zbs cli 中加上 reposition cli，并添加 rpc，跟手动触发 mgirate rpc 指令一起做
     1. 能够观察 recover 真正 IO 的数据量，block 粒度的（比如如果有敏捷恢复，这个 pextent 就不会恢复 256 MB）
     2. 能够查看 generate/pending_recover 的数量
     3. 能够查看 need_migrate 的数量
 3. 智能模式中，值变化的时候添加 log
-
-
-
-
+3. ZBS-25666 pick 到 v5.5.x
+3. 改 recover manager 中的函数名，比如 GenerateRecoverCmds 实际代表 DistributeRecoverCmds，还有计数相关的，recover 处有 2 个，可以精简的，把 recover 和 migrate 做到对称。
 
 
 
@@ -456,7 +512,7 @@ RecoverManager::AddRecoverCmdUnlock()
 
 
 
-migrate 和 recover 只是共用 RecoverCmd 这个数据结构，各自的命令队列（recover 是 std::set，migrate 是  std::list）、触发时机、同时触发的命令数都是不同的。
+migrate 和 recover 只是共用 RecoverCmd 这个数据结构，各自的命令队列（recover 是 std::set，migrate 是  std::list）、触发时机。
 
 
 IO 下发的流程
