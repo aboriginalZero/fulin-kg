@@ -38,12 +38,9 @@
 
     1. 中负载每 1h 扫描一次，高负载每 5min 扫描一次；
     2. 中负载不移动 local 和 parent 的 pextent，高负载会移动；
-
-
-    如果 ReGenerateMigrateForRepairTopo 生成了 cmd，那么只生成这个目标的 cmd，否则试图去生成 ReGenerateMigrateForBalanceInStoragePool 的 cmd
     
-    需要对 ReGenerateMigrateForBalanceInStoragePool() 改进，先保证都有本地副本，再去做容量均衡
-
+    如果 ReGenerateMigrateForRepairTopo 生成了 cmd，那么只生成这个目标的 cmd，否则试图去生成 ReGenerateMigrateForBalanceInStoragePool 的 cmd。需要对 ReGenerateMigrateForBalanceInStoragePool() 改进，先保证都有本地副本，再去做容量均衡。
+    
     待做 [ZBS-13401](http://jira.smartx.com/browse/ZBS-13401)，让中高负载的容量均衡策略都要保证 prefer local 本地的副本不会被迁移，且如果 prefer local 变了，那么也要让他所在的 chunk 有一个本地副本（有个上限是保留归保留，但如果超过 95%，超过的 部分不考虑 prefero local 一定有对应的副本）。
 
 7. 超高负载
@@ -591,6 +588,45 @@ dst_cid
 ```
 
 中高负载，在 topo 安全不降级的情况下，优先选 prefer local，在这里我只需要调一下顺序就好，先 dst_cid 再 src_cid 再 replace_cid
+
+
+
+现有迁移策略：
+
+1. 移除节点迁移；
+2. 均匀分布迁移；
+3. 据负载做不同迁移：
+    1. 低负载：本地化分布迁移（包含本地化 + 局部化 + topo 安全）
+    2. 中高负载 ：topo 安全迁移（仅包含 topo 安全）+ 容容量均衡迁移，如果 topo 安全迁移生成了 cmd，跳过容量均衡迁移，否则根据容量均衡生成 cmd；
+    3. 超高负载：只做容量均衡迁移。
+
+引入 prio-extent 后：
+
+1. 移除节点上 prio-extent 的迁移；
+2. 移除节点上 normal-extent 的迁移；
+3. normal volume 均匀分布迁移；（prio-extent 支持均匀分布吗？）
+4. 据负载做不同迁移：
+    1. 低负载且 allocated_prs > valid_cache_space：将 
+    1. 低负载：allocated_prs > valid_cache_space 
+
+
+
+在通常分配，迁移和恢复副本的开始阶段都需要分配一个副本，对于 prio-replica，我们可以定义出三个副本放置级别：
+
+1. 只有 allocated_prs + extent_size <= planned_prs && allocated_data_space + extent_size < valid_data_space 时允许放置 replica；
+
+2. 在 allocated_prs + extent_size <= valid_cache_space && allocated_data_space + extent_size < valid_data_space 时允许放置 replica；
+
+    这种场景下，prio-replica 可能会挤占节点的 normal-replica 的 cache 空间，造成 normal extent 的性能降级。
+
+3. 在 allocated_data_space + extent_size <= valid_data_space 时允许放置；
+    1. 放置到版本包含了 pinperf 特性的节点；
+    2. 放置到低版本的节点（包含 LSM1 的节点）；
+    
+    prio-replica 可能会部分或全部地被放置到容量层设备上，可能造成 prio-replica 性能降级
+
+称为 prio-replica 放置级别 1,2,3，3 细分为 3.a 和 3.b。除非特别指明，放置级别更高的副本放置策略仍然会首先尝试将副本按照低放置级别的策略放置 prio-replica，例如一个放置级别 3 的副本放置，会优先寻找 allocated_prs + extent_size <= planned_prs 的节点。
+
 
 
 
