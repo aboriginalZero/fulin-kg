@@ -556,7 +556,7 @@ src_cid
 //   - none
 ```
 
-中高负载以 topo 安全为目的
+中高负载以 topo 安全为目的的迁移
 
 ```cpp
 replace_cid
@@ -585,9 +585,78 @@ dst_cid
 
 // dst_cid should meet:
 //   1. prefer local
+  
 ```
 
 中高负载，在 topo 安全不降级的情况下，优先选 prefer local，在这里我只需要调一下顺序就好，先 dst_cid 再 src_cid 再 replace_cid
+
+中高负载，容量均衡迁移，
+
+```cpp
+// 可以容忍容量没那么均匀
+// 允许最高负载和最低的如果 ratio 相差不超过 0.01 或者 extent 数量不超过 20 个
+
+1. 厚制备副本；
+2. 不是被克隆/快照的精简制备副本（没有 origin pid）；
+3. 被克隆/快照的精简制备副本（有 origin pid）
+```
+
+超高负载，容量均衡迁移，
+
+之前的迁移都是遍历 pid，而容量均衡迁移是先遍历 chunk 配对选出 replace_chunk 和 dst_chunk，然后才是从中选出合适的 pid。
+
+```cpp
+// replace_cid should meet:
+//   1. bigger rx + tx		(值得商榷)
+//   2. bigger cache use
+//   3. bigger partition use
+
+// replace_cid must meet:
+//   - partition used ratio > cluster avg partition used ratio
+
+// dst_cid should meet:
+//   1. smaller rx + tx
+//   2. smaller cache use
+//   3. smaller partition use
+
+// dst_cid must meet:
+//   - not failslow
+//   - not select by pre src_cid
+//   - not >95% when cluster avg partition used ratio < 95%
+```
+
+如果选出的 replace_cid 和 dst_cid 不在一个 zone，直接返回了（这其实没有利用上跨 zone 节点的存储能力）
+
+接下来选 src_cid 上的 pid，中负载不迁移 lease owner、parent、prefer local、even，高负载不迁移 lease owner、even，允许迁移 parent 和 prefer local。
+
+```cpp
+// pid should meet:
+//   1. thick
+//   2. thin and origin_id == 0
+//   3. thin and origin_id != 0
+
+// pid must meet (medium load):
+//   - not temp replica
+//   - not lease owner
+//   - not thin and origin != 0		(allow in high load)
+//   - not prefer local						(allow in high load)
+//   - not even
+//   - better and equal topo safety
+//   - replace_cid and dst_cid have engough cmd quota
+
+// src_cid 默认等于 replace_cid，
+// 如果 failslow，那么从活跃副本中选出不是 failslow 的第一个，否则不生成 cmd
+
+
+// src_cid should meet:
+//   1. replace_cid
+//   2. 还可以添加 same zone with dst
+
+// src_cid must meet:
+//   - not failslow
+```
+
+
 
 
 
@@ -603,11 +672,31 @@ dst_cid
 引入 prio-extent 后：
 
 1. 移除节点上 prio-extent 的迁移；
+
 2. 移除节点上 normal-extent 的迁移；
-3. normal volume 均匀分布迁移；（prio-extent 支持均匀分布吗？）
+
+3. normal volume 均匀分布迁移（不论是 prio-extent 还是 normal extent）；
+
 4. 据负载做不同迁移：
-    1. 低负载且 allocated_prs > valid_cache_space：将 
-    1. 低负载：allocated_prs > valid_cache_space 
+    1. allocated_prs > valid_cache_space：将在容量层的 prio-extent 优先迁移到 prs，再是性能层非 prs 空间上的 prio-extent 迁移到 prs；
+    1. valid_cache_space > allocated_prs > planned_prs：将在性能层非 prs 空间上的 prio-extent 迁移到 prs；
+    1. 若 allocated_prs < planned_prs，说明都在 prs 里，不需要迁移；
+    
+    在 pinperf 中分别定义了 high_prio_load、medium_prio_load、fine_prio_load 来对应这 3 种
+
+
+
+现有负载的计算是只算 partition 的已用比例。
+
+目前 migrate 中的逻辑是每次获取一个 pid 的 entry 都要通过 GetPhysicalExtentTableEntry 调用一次锁，但在 p rio-extent 的迁移中，可以批量获取 diff_pids 中所有的 pentry。
+
+
+
+
+
+1. planned_prs 是节点为 pinperf 预留的性能层空间，由 lsm 管理；
+2. allocated_prs 总是等于 prio-replica * 256MiB，由 meta 管理；
+3. downgraded_prs 是位于容量层的数据量，由 lsm 管理。
 
 
 
@@ -615,9 +704,11 @@ dst_cid
 
 1. 只有 allocated_prs + extent_size <= planned_prs && allocated_data_space + extent_size < valid_data_space 时允许放置 replica；
 
+    说明此时在 prs 放得下，可以把在 2 3 场景下的副本迁过来
+
 2. 在 allocated_prs + extent_size <= valid_cache_space && allocated_data_space + extent_size < valid_data_space 时允许放置 replica；
 
-    这种场景下，prio-replica 可能会挤占节点的 normal-replica 的 cache 空间，造成 normal extent 的性能降级。
+    说明此时在性能层的其他空间放得下，可以把 3 场景下的副本迁过来，这种场景下，prio-replica 可能会挤占节点的 normal-replica 的 cache 空间，造成 normal extent 的性能降级。
 
 3. 在 allocated_data_space + extent_size <= valid_data_space 时允许放置；
     1. 放置到版本包含了 pinperf 特性的节点；
@@ -626,6 +717,18 @@ dst_cid
     prio-replica 可能会部分或全部地被放置到容量层设备上，可能造成 prio-replica 性能降级
 
 称为 prio-replica 放置级别 1,2,3，3 细分为 3.a 和 3.b。除非特别指明，放置级别更高的副本放置策略仍然会首先尝试将副本按照低放置级别的策略放置 prio-replica，例如一个放置级别 3 的副本放置，会优先寻找 allocated_prs + extent_size <= planned_prs 的节点。
+
+
+
+prio-extent 需要考虑 prefer local 和 lease owner、failslow、topo 安全、节点 prio 类容量、剩余 cmd 配额、pior 负载、是否双活、是否 even volume、是否有过克隆/快照行为。
+
+
+
+
+
+1. 在 Pin in perf 出现 over load 情况的时候需要加速迁移任务
+2. Pin extent 迁移过程中也应该占用 Pin 的 space 计数
+3. 
 
 
 
