@@ -692,6 +692,39 @@ dst_cid
 
 
 
+```cpp
+/*
++--------------------------+----------------------------------------------+
+| +-------------+		       |   																						|
+| | planned_prs |          |																							|
+| +-------------+          | 																							|
+|   valid_cache_space      |               valid_data_space								|
++--------------------------+----------------------------------------------+
+
+what prio_load of chunk depends on its allocated_prioritized_space(replace with x)
+	1. low_prio_load_chunk    : x <= planned_prs
+	2. medium_prio_load_chunk : planned_prs < x < valid_cache_space
+	3. high_prio_load_chunk   : x > valid_cache_space
+
+if a chunk is in high_prio_load_chunk:
+	1. low_prio_data_space    = planned_prs
+	2. medium_prio_data_space = valid_cache_space - planned_prs
+	3. high_prio_data_space   = x - valid_cache_space
+
+if a chunk is in medium_prio_load_chunk:
+	1. low_prio_data_space    = planned_prs
+	2. medium_prio_data_space = x - planned_prs
+	3. high_prio_data_space   = 0
+
+if a chunk is in low_prio_load_chunk:
+	1. low_prio_data_space    = x - planned_prs
+	2. medium_prio_data_space = 0
+	3. high_prio_data_space   = 0
+*/
+```
+
+
+
 
 
 1. planned_prs 是节点为 pinperf 预留的性能层空间，由 lsm 管理；
