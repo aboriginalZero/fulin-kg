@@ -616,7 +616,7 @@ dst_cid
 //   - not >95% when cluster avg partition used ratio < 95%
 ```
 
-如果选出的 replace_cid 和 dst_cid 不在一个 zone，直接返回了（这其实没有利用上跨 zone 节点的存储能力）
+如果选出的 replace_cid 和 dst_cid 不在一个 zone，直接返回了（这其实没有利用上跨 zone 节点的存储能力，但其实一开始就根据不同 zone 分开了，所以这个判断其实是无效的）
 
 接下来选 src_cid 上的 pid，中负载不迁移 lease owner、parent、prefer local、even，高负载不迁移 lease owner、even，允许迁移 parent 和 prefer local。
 
@@ -856,12 +856,15 @@ replace_cid must meet:
 
 dst_cid should meet: (seq means priority)
   1. smaller allocated_prs
+  2. not lease owner （这个只能因 pid 而异，先不实现，有点复杂）
 
 dst_cid must meet:
   - not failslow
   - not select by prevent src_cid
-  - enough cmd quota
+  
+  // topo safety根据不同 pid 不同，后面 3 个是随着 pid 的数量而变化
   - topo safety replace_cid <= dst_cid
+  - enough cmd quota
   - enough remain planned prs when cluster avg allocated_prs < cluster avg planned prs 
   - enough remain cache space when cluster avg planned prs <= cluster avg allocated_prs < cluster avg cache space
 ```
@@ -879,6 +882,7 @@ src_cid should meet:
   
 src_cid must meet:
   - not failslow
+  - enough cmd quota
 ```
 
 
@@ -886,6 +890,49 @@ src_cid must meet:
 虽然我不懂为啥 prio-extent 不支持局部化
 
 现有代码在 EnqueueCmd 的时候会将 migrate src_cid 设置成 lease owner，但如果 src_cid 跟 dst_cid 跨 zone，或者是 failslow，（他可能没有 cmd quota 了，不过这个条件在生成时是硬性规定的，派发时倒不用）这么选还是好事吗？
+
+放到 commit 中
+
+```
+/*
+    +--------------------------+----------------------------------------------+
+    | +-------------+          |                                              |
+    | | planned_prs |          |                                              |
+    | +-------------+          |                                              |
+    |   valid_cache_space      |               valid_data_space               |
+    +--------------------------+----------------------------------------------+
+
+    what prio_load of chunk depends on its allocated_prioritized_space(replace with x)
+        1. low_prio_load_chunk    : x <= planned_prs
+        2. medium_prio_load_chunk : planned_prs < x < valid_cache_space
+        3. high_prio_load_chunk   : x > valid_cache_space
+
+    if a chunk is in high prio load:
+        1. low_prio_data_space    = planned_prs
+        2. medium_prio_data_space = valid_cache_space - planned_prs
+        3. high_prio_data_space   = x - valid_cache_space
+
+    if a chunk is in medium prio load:
+        1. low_prio_data_space    = planned_prs
+        2. medium_prio_data_space = x - planned_prs
+        3. high_prio_data_space   = 0
+
+    if a chunk is in low prio load:
+        1. low_prio_data_space    = x - planned_prs
+        2. medium_prio_data_space = 0
+        3. high_prio_data_space   = 0
+*/
+
+// 1. 把 used_data_space 挪到 used_planned_prs
+// 2. 把 used_data_space 挪到 used_cache_data_space
+// 3. 把 used_cache_data_space 挪到 used_planned_prs
+```
+
+1. 后续可以改进容量均衡迁移中 replace chunk 和 dst chunk 1 1 配对，可以改成尽可能让多个 src_cid 参与进来，除非所有 under chunk 都不行，才退出循环。
+2. http://gerrit.smartx.com/c/zbs/+/54622 patch 7 要拆分成几个小 patch
+3. RecoverManagerTest.RebalancePriority 没通过
+
+
 
 
 
