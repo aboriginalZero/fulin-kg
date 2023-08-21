@@ -934,6 +934,34 @@ src_cid must meet:
 
 
 
+```cpp
+bool ChunkTable::ReserveSpaceForReposition(pid_t pid, cid_t src, cid_t replaced, cid_t dst, bool enable_thick_extent, const PExtent& extent, uint32_t pextent_size) {
+                                        
+    LockGuard l(&chunk_table_mutex_);
+    DCHECK(pid);
+
+    if (extent.has_prioritized() && extent.prioritized()) {
+        auto repl_info = chunk_table_[replaced]->space_info();
+        auto dst_info = chunk_table_[dst]->space_info();
+        // replaced pextent in perf layer
+        if (repl_info.allocated_prioritized_space() > repl_info.valid_cache_space()) {
+            if (dst_info.allocated_prioritized_space() + kExtentSize > dst_info.valid_cache_space()) {
+                return false;
+            }
+        // replaced pextent in cap layer
+        } else {
+            if (dst_info.allocated_prioritized_space() + kExtentSize > dst_info.planned_prioritized_space()) {
+                return false;
+            }
+        }
+        chunk_table_[dst]->prioritized_pids.Insert(pid, pextent_size);
+        chunk_table_[dst]->UpdateSpaceInfo();
+    }
+}
+```
+
+
+
 
 
 
