@@ -712,10 +712,6 @@ if a chunk is in low_prio_load_chunk:
 */
 ```
 
-
-
-
-
 1. planned_prs 是节点为 pinperf 预留的性能层空间，由 lsm 管理；
 2. allocated_prs 总是等于 prio-replica * 256MiB，由 meta 管理；
 3. downgraded_prs 是位于容量层的数据量，由 lsm 管理。
@@ -891,76 +887,57 @@ src_cid must meet:
 
 现有代码在 EnqueueCmd 的时候会将 migrate src_cid 设置成 lease owner，但如果 src_cid 跟 dst_cid 跨 zone，或者是 failslow，（他可能没有 cmd quota 了，不过这个条件在生成时是硬性规定的，派发时倒不用）这么选还是好事吗？
 
-放到 commit 中
-
-```
-/*
-    +--------------------------+----------------------------------------------+
-    | +-------------+          |                                              |
-    | | planned_prs |          |                                              |
-    | +-------------+          |                                              |
-    |   valid_cache_space      |               valid_data_space               |
-    +--------------------------+----------------------------------------------+
-
-    what prio_load of chunk depends on its allocated_prioritized_space(replace with x)
-        1. low_prio_load_chunk    : x <= planned_prs
-        2. medium_prio_load_chunk : planned_prs < x < valid_cache_space
-        3. high_prio_load_chunk   : x > valid_cache_space
-
-    if a chunk is in high prio load:
-        1. low_prio_data_space    = planned_prs
-        2. medium_prio_data_space = valid_cache_space - planned_prs
-        3. high_prio_data_space   = x - valid_cache_space
-
-    if a chunk is in medium prio load:
-        1. low_prio_data_space    = planned_prs
-        2. medium_prio_data_space = x - planned_prs
-        3. high_prio_data_space   = 0
-
-    if a chunk is in low prio load:
-        1. low_prio_data_space    = x - planned_prs
-        2. medium_prio_data_space = 0
-        3. high_prio_data_space   = 0
-*/
-
-// 1. 把 used_data_space 挪到 used_planned_prs
-// 2. 把 used_data_space 挪到 used_cache_data_space
-// 3. 把 used_cache_data_space 挪到 used_planned_prs
-```
-
 1. 后续可以改进容量均衡迁移中 replace chunk 和 dst chunk 1 1 配对，可以改成尽可能让多个 src_cid 参与进来，除非所有 under chunk 都不行，才退出循环。
 2. http://gerrit.smartx.com/c/zbs/+/54622 patch 7 要拆分成几个小 patch
-3. RecoverManagerTest.RebalancePriority 没通过
+
+even prio extent 的修复拓扑处理
+
+prio 的 extent 的 topo repair 是需要一个单独的 patch 的，需要注意下，双活情况下也要正常的修复拓扑达到 2 + 1 的效果
 
 
 
-```cpp
-bool ChunkTable::ReserveSpaceForReposition(pid_t pid, cid_t src, cid_t replaced, cid_t dst, bool enable_thick_extent, const PExtent& extent, uint32_t pextent_size) {
-                                        
-    LockGuard l(&chunk_table_mutex_);
-    DCHECK(pid);
+pin 的 3 个参数
 
-    if (extent.has_prioritized() && extent.prioritized()) {
-        auto repl_info = chunk_table_[replaced]->space_info();
-        auto dst_info = chunk_table_[dst]->space_info();
-        // replaced pextent in perf layer
-        if (repl_info.allocated_prioritized_space() > repl_info.valid_cache_space()) {
-            if (dst_info.allocated_prioritized_space() + kExtentSize > dst_info.valid_cache_space()) {
-                return false;
-            }
-        // replaced pextent in cap layer
-        } else {
-            if (dst_info.allocated_prioritized_space() + kExtentSize > dst_info.planned_prioritized_space()) {
-                return false;
-            }
-        }
-        chunk_table_[dst]->prioritized_pids.Insert(pid, pextent_size);
-        chunk_table_[dst]->UpdateSpaceInfo();
-    }
-}
-```
+1. meta 下发的 planned_prs 是 extent 粒度，值等于 valid_cache_space * prio_space_percentage，valid_cache_space 是 lsm 上一轮心跳汇报的结果，prio_space_percentage 是用户通过 rpc 设置的值；
+
+   > 除了 rpc 更新会立即下发最新的 prio_space_percentage，在日常心跳中每轮也会通过 reserve_prio_space 字段下发给 lsm
+
+2. meta 下发的 allocated_prs 是 extent 粒度，值等于 prioritized_pids * 256 MiB；
+
+   > lsm 目前汇报的 allocated_prs = prior_extent_num * extent_size，不管实际数据使用量多少，也不管有没有共享 pblob，不过它汇报的这个值目前还没用，以后想用的话用 Meta - LSM 的就知道哪些空间还没有落到 LSM 上
+
+3. lsm 汇报的 downg_prs 是 pblob 粒度，值等于 (all_prior_pblob - (planned_prs * 1024)) * 256 KiB，不管 prio pblob 是在 normal cache 还是 partition；
+
+   > 由于会有共享的 pblob，所以即使汇报的 allocated_prs > planned_prs，downg_prs 也可能为 0
 
 
+
+prio pblob 生命周期：
+
+1. planned_prs 是在 meta 侧的值，也是用户视角的 prio 的空间大小，通过心跳下发给 chunk，LSM 为其在 cache 中预留 planned_prs * 1024 个 pblob 的空间（即 prio pblob，仅预留，未实际使用）；
+2. 对 prio volume IO 时，卷内分配 prio extent，meta 下发请求到 lsm，lsm 根据这个 prio extent 实际使用的 pblob 数（extent 未必写满）在 prio pblob 预留空间里去分配 prio pblob；
+3. 在 prio IO 一段时间后，如果预留的 prio pblob 空间都写完了，就会用 normal cache，此时 downg_prs 开始从 0 递增；
+4. 继续分配 prio pblob 到 normal cache 都被用尽，那只能分配到 paritition 上，在 partition 上的 pblob 也算在 downg_prs 里面。
+
+预期内的 planned_prs 都是小于 valid_cache_space 的，但如果出现掉 cache 盘，会导致 planned_prs > valid_cache_space，在掉盘而 planned_prs 还没更新的这段时间里，prio extent 会分配到 partition，但在一次心跳过后（request 传递 valid_cache_space，response 据此计算 reserved_prio_space 并下发作为 lsm 的 planned_prs）又可以保证 planned_prs < valid_cache_space。
+
+
+
+在 lsm 视角，extent 只是 pblob 的数据集合，实际承担数据的是 256 KiB 的 pblob。
+
+5.5.x 开始，prio extent 在 planned_prs 内的数据会常驻 cache 层，而 normal extent 是保留之前的 IO 行为：
+
+1. IO 到 lsm 侧是先写 cache 层，cache 层的 pblob 会被 writeback 到 parition 层，在 cache 负载率超过 90% 时， writeback 完了之后变成 clean 的 pblob 会被淘汰；
+
+   >  cache 负载率不高的话，writeback 了也不会被淘汰，淘汰的操作就是更改 pblob 的元数据，把 pblob 的 cache_blob_id 设为空，这样数据就不存在于 cache 上了，释放的 cache block 又可以被其他 pblob 重用。
+   > writeback 一直在进行，只是限速会动态改变，当 cache 负载率高的话，writeback 速度会加快，当 APP IO 多的话，writeback 速度会调低。
+2. 当 partition 层数据被多次访问后会 promote 到 cache 层，判断条件是 30 分钟内访问 3 次，此时数据在 cache 和 partition 中各有一份。
+
+
+
+如果节点上的 replica 发生 cow 的话，direct_prs 会瞬间减小而导致写入因为等待空闲 cache 而阻塞，也需要预先下刷以避免阻塞
+
+pin 的 allocation 中的空间计算方式，以及初次写的 lease，怎么传递 prioritized 给 lsm
 
 
 
