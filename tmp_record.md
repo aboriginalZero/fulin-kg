@@ -742,157 +742,10 @@ prio-extent 需要考虑 prefer local 和 lease owner、failslow、topo 安全�
 
 
 
-1. 移除节点上 prio-extent 的迁移
-2. 将 prior-extent 与 normal extent 策略单独开来
-3. 为避免性能下降，需要做本地化处理
-4. 在 Pin in perf 出现 over load 情况的时候需要加速迁移任务
-5. Pin extent 迁移过程中也应该占用 Pin 的 space 计数
-6. pin 容量均衡中不允许拓扑降级。
-7. pin 且 even 的卷，按照已有的 even 策略执行。
-
-
-
-独立处理 prio-extent 的迁移逻辑，不跟 normal extent 搅和。
-
-even prio-pextent 迁移
-
-跟已有的 normal pextent 均匀策略保持一致
-
-节点移除
-
-replace_cid 是要被移除的节点，因此为该节点上的所有 prio-extent 选符合条件的 dst_cid 和 src_cid
-
-```
-dst_cid should meet: (seq means priority)
-  1. not failslow
-  2. same zone with prefer local
-  3. PrioRecoverComparator 
-
-dst_cid must meet:
-  - not in alive loc
-  - not in exclude_cids
-  - enough remain valid space
-  - not in the same zone where in stretch cluster and size(all_src_chunks) > 	
-    kMinReplicaNum, and all src chunks except replace_cid are located in
-
-src_cid should meet: (seq means priority)
-  1. not failslow
-  2. same zone with dst_cid
-
-src_cid must meet:
-  - none
-```
-
-这边如果用了 PrioRecoverComparator 除了支持 3 种 level 外，还会支持本地化 + 局部化 + topo 安全的。但后续的迁移又不支持局部化，我认为应该统一起来，都不支持局部化。
-
-另外，目前代码里节点移除时的迁移跟副本恢复用的是同一个策略：ElasticAllocator::AllocRecoverReplica()
-
-所以建议应该让 PrioRecoverComparator 继承 TopoAwareComparator，只保留本地化 +  topo 安全。
-
-
-chunk 级别的 prio-space 负载分为 3 种，计算方式：
-
-1. 低负载（low_prior_load）： allocated_prs <= planned_prs；
-2. 中负载（medium_prior_load）：planned_prs < allocated_prs <= valid_cache_space；
-3. 高负载（high_prior_load）：valid_cache_space < allocated_prs；
-
-cluster 级别的 prio-space 负载分为 2 种，计算方式：
-
-1. 欠载（underload）：不存在中、高负载的 chunk
-2. 过载（overload）：存在中负载或高负载的 chunk
-
-集群欠载：以本地化 + topo 安全为目的做迁移。
-
-每 1h 触发一次迁移扫描，扫描所有的 pextent，过滤出符合条件的 candidate pextent，并按顺序选出符合条件的 dst_cid、replace_cid、src_cid，若三个都不是 kInvalidChunkId，生成 migrate cmd。
-
-```
-pextent must meet:
-  - prio-extent (including thick)
-  - not temp replica
-  - not even
-
-dst_cid should meet: (seq means priority)
-  1. prefer local
-
-dst_cid must meet:
-  - not failslow
-  - enough cmd quota
-  - enough remain planned prs
-
-replace_cid should meet: (seq means priority)
-  1. same zone with dst_cid
-  2. failslow
-  3. not owner
-
-replace_cid must meet:
-  - not prefer local
-  - not owner
-  - topo safety replace_cid <= dst_cid
-
-src_cid should meet: (seq means priority)
-  1. same zone with dst_cid
-  2. not failslow
-
-src_cid must meet:
-  - enough cmd quota
-```
-
-集群过载：
-
-以容量均衡 + topo 安全为目的做迁移。
-
-每 5 min 触发一次迁移扫描，先扫描所有的 chunk，从高负载 chunk 集合中选出符合条件的 replace_cid，从低负载 chunk 集合中选出符合条件的 dst_cid。
-
-```
-replace_cid should meet: (seq means priority)
-  1. bigger allocated_prs (which means high_prior_load first and medium_prior_load second)
-  
-replace_cid must meet:
-  - not low_prior_load (which means either medium_prior_load or high_prior_load)
-
-dst_cid should meet: (seq means priority)
-  1. smaller allocated_prs
-  2. not lease owner （这个只能因 pid 而异，先不实现，有点复杂）
-
-dst_cid must meet:
-  - not failslow
-  - not select by prevent src_cid
-  
-  // topo safety根据不同 pid 不同，后面 3 个是随着 pid 的数量而变化
-  - topo safety replace_cid <= dst_cid
-  - enough cmd quota
-  - enough remain planned prs when cluster avg allocated_prs < cluster avg planned prs 
-  - enough remain cache space when cluster avg planned prs <= cluster avg allocated_prs < cluster avg cache space
-```
-
-此时得到 replace cid 和 dst_cid，再从 chunk 本地过滤出符合条件的 prio-extent，并从活跃副本位置中选出符合条件的 dst_cid。
-
-```
-pextent must meet:
-  - prio-extent (including thick)
-  - not temp replica
-  - not even
-
-src_cid should meet:
-  1. same zone with dst_cid
-  
-src_cid must meet:
-  - not failslow
-  - enough cmd quota
-```
-
-
-
-虽然我不懂为啥 prio-extent 不支持局部化
-
 现有代码在 EnqueueCmd 的时候会将 migrate src_cid 设置成 lease owner，但如果 src_cid 跟 dst_cid 跨 zone，或者是 failslow，（他可能没有 cmd quota 了，不过这个条件在生成时是硬性规定的，派发时倒不用）这么选还是好事吗？
 
 1. 后续可以改进容量均衡迁移中 replace chunk 和 dst chunk 1 1 配对，可以改成尽可能让多个 src_cid 参与进来，除非所有 under chunk 都不行，才退出循环。
 2. http://gerrit.smartx.com/c/zbs/+/54622 patch 7 要拆分成几个小 patch
-
-even prio extent 的修复拓扑处理
-
-prio 的 extent 的 topo repair 是需要一个单独的 patch 的，需要注意下，双活情况下也要正常的修复拓扑达到 2 + 1 的效果
 
 
 
@@ -932,6 +785,47 @@ prio pblob 生命周期：
    >  cache 负载率不高的话，writeback 了也不会被淘汰，淘汰的操作就是更改 pblob 的元数据，把 pblob 的 cache_blob_id 设为空，这样数据就不存在于 cache 上了，释放的 cache block 又可以被其他 pblob 重用。
    > writeback 一直在进行，只是限速会动态改变，当 cache 负载率高的话，writeback 速度会加快，当 APP IO 多的话，writeback 速度会调低。
 2. 当 partition 层数据被多次访问后会 promote 到 cache 层，判断条件是 30 分钟内访问 3 次，此时数据在 cache 和 partition 中各有一份。
+
+
+
+zbs 迁移策略（数字代表优先级）
+
+1. chunk remove 迁移
+
+   * prio extent
+
+     1. 若 lhs 和 rhs 其中有不具备 prio 能力的，先选具备 prio 能力的，再选 v5.5.0 节点但 planned_prs 为 0，最后选老版本节点，否则说明具备 prio 能力，执行下一步；
+     2. 若 lhs 和 rhs 在容纳一个新副本后都是 low prio，按本地化 + 局部化 + topo 安全策略选；若只有一个是 low prio，选这个；否则说明都无法容纳，执行下一步；
+     3. 若 lhs 和 rhs 在容纳一个新副本后都是 medium prio，选 valid_cache_space - allocated_prs 更大的；若只有一个是 medium prio，选这个；否则说明都无法容纳，执行下一步；
+     4. 选 lhs 和 rhs 中 allocated_prs - valid_cache_space 更小的，选取结束。
+
+   * normal extent
+     1. 若集群是中低负载，按本地化 + 局部化 + topo 安全策略选，否则执行下一步；
+     2. 若 prefer local 节点是中低负载，按本地化 + topo 安全策略选，否则执行下一步；
+     3. 按 topo 安全策略 + 低容量优先选。
+
+2. even volume 均匀分布迁移：prio 与 normal 一致，都是让 even volume 卷内 extent 先做 topo 安全，若满足 topo 安全，再做 topo 不降级 extent 数量均衡。
+
+3. prio 超载迁移（存在 medium/high prio chunk）：在保证有足够的性能层和容量层空间前提下，按以下优先级做 topo 不降级节点 prio 负载均衡。
+   1. high prio 到 low prio 
+   2. high prio 到 medium prio 
+   3. medium prio 到 low prio 
+4. normal 低负载迁移（< 75%）：normal 和 prio extent 都按本地化 + 局部化 + topo 安全做迁移，normal 只需要保证有足够的容量层空间，而 prio 需要保证有足够的容量层和性能层空间，并且不引发 prio 超载。
+5. normal 中高负载迁移（75%）：先做 prio 和 normal extent 的 topo 安全，若满足 topo 安全，再做 normal extent 的 topo 不降级容量均衡。
+6. normal 超高负载（95%）：只做 normal extent 的 topo 不降级容量均衡。
+
+prio 超载迁移的负载均衡终态只要求各 prio chunk 处于 low prio load，不要求 prio extent 在各节点均匀分布。另外，欠载 prio chunk 上的 extent 分布会在 normal 低、中高负载迁移中被调整。
+
+chunk 级别的 prio-space 负载分为 3 种，计算方式：
+
+1. 低负载（low_prior_load）： allocated_prs <= planned_prs；
+2. 中负载（medium_prior_load）：planned_prs < allocated_prs <= valid_cache_space；
+3. 高负载（high_prior_load）：valid_cache_space < allocated_prs；
+
+cluster 级别的 prio-space 负载分为 2 种，计算方式：
+
+1. 欠载（underload）：不存在中、高负载的 chunk
+2. 过载（overload）：存在中负载或高负载的 chunk
 
 
 
