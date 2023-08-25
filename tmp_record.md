@@ -794,7 +794,7 @@ zbs 迁移策略（数字代表优先级）
 
    * prio extent
 
-     1. 若 lhs 和 rhs 其中有不具备 prio 能力的，先选具备 prio 能力的，再选 v5.5.0 节点但 planned_prs 为 0，最后选老版本节点，否则说明具备 prio 能力，执行下一步；
+     1. 若 lhs 和 rhs 其中有不具备 prio 能力的，先选具备 prio 能力的，再选 v5.5.0 节点但 planned_prs 为 0，最后选老版本节点，否则说明都具备 prio 能力，执行下一步；
      2. 若 lhs 和 rhs 在容纳一个新副本后都是 low prio，按本地化 + 局部化 + topo 安全策略选；若只有一个是 low prio，选这个；否则说明都无法容纳，执行下一步；
      3. 若 lhs 和 rhs 在容纳一个新副本后都是 medium prio，选 valid_cache_space - allocated_prs 更大的；若只有一个是 medium prio，选这个；否则说明都无法容纳，执行下一步；
      4. 选 lhs 和 rhs 中 allocated_prs - valid_cache_space 更小的，选取结束。
@@ -811,8 +811,8 @@ zbs 迁移策略（数字代表优先级）
    2. high prio 到 medium prio 
    3. medium prio 到 low prio 
 4. normal 低负载迁移（< 75%）：normal 和 prio extent 都按本地化 + 局部化 + topo 安全做迁移，normal 只需要保证有足够的容量层空间，而 prio 需要保证有足够的容量层和性能层空间，并且不引发 prio 超载。
-5. normal 中高负载迁移（75%）：先做 prio 和 normal extent 的 topo 安全，若满足 topo 安全，再做 normal extent 的 topo 不降级容量均衡。
-6. normal 超高负载（95%）：只做 normal extent 的 topo 不降级容量均衡。
+5. normal 中高负载迁移（>= 75%）：先做 prio 和 normal extent 的 topo 安全，若满足 topo 安全，再做 normal extent 的 topo 不降级容量均衡。
+6. normal 超高负载（>= 95%）：只做 normal extent 的 topo 不降级容量均衡。
 
 prio 超载迁移的负载均衡终态只要求各 prio chunk 处于 low prio load，不要求 prio extent 在各节点均匀分布。另外，欠载 prio chunk 上的 extent 分布会在 normal 低、中高负载迁移中被调整。
 

@@ -56,6 +56,7 @@ GDB 是一款可以用来调试 C/C++/Java/Go 的调试工具，在类 Unix 系�
 
     ```shell
     /opt/rh/devtoolset-10/root/bin/gdb /usr/sbin/zbs-chunkd core.xxx | tee /tmp/your_gdb.log
+    /opt/rh/devtoolset-10/root/bin/gdb -c /home/core/rpc-server.core.3219.1692671991 /usr/sbin/zbs-metad
     (gdb) set height 0							# 多行输出时会全部输出
     (gdb) set print elements 0			# 多列输出时不会有默认的 200 个元素限制
     ```
