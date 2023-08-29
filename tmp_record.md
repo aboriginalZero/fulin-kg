@@ -1,3 +1,9 @@
+3 节点集群，2 副本 prio-volume 持续进行写 IO，对 prio-volume 一直打快照，手动 gc-scan 一下，节点进入高负载后，一直未触发数据迁移。
+
+
+
+
+
 策略类梳理（seq means prior）
 
 1. 通过 rpc 显示指定的 recover cmd（这个不一定要支持）
@@ -806,7 +812,7 @@ zbs 迁移策略（数字代表优先级）
 
 2. even volume 均匀分布迁移：prio 与 normal 一致，都是让 even volume 卷内 extent 先做 topo 安全，若满足 topo 安全，再做 topo 不降级 extent 数量均衡。
 
-3. prio 超载迁移（存在 medium/high prio chunk）：在保证有足够的性能层和容量层空间前提下，按以下优先级做 topo 不降级节点 prio 负载均衡。
+3. prior 超载迁移（存在 medium/high prio chunk）：在保证有足够的性能层和容量层空间前提下，按以下优先级做 topo 不降级节点 prio 负载均衡。
    1. high prio 到 low prio 
    2. high prio 到 medium prio 
    3. medium prio 到 low prio 
