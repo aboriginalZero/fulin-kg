@@ -893,3 +893,5 @@ stl 容器迭代器失效问题，https://stackoverflow.com/questions/6438086/it
 vscode 中用 vim 插件，这样可以按区域替换代码
 
 一个遗留问题是，单测里面想要触发两次 recover cmd，怎么让 entry 的 GetLocation() 得到及时更新，试了 sleep(9) 不行，可能不止需要一个心跳周期，还有其他条件没触发。
+
+以一个 functional test 单测为例子展开看 zbs 系统的启动流程。
