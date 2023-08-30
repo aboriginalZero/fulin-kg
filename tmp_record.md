@@ -1,6 +1,62 @@
+1. 刚快照并对原卷写后，所有的 extent 都还是 prior 的，不先禁掉 migrate 的话，会引发 prior load migrate。
+
+    禁掉之后，空间的值是符合预期的
+
+    快照后写一次要 5s 左右
+
+2. 在调用 GetStoragePoolSpace 时，cid1 给丢了，另外还有情况是他的空间值跟预期的也不符
+
+    cid1 的 status 或 use_state 不符预期，cid1 session expired 了，要在 main thread 中 sleep，要不然 c1 提前退出了
+
+3. 把 gc interval 调的很高，没有 gc-scan，快照并对原卷写后的，属于快照的 extent 竟然是 normal 的
+
+4. 1 明明是最后一个，为啥不是从 1 开始做迁移
+
+    ```
+    I0830 12:05:10.748733  6940 recover_manager.cc:2089] yiwu cid 5 valid_data_space 37 allocated_data_space 36 valid_cache_space 39 used_cache_space 0 planned_prs 7 allocated_prs 4 downgraded_prs 0
+    I0830 12:05:10.748735  6940 recover_manager.cc:2089] yiwu cid 1 valid_data_space 37 allocated_data_space 36 valid_cache_space 39 used_cache_space 0 planned_prs 7 allocated_prs 4 downgraded_prs 0
+    I0830 12:05:10.748737  6940 recover_manager.cc:2089] yiwu cid 2 valid_data_space 39 allocated_data_space 15 valid_cache_space 39 used_cache_space 0 planned_prs 7 allocated_prs 0 downgraded_prs 0
+    I0830 12:05:10.748739  6940 recover_manager.cc:2089] yiwu cid 3 valid_data_space 37 allocated_data_space 0 valid_cache_space 39 used_cache_space 0 planned_prs 7 allocated_prs 0 downgraded_prs 0
+    I0830 12:05:10.748739  6940 recover_manager.cc:2089] yiwu cid 4 valid_data_space 37 allocated_data_space 0 valid_cache_space 39 used_cache_space 0 planned_prs 7 allocated_prs 0 downgraded_prs 0
+    I0830 12:05:10.748742  6940 recover_manager.cc:1907] yiwu cid 5 planned_prs 2147273932 allocated_prs 1073741824 diff 1
+    I0830 12:05:10.748745  6940 recover_manager.cc:1914] yiwu fine_prio_load_chunks cid 5
+    I0830 12:05:10.748746  6940 recover_manager.cc:1907] yiwu cid 1 planned_prs 2147273932 allocated_prs 1073741824 diff 1
+    I0830 12:05:10.748747  6940 recover_manager.cc:1914] yiwu fine_prio_load_chunks cid 1
+    I0830 12:05:10.748749  6940 recover_manager.cc:1907] yiwu cid 2 planned_prs 2147273932 allocated_prs 0 diff 1
+    I0830 12:05:10.748750  6940 recover_manager.cc:1914] yiwu fine_prio_load_chunks cid 2
+    I0830 12:05:10.748757  6940 recover_manager.cc:1907] yiwu cid 3 planned_prs 2147273932 allocated_prs 0 diff 1
+    I0830 12:05:10.748760  6940 recover_manager.cc:1914] yiwu fine_prio_load_chunks cid 3
+    I0830 12:05:10.748764  6940 recover_manager.cc:1907] yiwu cid 4 planned_prs 2147273932 allocated_prs 0 diff 1
+    I0830 12:05:10.748767  6940 recover_manager.cc:1914] yiwu fine_prio_load_chunks cid 4
+    I0830 12:05:10.748795  6940 recover_manager.cc:907] yiwu ReGenerateMigrateForBalanceInStoragePool before sort
+    I0830 12:05:10.748843  6940 recover_manager.cc:910] yiwu cid 5 allocated_data_space 36
+    I0830 12:05:10.748847  6940 recover_manager.cc:910] yiwu cid 1 allocated_data_space 36
+    I0830 12:05:10.748848  6940 recover_manager.cc:910] yiwu cid 2 allocated_data_space 15
+    I0830 12:05:10.748849  6940 recover_manager.cc:910] yiwu cid 3 allocated_data_space 0
+    I0830 12:05:10.748857  6940 recover_manager.cc:910] yiwu cid 4 allocated_data_space 0
+    I0830 12:05:10.748875  6940 recover_manager.cc:917] yiwu ReGenerateMigrateForBalanceInStoragePool after sort
+    I0830 12:05:10.748876  6940 recover_manager.cc:919] yiwu cid 3 allocated_data_space 0
+    I0830 12:05:10.748917  6940 recover_manager.cc:919] yiwu cid 4 allocated_data_space 0
+    I0830 12:05:10.748919  6940 recover_manager.cc:919] yiwu cid 5 allocated_data_space 36
+    I0830 12:05:10.748919  6940 recover_manager.cc:919] yiwu cid 2 allocated_data_space 15
+    I0830 12:05:10.748929  6940 recover_manager.cc:919] yiwu cid 1 allocated_data_space 36
+    I0830 12:05:10.748989  6940 recover_manager.cc:1111] yiwu generate migrate cmd pid 18 src_cid 5 dst_cid 3 replace_cid 5
+    I0830 12:05:10.748996  6940 recover_manager.cc:1111] yiwu generate migrate cmd pid 19 src_cid 5 dst_cid 3 replace_cid 5
+    I0830 12:05:10.748998  6940 recover_manager.cc:1111] yiwu generate migrate cmd pid 20 src_cid 5 dst_cid 3 replace_cid 5
+    I0830 12:05:10.749011  6940 recover_manager.cc:1111] yiwu generate migrate cmd pid 21 src_cid 5 dst_cid 3 replace_cid 5
+    I0830 12:05:10.749014  6940 recover_manager.cc:1111] yiwu generate migrate cmd pid 22 src_cid 5 dst_cid 3 replace_cid 5
+    I0830 12:05:10.749018  6940 recover_manager.cc:1111] yiwu generate migrate cmd pid 23 src_cid 5 dst_cid 3 replace_cid 5
+    I0830 12:05:10.749022  6940 recover_manager.cc:1111] yiwu generate migrate cmd pid 24 src_cid 5 dst_cid 3 replace_cid 5
+    I0830 12:05:10.749042  6940 recover_manager.cc:1111] yiwu generate migrate cmd pid 25 src_cid 5 dst_cid 3 replace_cid 5
+    I0830 12:05:10.749053  6940 recover_manager.cc:1111] yiwu generate migrate cmd pid 9 src_cid 5 dst_cid 3 replace_cid 5
+    I0830 12:05:10.749058  6940 recover_manager.cc:1111] yiwu generate migrate cmd pid 10 src_cid 5 dst_cid 3 replace_cid 5
+    ```
+
+    
+
+
+
 3 节点集群，2 副本 prio-volume 持续进行写 IO，对 prio-volume 一直打快照，手动 gc-scan 一下，节点进入高负载后，一直未触发数据迁移。
-
-
 
 
 
