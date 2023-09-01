@@ -1,6 +1,41 @@
+zbs 当前行为：
+
+zbs chunk 将每小时 io 大于 3600（iops > 1）的 zbs volume 视为 active volume。
+zbs chunk 每隔 1h 上报一次 active zbs volume 的信息给 zbs meta，不会上报 inactive volume。
+对于一个 zbs volume，zbs meta 收到 6 次 volume 信息上报后（即 6h 后），会更新其 prefer cid 字段，同时更新其所有 pextent 的 prefer local 字段。
+
+
+
+1. 我需要整理一下 prefer local，lease owner 的变更情况，怎么生成，怎么变更，怎么释放的。
+
+2. 把 prior 快照 + IO 的 functional test 单测流程记下来，便于后续排查问题
+
+   块存储对外接口并不多，一般就是快照/克隆之后的 COW 让问题变复杂，性能变慢
+
+3. lsm 测跟 dongdong 的聊天内容
+
+   meta 侧空间计算中的字段含义，
+   [快照/克隆对空间参数的影响](https://docs.google.com/document/d/1oOZ6CENaLFBU_AG6tZ4nnxv1CFUNvv3ND_NWVGVN2PY/edit#heading=h.x0vh71hjzfds)
+
+4. migrate 这段时间的跟 zhiwei 的聊天，smtxos 和 pin test 频道中的 case 整理
+
+   目前遇到的高负载下不迁移：要么 topo 降级了，要么 lease owner 没释放
+
+5. 跟 yutian weipeng 的聊天内容中的知识点梳理
+
+6. 准备要跟 yutian 的 sync 提问
+
+
+
+
+
+
+
 3 节点集群，2 副本 prio-volume 持续进行写 IO，对 prio-volume 一直打快照，手动 gc-scan 一下，节点进入高负载后，一直未触发数据迁移。
 
+看着不像是等 gc-scan 才从 prior 变 normal，而是快照+IO后，快照引用的那部分 pextent meta 认为他是 normal，然后通过心跳传给 chunk 的
 
+把 prior over load 关了之后，现象是正常的
 
 
 
@@ -802,7 +837,7 @@ zbs 迁移策略（数字代表优先级）
 
      1. 若 lhs 和 rhs 其中有不具备 prio 能力的，先选具备 prio 能力的，再选 v5.5.0 节点但 planned_prs 为 0，最后选老版本节点，否则说明都具备 prio 能力，执行下一步；
      2. 若 lhs 和 rhs 在容纳一个新副本后都是 low prio，按本地化 + 局部化 + topo 安全策略选；若只有一个是 low prio，选这个；否则说明都无法容纳，执行下一步；
-     3. 若 lhs 和 rhs 在容纳一个新副本后都是 medium prio，选 valid_cache_space - allocated_prs 更大的；若只有一个是 medium prio，选这个；否则说明都无法容纳，执行下一步；
+     3. 若 lhs 和 rhs 在容纳一个新副本后都是 medium prio 且 valid cache space - allocated_prs 都大于 40GiB，按本地化 + 局部化 + topo 安全策略选，否则选 valid_cache_space - allocated_prs 更大的；若只有一个是 medium prio，选这个；否则说明都无法容纳，执行下一步；
      4. 选 lhs 和 rhs 中 allocated_prs - valid_cache_space 更小的，选取结束。
 
    * normal extent

@@ -180,6 +180,13 @@ git pull 之后想撤销，先 git reflog 看一下想回退到之前的哪一�
 
 
 
+在分支上需要重新 pull，并把本地的这个放到最前面
+
+1. git pull --rebase origin master
+2. git submodule update --init --recursive
+
+
+
 pick 到非 master 分支如 v5.4.x 时
 
 1. 在 master 分支上 git pull && git submodule update --init --recursive
