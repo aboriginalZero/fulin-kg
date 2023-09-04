@@ -6,6 +6,29 @@ zbs chunk 每隔 1h 上报一次 active zbs volume 的信息给 zbs meta，不�
 
 
 
+允许在 server san 模式下人工指定 access point，融合模式下，接入点总是快速的自动切换至本地，因此对于融合模式下的 Target 执行对应的配置不会产生期望的效果。
+
+根据 access point 去变化 prefer local 的。
+
+每个数据链路会尽量分散给不同的 Access 处理，尽量避免链路资源竞争（在这里就可以把数据链路理解成 access point）
+
+
+
+iscsi access point 3 部分策略：iscsi 建立连接、异常重定向、动态平衡
+
+修改 iscsi 接入点选择策略：双活集群下，Target 开启外部接入模式时（非 qemu 发起的 iscsi 连接），如果主可用域至少有一个节点可用，则必须选择在主可用域中的节点作为接入点。如果主可用域没有可用节点，则返回次级可用域的接入点。
+
+修改 iscsi 接入点平衡策略：（每 3 分钟执行一次接入点平衡检查，每次检查最多移动一个接入点）
+平衡策略目标是：使得每个接入点的数量在主可用域的节点之间内尽可能平均，次可用域内 iscsi 接入点数量应当为 0。如果 iscsi 接入点已经在主可用域上，即使主可用域所有节点都宕机，也不允许主动迁移和修改 access record 到次可用域。客户端发起重试后，会返回次可用域的临时接入点， access record 仍然在主可用域。
+
+临时异常回切：对于临时分配到次可用域的接入点，一旦主可用域有一个节点恢复，且该节点对应的 access session 存活超过一定时间（3分钟），则自动平衡检查时应当尝试将其迁移回主可用域。
+
+https://docs.google.com/document/d/1t14uKF6YCaijgXAq-bS-WR_I1SaLhYxbOnKXhspBtlQ/edit#heading=h.iidguj2la1
+
+
+
+
+
 1. 我需要整理一下 prefer local，lease owner 的变更情况，怎么生成，怎么变更，怎么释放的。
 
 2. 把 prior 快照 + IO 的 functional test 单测流程记下来，便于后续排查问题
@@ -24,6 +47,12 @@ zbs chunk 每隔 1h 上报一次 active zbs volume 的信息给 zbs meta，不�
 5. 跟 yutian weipeng 的聊天内容中的知识点梳理
 
 6. 准备要跟 yutian 的 sync 提问
+
+   
+
+
+
+
 
 
 
