@@ -1,62 +1,54 @@
-1. 刚快照并对原卷写后，所有的 extent 都还是 prior 的，不先禁掉 migrate 的话，会引发 prior load migrate。
 
-    禁掉之后，空间的值是符合预期的
 
-    快照后写一次要 5s 左右
+1. 我需要整理一下 prefer local，lease owner 的变更情况，怎么生成，怎么变更，怎么释放的。
 
-2. 在调用 GetStoragePoolSpace 时，cid1 给丢了，另外还有情况是他的空间值跟预期的也不符
+2. 把 prior 快照 + IO 的 functional test 单测流程记下来，便于后续排查问题
 
-    cid1 的 status 或 use_state 不符预期，cid1 session expired 了，要在 main thread 中 sleep，要不然 c1 提前退出了
+   块存储对外接口并不多，一般就是快照/克隆之后的 COW 让问题变复杂，性能变慢
 
-3. 把 gc interval 调的很高，没有 gc-scan，快照并对原卷写后的，属于快照的 extent 竟然是 normal 的
+3. lsm 测跟 dongdong 的聊天内容
 
-4. 1 明明是最后一个，为啥不是从 1 开始做迁移
+   meta 侧空间计算中的字段含义，
+   [快照/克隆对空间参数的影响](https://docs.google.com/document/d/1oOZ6CENaLFBU_AG6tZ4nnxv1CFUNvv3ND_NWVGVN2PY/edit#heading=h.x0vh71hjzfds)
 
-    ```
-    I0830 12:05:10.748733  6940 recover_manager.cc:2089] yiwu cid 5 valid_data_space 37 allocated_data_space 36 valid_cache_space 39 used_cache_space 0 planned_prs 7 allocated_prs 4 downgraded_prs 0
-    I0830 12:05:10.748735  6940 recover_manager.cc:2089] yiwu cid 1 valid_data_space 37 allocated_data_space 36 valid_cache_space 39 used_cache_space 0 planned_prs 7 allocated_prs 4 downgraded_prs 0
-    I0830 12:05:10.748737  6940 recover_manager.cc:2089] yiwu cid 2 valid_data_space 39 allocated_data_space 15 valid_cache_space 39 used_cache_space 0 planned_prs 7 allocated_prs 0 downgraded_prs 0
-    I0830 12:05:10.748739  6940 recover_manager.cc:2089] yiwu cid 3 valid_data_space 37 allocated_data_space 0 valid_cache_space 39 used_cache_space 0 planned_prs 7 allocated_prs 0 downgraded_prs 0
-    I0830 12:05:10.748739  6940 recover_manager.cc:2089] yiwu cid 4 valid_data_space 37 allocated_data_space 0 valid_cache_space 39 used_cache_space 0 planned_prs 7 allocated_prs 0 downgraded_prs 0
-    I0830 12:05:10.748742  6940 recover_manager.cc:1907] yiwu cid 5 planned_prs 2147273932 allocated_prs 1073741824 diff 1
-    I0830 12:05:10.748745  6940 recover_manager.cc:1914] yiwu fine_prio_load_chunks cid 5
-    I0830 12:05:10.748746  6940 recover_manager.cc:1907] yiwu cid 1 planned_prs 2147273932 allocated_prs 1073741824 diff 1
-    I0830 12:05:10.748747  6940 recover_manager.cc:1914] yiwu fine_prio_load_chunks cid 1
-    I0830 12:05:10.748749  6940 recover_manager.cc:1907] yiwu cid 2 planned_prs 2147273932 allocated_prs 0 diff 1
-    I0830 12:05:10.748750  6940 recover_manager.cc:1914] yiwu fine_prio_load_chunks cid 2
-    I0830 12:05:10.748757  6940 recover_manager.cc:1907] yiwu cid 3 planned_prs 2147273932 allocated_prs 0 diff 1
-    I0830 12:05:10.748760  6940 recover_manager.cc:1914] yiwu fine_prio_load_chunks cid 3
-    I0830 12:05:10.748764  6940 recover_manager.cc:1907] yiwu cid 4 planned_prs 2147273932 allocated_prs 0 diff 1
-    I0830 12:05:10.748767  6940 recover_manager.cc:1914] yiwu fine_prio_load_chunks cid 4
-    I0830 12:05:10.748795  6940 recover_manager.cc:907] yiwu ReGenerateMigrateForBalanceInStoragePool before sort
-    I0830 12:05:10.748843  6940 recover_manager.cc:910] yiwu cid 5 allocated_data_space 36
-    I0830 12:05:10.748847  6940 recover_manager.cc:910] yiwu cid 1 allocated_data_space 36
-    I0830 12:05:10.748848  6940 recover_manager.cc:910] yiwu cid 2 allocated_data_space 15
-    I0830 12:05:10.748849  6940 recover_manager.cc:910] yiwu cid 3 allocated_data_space 0
-    I0830 12:05:10.748857  6940 recover_manager.cc:910] yiwu cid 4 allocated_data_space 0
-    I0830 12:05:10.748875  6940 recover_manager.cc:917] yiwu ReGenerateMigrateForBalanceInStoragePool after sort
-    I0830 12:05:10.748876  6940 recover_manager.cc:919] yiwu cid 3 allocated_data_space 0
-    I0830 12:05:10.748917  6940 recover_manager.cc:919] yiwu cid 4 allocated_data_space 0
-    I0830 12:05:10.748919  6940 recover_manager.cc:919] yiwu cid 5 allocated_data_space 36
-    I0830 12:05:10.748919  6940 recover_manager.cc:919] yiwu cid 2 allocated_data_space 15
-    I0830 12:05:10.748929  6940 recover_manager.cc:919] yiwu cid 1 allocated_data_space 36
-    I0830 12:05:10.748989  6940 recover_manager.cc:1111] yiwu generate migrate cmd pid 18 src_cid 5 dst_cid 3 replace_cid 5
-    I0830 12:05:10.748996  6940 recover_manager.cc:1111] yiwu generate migrate cmd pid 19 src_cid 5 dst_cid 3 replace_cid 5
-    I0830 12:05:10.748998  6940 recover_manager.cc:1111] yiwu generate migrate cmd pid 20 src_cid 5 dst_cid 3 replace_cid 5
-    I0830 12:05:10.749011  6940 recover_manager.cc:1111] yiwu generate migrate cmd pid 21 src_cid 5 dst_cid 3 replace_cid 5
-    I0830 12:05:10.749014  6940 recover_manager.cc:1111] yiwu generate migrate cmd pid 22 src_cid 5 dst_cid 3 replace_cid 5
-    I0830 12:05:10.749018  6940 recover_manager.cc:1111] yiwu generate migrate cmd pid 23 src_cid 5 dst_cid 3 replace_cid 5
-    I0830 12:05:10.749022  6940 recover_manager.cc:1111] yiwu generate migrate cmd pid 24 src_cid 5 dst_cid 3 replace_cid 5
-    I0830 12:05:10.749042  6940 recover_manager.cc:1111] yiwu generate migrate cmd pid 25 src_cid 5 dst_cid 3 replace_cid 5
-    I0830 12:05:10.749053  6940 recover_manager.cc:1111] yiwu generate migrate cmd pid 9 src_cid 5 dst_cid 3 replace_cid 5
-    I0830 12:05:10.749058  6940 recover_manager.cc:1111] yiwu generate migrate cmd pid 10 src_cid 5 dst_cid 3 replace_cid 5
-    ```
+4. migrate 这段时间的跟 zhiwei 的聊天，smtxos 和 pin test 频道中的 case 整理
 
-    
+   目前遇到的高负载下不迁移：要么 topo 降级了，要么 lease owner 没释放
 
 
 
-3 节点集群，2 副本 prio-volume 持续进行写 IO，对 prio-volume 一直打快照，手动 gc-scan 一下，节点进入高负载后，一直未触发数据迁移。
+zbs 当前行为：
+
+zbs chunk 将每小时 io 大于 3600（iops > 1）的 zbs volume 视为 active volume。
+zbs chunk 每隔 1h 上报一次 active zbs volume 的信息给 zbs meta，不会上报 inactive volume。
+对于一个 zbs volume，zbs meta 收到 6 次 volume 信息上报后（即 6h 后），会更新其 prefer cid 字段，同时更新其所有 pextent 的 prefer local 字段。
+
+
+
+允许在 server san 模式下人工指定 access point，融合模式下，接入点总是快速的自动切换至本地，因此对于融合模式下的 Target 执行对应的配置不会产生期望的效果。
+
+根据 access point 去变化 prefer local 的。
+
+当一个共享卷被大于等于 3 个接入点同时访问时（Xen 平台的 iSCSI DataStore 模式，Xen 将一个 LUN（Volume） 作为一个池，不同节点上的 VM 将仅访问其中的部分数据） 。将不会触发 Local Transfer 事件。相关的 Extent 会保持初次写入时的接入节点作为 prefer local
+
+在副本分配策略 in ZBS 中搜 prefer local。
+
+每个数据链路会尽量分散给不同的 Access 处理，尽量避免链路资源竞争（在这里就可以把数据链路理解成 access point）
+
+
+
+iscsi access point 3 部分策略：iscsi 建立连接、异常重定向、动态平衡
+
+修改 iscsi 接入点选择策略：双活集群下，Target 开启外部接入模式时（非 qemu 发起的 iscsi 连接），如果主可用域至少有一个节点可用，则必须选择在主可用域中的节点作为接入点。如果主可用域没有可用节点，则返回次级可用域的接入点。
+
+修改 iscsi 接入点平衡策略：（每 3 分钟执行一次接入点平衡检查，每次检查最多移动一个接入点）
+平衡策略目标是：使得每个接入点的数量在主可用域的节点之间内尽可能平均，次可用域内 iscsi 接入点数量应当为 0。如果 iscsi 接入点已经在主可用域上，即使主可用域所有节点都宕机，也不允许主动迁移和修改 access record 到次可用域。客户端发起重试后，会返回次可用域的临时接入点， access record 仍然在主可用域。
+
+临时异常回切：对于临时分配到次可用域的接入点，一旦主可用域有一个节点恢复，且该节点对应的 access session 存活超过一定时间（3分钟），则自动平衡检查时应当尝试将其迁移回主可用域。
+
+https://docs.google.com/document/d/1t14uKF6YCaijgXAq-bS-WR_I1SaLhYxbOnKXhspBtlQ/edit#heading=h.iidguj2la1
+
+
 
 
 
@@ -137,8 +129,9 @@
     2. 能够查看 generate/pending_recover 的数量
     3. 能够查看 need_migrate 的数量
 3. 智能模式中，值变化的时候添加 log
-3. ZBS-25666 pick 到 v5.5.x
+3. 
 3. 改 recover manager 中的函数名，比如 GenerateRecoverCmds 实际代表 DistributeRecoverCmds，还有计数相关的，recover 处有 2 个，可以精简的，把 recover 和 migrate 做到对称。
+3. 改 Prefer Local / TopoAware / Localized 三个比较器名字，[ZBS-25802](http://jira.smartx.com/browse/ZBS-25802)
 
 
 
@@ -149,7 +142,9 @@
 
 就一个副本并且跟 prefer local 不在一个 zone，那么 recover_prefer = 剩下的这个副本。如果就一个副本，并且跟 prefer local 在一个 zone，又会怎么样呢？
 
-comparator->UpdateChunkSet 这个地方，如果还剩的 2 副本并不符合 topo 安全，那么是会按照放进去的第 2 个副本来选择后面的第 3 个副本
+comparator->UpdateChunkSet 这个地方，如果还剩的 2 副本并不符合 topo 安全，那么是会按照放进去的第 2 个副本来选择后面的第 3 个副本。
+
+只要 topo 不变，符合拓扑安全的副本位置也不变，LocalizedComparator 得到的排序结果是不变的，因此虽然选样本是连锁反应，但就算第 2 个副本位置不对，第 3 个副本位置还是正确的。
 
 ```c++
 LOOP(candidate_dst_chunks.size()) {
@@ -162,30 +157,6 @@ LOG(INFO) << (all_in_same_zone ? "all_in_same_zone" : "not");
 LOG(INFO) << "all_zone_idx " << all_zone_idx;
 LOG(INFO) << "prefer_zone_idx " << prefer_zone_idx;
 ```
-
-
-
-为什么低负载下，replace_cid 要尽量跟 dst_cid 在一个域，考虑同时有 2 副本不符合拓扑安全的场景。
-
-1. 如果已有副本和 dst 在不同 zone，replace 随便选
-
-2. 如果已有副本和 dst 在同一个 zone，replace 也得选这个 zone 的，如果没有这个 zone 的，说明在这之前 3 个副本
-
-只要 topo 不变，符合拓扑安全的副本位置也不变，LocalizedComparator 得到的排序结果是不变的，因此虽然选样本是连锁反应，但就算第 2 个副本位置不对，第 3 个副本位置还是正确的。
-
-scan_extents_num 应该放在 ReGenerateMigrateForUnevenVolume 这个函数中去做统计，虽然实际上 all_pool 中就一个，且一次只会因为一种方式去 migrate(本地化/容量均衡)。
-
-GenerateRecoverCmds 里面的 src 也可以有选择策略的，目前的写法太乱了。
-
-低负载没有区分双活，中高负载开始有区分
-
-
-
-ChunkTableEntry 的 last_succeed_heartbeat_ms 字段没用上
-
-连续快照的 allocated_data_space 不对劲
-
-chunk.chunk_space_info.thin_used_data_space 包含这个 chunk 最近一次上报的 thin extent 总空间消耗，用于在 meta 切换后进行集群 used_data_space 计算，在该 chunk 未再次上报 used space 前也能显示较为合理的集群空间消耗，空间分配改进中引入的字段。
 
 
 
@@ -249,10 +220,7 @@ chunk.chunk_space_info.thin_used_data_space 包含这个 chunk 最近一次上�
 
 
 
-区分 recover 还是 recover_migrate
 
-1. meta_grpc_server.h 需要同步添加新的 API 吗？不需要
-2. 已有的 proto 中的 static recover limit 可以改名吗？会有升级兼容性问题吗？不会
 
 meta 侧的参数在尽可能让 recover 变快的同时，要考虑自身一次的扫描时间，若扫描周期过长，无法立即触发数据的恢复和迁移
 
@@ -276,6 +244,8 @@ chunk recover 执行的慢可能原因：慢盘、缓存击穿、normal instead 
 * local_chunk_io_timeout_ms = 8s，local chunk io timeout ms；
 * remote_chunk_io_timeout_ms = 9s，remote chunk io timeout ms，（ZBS 对网络有限制，如果 ping 大包来回超过 1s，认为网络严重故障，系统不工作）。
 
+在 lsm 侧如果超过 chunk_lsm_recover_timeout_sec = 10 min， recover 都没有结束，会主动通过心跳上报给 meta，meta 通过将对应命令的 start_ms 设置为 1 来让该命令超时去除， AccessManager::HandleAccessRequest()
+
 
 
 敏捷恢复为减少内存使用，是有单次最大数量的限制。不过 100G 的写盘应该不会触发这个上限。
@@ -286,28 +256,6 @@ chunk recover 执行的慢可能原因：慢盘、缓存击穿、normal instead 
 
 缓存击穿后，大量的恢复任务争抢 IO，恢复任务容易超时被取消，导致实际恢复速率不足 10MB/s。副本恢复的并发度默认是固定值 32，应该作为一个自适应缓存命中率的值
 
-日志中看到的下发 recover 命令和 EXTENT GC CMD ，两者其实并不是我们想象的相互影响，导致谁也无法推进下去，即不是因为 recover 任务在进行时收到了 EXTENT GC CMD，导致 recover 被中止。这里实际发生的情况是：
-
-1. meta leader 下发 recover 命令到 chunk。
-2. chunk 收到命令开始执行，首先创建一个新 pextent（称为 A）作为恢复的目标端。
-3. 17 分钟后，chunk 上 recover 命令未执行完成，报错超时。
-4. meta leader 发现自己下发的 recover 命令已经超时结束，下发 GC 命令将临时 pextent A 给回收掉。
-5. 等待临时 pextent A 回收掉后，meta leader 再次下发新的 recover 命令。（重复步骤 1）
-
-日志上看到的现象：
-
-01:18 下发 recover 命令
-
-01:35 recover 命令超时，收到了 gc 命令
-
-01:36 再次下发 recover 命令
-
-01:53 recover 命令超时，收到了 gc 命令
-
-这里问题的根源在于一个 recover 命令未能在 17 分钟内完成。
-
----
-
 改进迁移策略，在节点上待回收数据较多时（已经使用的数据空间占比超过 95%），如果集群没有进入极高负载状态（整体空间分配比例达到 90%），不向该节点迁移数据以保证回收顺利进行。
 
 lsm1 回收空间的速率非常慢，所以如果删除一个 extent，存在 chunk 的 provisioned space 会减少（分配数据空间比例在减小），但 used space 可能仍然很高的情况，如果这时集群上的其他节点向它迁移数据，会进一步降低回收速率。
@@ -315,20 +263,6 @@ lsm1 回收空间的速率非常慢，所以如果删除一个 extent，存在 c
 在 Migrate 时进行检查，如果集群整体尚有可用空间时比如整体 provisioned 比例在 90% 以下，不向 Used Space 比例大于 95% 的节点迁移数据，即便 Provsioned 比较低。
 
 
-
-RecoverManager::GetDstCandidates() 中关于 allocated_data_space、valid_data_space、provisioned_data_space 的用法。
-
-
-
-得到一台 chunk 上指定 storage pool 中的 pid 的 prefer local
-
-```c++
-for (pid_t pid = context_->pid_map->GetNextSetId(next_repair_scan_pids_[storage_pool_id]);
-     pid != IdMap::kInvalidId; pid = context_->pid_map->GetNextSetId(pid + 1)) {
-  PExtentTableEntry entry = context_->pextent_table->GetPExtentTableEntry(pid, nullptr);
-  cid_t prefer_local = entry.PreferredCid();
-}
-```
 
 ZBS-20993
 
@@ -443,451 +377,26 @@ Status RecoverManager::AddMigrateCmd(pid_t pid, cid_t src, cid_t dst, cid_t repl
 }
 ```
 
----
-
-
-
-集群内部扫描副本状态，副本迁移相关代码
-
-RecoverManager::DoScan()，正常情况下 60s 检查一次，也可以立即扫描如接受 rpc 请求
-
-RecoverManager::ReGenerateWaitingMigrateList()，分别处理均匀分配的副本和有本地化偏好的副本，他们会有不同的初次分配和迁移策略
-
-RecoverManager::ReGenerateMigrateForRebalance()，针对有本地化偏好的副本
-
-1. 当处于低负载时
-
-   RecoverManager::ReGenerateMigrateForLocalizeInStoragePool()
-
-   RecoverManager::RepairPExtentForLocalization()，满足如下任一条件不触发迁移：1. 副本的 prefer local cid 不是健康状态（status == CHUNK_STATUS_CONNECTED_HEALTHY）；2. 这个 pid 存在临时副本； 3. replace cid 和 dst cid 都是 0；4. dst_cid/src_cid 上被下发的 recover 命令超过 200 条；5. src_cid 上的有限空间不足 256 MB；
-
-   否则通过 RecoverManager::GetRepairCid() 选取 replace_cid 和 dst_cid，初始值为 0，具体规则如下（选择顺序 dst_cid --> replaced_cid --> src_cid）：
-
-   1. 如果 prefer local 有该副本，并且其他活跃副本满足本地化/局部化的分配策略，说明副本满足分配规则，直接返回 replace dst 的初始值，不触发迁移；
-   2. dst_cid 的选取规则：首选没有副本且不处于 failsow 的 prefer local，次选符合期望分布（即符合 LocalizedComparator 分配策略） 的下一个副本；
-   3. replaced_cid 的选取规则：从活跃副本中选出不满足期望分布且不是 lease owner 的 cid，如果有多个可选，则选择第一个 failslow 的 cid，如果都不是 faislow，那么会选到 location 中的最后一个；
-   3. src_cid 的选取规则：默认值为 replace cid，在选定 dst_cid 和 replaced_cid 后，如果 replace_cid slowfail 或者和 dst_cid 不在同一个可用域，那么会从活跃副本中找跟 dst_cid 在同一个可用域且不是 slow fail 的 cid 作为 src_cid。
-
-   选定 3 要素后调用RecoverManager::MakeMigrateCmd()。
-
-2. 当处于中高负载时
-
-   1. 先做目的为拓扑安全的扫描，如有必要（条件是经过以下步骤选出了非 0 的 src/dst/replace）会产生迁移命令
-
-      RecoverManager::RepairTopoInMediumHighLoad()
-
-      RecoverManager::RepairPextentTopo()
-
-      1. 非双活集群：RecoverManager::RepairInZone()
-      2. 双活集群：RecoverManager::RepairInStretched()、RecoverManager::MoveToOtherZone()
-
-      以上两种情况的 src/dst/replace cid 选取规则是一样的，通过 RecoverManager::GetSrcAndReplace() 选取 src 和 replace、通过 RecoverManager::GetDst() 获取 dst，不过中高负载与低负载情况下的选取规则是不同的，具体规则如下（选择顺序 replace_cid --> src_cid --> dst_cid）：
-
-      1. replace_cid 的选取规则：将已有副本按照拓扑距离排序后，优先把 failslow 节点放在列表头部，然后如果没有 failslow 节点或者存在多个 failslow 节点，这些节点之间按照节点容量从大到小排序。
-
-         做好以上准备工作后，从左到后遍历，选择第一个不是 prefer_local 且不是 owner 且命令数未满的节点，如果所有副本所在的节点都不满足这个条件，选择 owner 所在的节点作为 replace_cid，如果副本没有在 owner 上的，那么说明没选到 replace_cid，replace_cid = 0。
-
-      2. src_cid 的选取规则：默认是 replace_cid，如果 replace_cid = 0，那么 src_cid = 0，如果 replace_cid != 0 且 failslow，那么从所有副本中任选一个不是 failslow 的节点作为 src_cid。
-
-      3. dst_cid 的选取规则：
-
-         非双活集群：首选 1. 不处于 failsow 且 2. 没有副本且 3. 还有待生成 cmd 配额且 4. 能让拓扑结构更安全的 prefer local，否则对没有副本的 chunk 按照添加之后能让拓扑结构更安全的方式排序并从中选出第一个满足这 4 个条件的 cid 作为 dst_cid。
-
-         > 现有逻辑如果 prefer local 不能让拓扑结构更健康，迁移的 dst 是不会选 prefer local 的
-
-         双活集群：与非双活集群略有不同，需要考虑 prefer local 所在的 zone，然后不需要考虑让拓扑结构更安全，详细见 RepairInStretched()
-
-      如果 replace_cid|src_pid = 0，那么不会生成 cmd 的。
-
-      选定 3 要素后调用 RecoverManager::MakeMigrateCmd()
-
-   2. 如果集群不处于极高负载并且做过拓扑安全的迁移（生成了 migrate cmd）直接 continue，否则进行目的为容量再均衡的迁移。
-
-      RecoverManager::ReGenerateMigrateForBalanceInStoragePool()，把高负载节点的副本迁移到低负载节点。
-
-      RecoverManager::Move()，被迁移副本的优先级：1. 厚制备副本；2. 不是被克隆/快照的精简制备副本（没有 origin pid）；3. 被克隆/快照的精简制备副本（有 origin pid）。
-
-      RecoverManager::DoMove()
-
-      RecoverManager::ShouldMove()
-
-      RecoverManager::MakeMigrateCmd()
-
-
-经过以上步骤，生成的 Recover cmd 只是放入 passive_waiting_migrate 中，在等待 60s 或者 scan_recover_immediate = true 时会 swap(active_waiting_migrate, passive_waiting_migrate)
-
-关于 active_waiting_migrate / passive_waiting_migrate 这两个链表：
-
-1. 只有 RecoverManager::GenerateMigrateCmds() / RevokeRecoverCmds() 会往 active_waiting_migrate 中 erase 元素；
-2. 只有 RecoverManager::MakeMigrateCmd() 会往 passive_waiting_migrate 中 push 元素，调用 MakeMigrateCmd() 的有：
-    1. RecoverManager::RepairPExtentForLocalization()，这是在集群处于低负载时的拓扑安全扫描；
-    2. RecoverManager::RepairPextentTopo()，这是在集群处于中、高负载时的拓扑安全扫描；
-    3. RecoverManager::DoMove()，这是在集群处于中、高负载时的容量再均衡扫描；
-    4. RecoverManager::ReGenerateMigrateForRemovingChunk()，针对要退出的 Chunk 上的所有 pid 做迁移。
-
-关于 active_waiting_recover / passive_waiting_recover 这两个链表：
-
-1. MetaRpcServer::DoRemoveReplica() 移除副本会触发这个 pid 的 recover，调用 RecoverManager::AddToWaitingRecover(pid_t pid) ，它会接着调用 AddToWaitingRecoverIfNecessary() 往 active_waiting_recover 中 insert 元素；
-1. RecoverManager::GenerateRecoverCmds() / RevokeRecoverCmds() 会往 active_waiting_recover 中 erase 元素；
-3. RecoverManager::ReGenerateWaitingRecoverList() 会 recover pextent table 中所有需要 recover 的 pid，在 DoScan 中被定时执行，它调用 RecoverManager::AddToWaitingRecoverIfNecessary() 往 passive_waiting_recover 中 insert 元素；
-
-
-
-RecoverManager::DoScan()，正常情况下 60s 检查一次，也可以接受 rpc 请求去立即扫描
-
-在 Scan 的过程中：
-
-1. 通过 RecoverManager::GenerateRecoverCmds() 为 active_waiting_recover 队列中元素构造 recover cmd；
-2. 通过 RecoverManager::GenerateMigrateCmds() 为 active_waiting_migrate 队列中的元素构造 migrate cmd；
-3. 调用 RecoverManager::AddRecoverCmdUnlock() 做 recover 相关检查；
-4. 调用 AccessManager::EnqueueRecoverCmd() 生成 recover cmd 并放入对应 session 命令队列中；
-
-另一种调用 RecoverManager::AddRecoverCmdUnlock() 的方式是 RecoverManager::AddSpecialRecoverCmd() ，接受通过 rpc 的方式来调用。
-
-RecoverManager::AddRecoverCmdUnlock()
-
-1. 若这个 pid 上有 recover cmd，返回 false（每个 pid 上任一时刻只能有 1 条 recover cmd）；
-2. 若这是一条临时副本的 recover cmd，且 src_tmp_replica 的正确版本（通过对比 epoch 确定）是否已经在 pid pextent 上，返回 false；
-3. 若 src 中没有 pid 或者 migrate dst 已经有 pid，返回 false；
-4. 确保 dst 上有足够的空间（能否再放一个 extent，区别对待 thin/thick），更新 dst 的 rx_pids、replaced 的 tx_pids、src 的 recover_src_pids 以及他们的占用空间；
-5. 调用 AccessManager::EnqueueRecoverCmd() 生成 recover cmd 并放入对应命令队列中
-    1. 通过 AccessManager::AllocOwnerForRecover() 分配 recover/migrate 的 lease Owner，与 AccessManager::AllocOwner() 由用户 IO 触发的 Owner Alloc 逻辑不同，分配的优先级是 1. 该 pid 已有的 lease owner；2. src_cid；3. dst_cid；4. 从非 slow_cids 中根据 [owner priority](https://docs.google.com/document/d/1Xro2919inu3brs03wP1pu5gtbTmOf_Tig7H8pfdYPls/edit#heading=h.2hivgtf3odem) 选一个 cid；
-    2. 若此时 lease owner 跟 src_cid 不同，跟 dst_cid 不同，且 lease owner 上有活跃副本（说明它是健康的），为了让 recover/migrate 的读走本地而非网络，会把 recover cmd 的 src 修改成 lease owner；
-    3. 根据待恢复/迁移副本的 pid 和经过 1 2 步选出的 lease owner，构造 lease 并放入 recover cmd 中，接着将 recover cmd 放入 lease owner 的那个 recover cmd 队列（Access Manager 为每个 session 维护了一个  recover cmd 队列，通过 lease owner 的 uuid 获取）。
-
-
-
-migrate 和 recover 只是共用 RecoverCmd 这个数据结构，各自的命令队列（recover 是 std::set，migrate 是  std::list）、触发时机。
-
-
-IO 下发的流程
-
-NFS/iSCSI/nvmf -> ZBS Client -> access io handler -> generation syncor -> recover handler
-
-
-
-低负载，ReGenerateMigrateForLocalizeInStoragePool，没有对是否双活显式区分，都被封装到 LocalizedComparator 里了
-
-```c++
-dst_cid
-// dst_cid should meet: (seq means priority)
-//   1. prefer local;
-  
-// dst_cid must meet:
-//   - not failslow
-//   - enough cmd quota
-//   - enough remain valid space
-replace_cid
-// replace_cid should meet: (seq means priority)
-//   1. same zone with dst_cid;
-//   2. failslow;
-
-// replace_cid must meet:
-//   - not owner
-src_cid
-// src_cid should meet: (seq means priority)
-//   1. same zone with dst_cid;
-//   2. not failslow;
-
-// src_cid must meet:
-//   - enough cmd quota
-```
-
-节点移除
-
-```cpp
-dst_cid
-// dst_cid should meet: (seq means priority)
-//   1. not failslow
-//   2. same zone with prefer local
-//   3. comparator above
-
-// dst_cid must meet:
-//   - not in alive loc
-//   - not in exclude_cids
-//   - enough remain valid space
-//   - not in the same zone where in stretch cluster and size(all_src_chunks) > 	
-//     kMinReplicaNum, and all src chunks except replace_cid are located in
- 
-src_cid
-// src_cid should meet: (seq means priority)
-//   1. not failslow
-//   2. same zone with dst_cid
-
-// src_cid must meet:
-//   - none
-```
-
-中高负载以 topo 安全为目的的迁移
-
-```cpp
-replace_cid
-// replace cid must meet
-//   - not prefer local
-//   - engough cmd quota （replace_cid 应该不用考虑命令配额）
-
-// replace cid should meet
-//   1. not owner
-//   2. failslow
-//   3. lower available capacity
-
-src_cid
-// src_cid must meet:
-//   - not failslow
-
-// src_cid should meet:
-//   - none
-
-dst_cid
-// dst_cid must meet:
-//   - not failslow
-//   - not src_cid
-//   - enough remain valid space
-//   - better topo safety than replace cid
-
-// dst_cid should meet:
-//   1. prefer local
-  
-```
-
-中高负载，在 topo 安全不降级的情况下，优先选 prefer local，在这里我只需要调一下顺序就好，先 dst_cid 再 src_cid 再 replace_cid
-
-中高负载，容量均衡迁移，其中，中负载可以容忍容量没那么均匀，并且允许此时最高负载和最低的如果 ratio 相差不超过 0.01 或者 extent 数量不超过 20 个。
-
-超高负载，容量均衡迁移，
-
-之前的迁移都是遍历 pid，而容量均衡迁移是先遍历 chunk 配对选出 replace_chunk 和 dst_chunk，然后才是从中选出合适的 pid。
-
-```cpp
-// replace_cid should meet:
-//   1. bigger rx + tx		(值得商榷)
-//   2. bigger cache use
-//   3. bigger partition use
-
-// replace_cid must meet:
-//   - partition used ratio > cluster avg partition used ratio
-
-// dst_cid should meet:
-//   1. smaller rx + tx
-//   2. smaller cache use
-//   3. smaller partition use
-
-// dst_cid must meet:
-//   - not failslow
-//   - not select by pre src_cid
-//   - not >95% when cluster avg partition used ratio < 95%
-```
-
-如果选出的 replace_cid 和 dst_cid 不在一个 zone，直接返回了（这其实没有利用上跨 zone 节点的存储能力，但其实一开始就根据不同 zone 分开了，所以这个判断其实是无效的）
-
-接下来选 src_cid 上的 pid，中负载不迁移 lease owner、parent、prefer local、even，高负载不迁移 lease owner、even，允许迁移 parent 和 prefer local。
-
-```cpp
-// pid should meet:
-//   1. thick
-//   2. thin and origin_id == 0
-//   3. thin and origin_id != 0
-
-// pid must meet (medium load):
-//   - not temp replica
-//   - src_cid not lease owner
-//   - not thin and origin != 0		(allow in high load)
-//   - src_cid not prefer local		(allow in high load)
-//   - not even
-//   - better and equal topo safety
-//   - replace_cid and dst_cid have enough cmd quota
-
-// src_cid 默认等于 replace_cid，
-// 如果 failslow，那么从活跃副本中选出不是 failslow 的第一个，否则不生成 cmd
-
-
-// src_cid should meet:
-//   1. replace_cid
-//   2. 还可以添加 same zone with dst
-
-// src_cid must meet:
-//   - not failslow
-```
-
-
-
-现有迁移策略：
-
-1. 移除节点迁移；
-2. 均匀分布迁移；
-3. 据负载做不同迁移：
-    1. 低负载：本地化分布迁移（包含本地化 + 局部化 + topo 安全）
-    2. 中高负载 ：topo 安全迁移（仅包含 topo 安全）+ 容容量均衡迁移，如果 topo 安全迁移生成了 cmd，跳过容量均衡迁移，否则根据容量均衡生成 cmd；
-    3. 超高负载：只做容量均衡迁移。
-
-引入 prio-extent 后：
-
-1. 移除节点上 prio-extent 的迁移；
-
-2. 移除节点上 normal-extent 的迁移；
-
-3. normal volume 均匀分布迁移（不论是 prio-extent 还是 normal extent）；
-
-4. 据负载做不同迁移：
-    1. allocated_prs > valid_cache_space：将在容量层的 prio-extent 优先迁移到 prs，再是性能层非 prs 空间上的 prio-extent 迁移到 prs；
-    1. valid_cache_space > allocated_prs > planned_prs：将在性能层非 prs 空间上的 prio-extent 迁移到 prs；
-    1. 若 allocated_prs < planned_prs，说明都在 prs 里，不需要迁移；
-    
-    在 pinperf 中分别定义了 high_prio_load、medium_prio_load、fine_prio_load 来对应这 3 种
-
 
 
 现有负载的计算是只算 partition 的已用比例。
 
-目前 migrate 中的逻辑是每次获取一个 pid 的 entry 都要通过 GetPhysicalExtentTableEntry 调用一次锁，但在 p rio-extent 的迁移中，可以批量获取 diff_pids 中所有的 pentry。
 
 
+recover manager 中 recover 和 migrate 的不同之处：
 
-```cpp
-/*
-+--------------------------+----------------------------------------------+
-| +-------------+		       |   																						|
-| | planned_prs |          |																							|
-| +-------------+          | 																							|
-|   valid_cache_space      |               valid_data_space								|
-+--------------------------+----------------------------------------------+
-
-what prio_load of chunk depends on its allocated_prioritized_space(replace with x)
-	1. low_prio_load_chunk    : x <= planned_prs
-	2. medium_prio_load_chunk : planned_prs < x < valid_cache_space
-	3. high_prio_load_chunk   : x > valid_cache_space
-
-if a chunk is in high_prio_load_chunk:
-	1. low_prio_data_space    = planned_prs
-	2. medium_prio_data_space = valid_cache_space - planned_prs
-	3. high_prio_data_space   = x - valid_cache_space
-
-if a chunk is in medium_prio_load_chunk:
-	1. low_prio_data_space    = planned_prs
-	2. medium_prio_data_space = x - planned_prs
-	3. high_prio_data_space   = 0
-
-if a chunk is in low_prio_load_chunk:
-	1. low_prio_data_space    = x - planned_prs
-	2. medium_prio_data_space = 0
-	3. high_prio_data_space   = 0
-*/
-```
-
-1. planned_prs 是节点为 pinperf 预留的性能层空间，由 lsm 管理；
-2. allocated_prs 总是等于 prio-replica * 256MiB，由 meta 管理；
-3. downgraded_prs 是位于容量层的数据量，由 lsm 管理。
+1. migrate 和 recover 只是共用 RecoverCmd 这个数据结构，各自的命令队列（recover 是 std::set，migrate 是  std::list）、触发时机、选取 dst/src 的时机并不相同；
+2. recover 的那个扫描只是一个非常浅的过滤 extent，分配 src dst 是在下发阶段，migrate 的 src dst 在扫描阶段就定下来了，下发阶段最多根据 lease owner 改一下 src
 
 
-
-在通常分配，迁移和恢复副本的开始阶段都需要分配一个副本，对于 prio-replica，我们可以定义出三个副本放置级别：
-
-1. 只有 allocated_prs + extent_size <= planned_prs && allocated_data_space + extent_size < valid_data_space 时允许放置 replica；
-
-    说明此时在 prs 放得下，可以把在 2 3 场景下的副本迁过来
-
-2. 在 allocated_prs + extent_size <= valid_cache_space && allocated_data_space + extent_size < valid_data_space 时允许放置 replica；
-
-    说明此时在性能层的其他空间放得下，可以把 3 场景下的副本迁过来，这种场景下，prio-replica 可能会挤占节点的 normal-replica 的 cache 空间，造成 normal extent 的性能降级。
-
-3. 在 allocated_data_space + extent_size <= valid_data_space 时允许放置；
-    1. 放置到版本包含了 pinperf 特性的节点；
-    2. 放置到低版本的节点（包含 LSM1 的节点）；
-    
-    prio-replica 可能会部分或全部地被放置到容量层设备上，可能造成 prio-replica 性能降级
-
-称为 prio-replica 放置级别 1,2,3，3 细分为 3.a 和 3.b。除非特别指明，放置级别更高的副本放置策略仍然会首先尝试将副本按照低放置级别的策略放置 prio-replica，例如一个放置级别 3 的副本放置，会优先寻找 allocated_prs + extent_size <= planned_prs 的节点。
-
-
-
-prio-extent 需要考虑 prefer local 和 lease owner、failslow、topo 安全、节点 prio 类容量、剩余 cmd 配额、pior 负载、是否双活、是否 even volume、是否有过克隆/快照行为。
-
-
-
-现有代码在 EnqueueCmd 的时候会将 migrate src_cid 设置成 lease owner，但如果 src_cid 跟 dst_cid 跨 zone，或者是 failslow，（他可能没有 cmd quota 了，不过这个条件在生成时是硬性规定的，派发时倒不用）这么选还是好事吗？
 
 1. 后续可以改进容量均衡迁移中 replace chunk 和 dst chunk 1 1 配对，可以改成尽可能让多个 src_cid 参与进来，除非所有 under chunk 都不行，才退出循环。
 2. http://gerrit.smartx.com/c/zbs/+/54622 patch 7 要拆分成几个小 patch
-
-
-
-pin 的 3 个参数
-
-1. meta 下发的 planned_prs 是 extent 粒度，值等于 valid_cache_space * prio_space_percentage，valid_cache_space 是 lsm 上一轮心跳汇报的结果，prio_space_percentage 是用户通过 rpc 设置的值；
-
-   > 除了 rpc 更新会立即下发最新的 prio_space_percentage，在日常心跳中每轮也会通过 reserve_prio_space 字段下发给 lsm
-
-2. meta 下发的 allocated_prs 是 extent 粒度，值等于 prioritized_pids * 256 MiB；
-
-   > lsm 目前汇报的 allocated_prs = prior_extent_num * extent_size，不管实际数据使用量多少，也不管有没有共享 pblob，不过它汇报的这个值目前还没用，以后想用的话用 Meta - LSM 的就知道哪些空间还没有落到 LSM 上
-
-3. lsm 汇报的 downg_prs 是 pblob 粒度，值等于 (all_prior_pblob - (planned_prs * 1024)) * 256 KiB，不管 prio pblob 是在 normal cache 还是 partition；
-
-   > 由于会有共享的 pblob，所以即使汇报的 allocated_prs > planned_prs，downg_prs 也可能为 0
-
-
-
-prio pblob 生命周期：
-
-1. planned_prs 是在 meta 侧的值，也是用户视角的 prio 的空间大小，通过心跳下发给 chunk，LSM 为其在 cache 中预留 planned_prs * 1024 个 pblob 的空间（即 prio pblob，仅预留，未实际使用）；
-2. 对 prio volume IO 时，卷内分配 prio extent，meta 下发请求到 lsm，lsm 根据这个 prio extent 实际使用的 pblob 数（extent 未必写满）在 prio pblob 预留空间里去分配 prio pblob；
-3. 在 prio IO 一段时间后，如果预留的 prio pblob 空间都写完了，就会用 normal cache，此时 downg_prs 开始从 0 递增；
-4. 继续分配 prio pblob 到 normal cache 都被用尽，那只能分配到 paritition 上，在 partition 上的 pblob 也算在 downg_prs 里面。
-
-预期内的 planned_prs 都是小于 valid_cache_space 的，但如果出现掉 cache 盘，会导致 planned_prs > valid_cache_space，在掉盘而 planned_prs 还没更新的这段时间里，prio extent 会分配到 partition，但在一次心跳过后（request 传递 valid_cache_space，response 据此计算 reserved_prio_space 并下发作为 lsm 的 planned_prs）又可以保证 planned_prs < valid_cache_space。
-
-
-
-在 lsm 视角，extent 只是 pblob 的数据集合，实际承担数据的是 256 KiB 的 pblob。
-
-5.5.x 开始，prio extent 在 planned_prs 内的数据会常驻 cache 层，而 normal extent 是保留之前的 IO 行为：
-
-1. IO 到 lsm 侧是先写 cache 层，cache 层的 pblob 会被 writeback 到 parition 层，在 cache 负载率超过 90% 时， writeback 完了之后变成 clean 的 pblob 会被淘汰；
-
-   >  cache 负载率不高的话，writeback 了也不会被淘汰，淘汰的操作就是更改 pblob 的元数据，把 pblob 的 cache_blob_id 设为空，这样数据就不存在于 cache 上了，释放的 cache block 又可以被其他 pblob 重用。
-   > writeback 一直在进行，只是限速会动态改变，当 cache 负载率高的话，writeback 速度会加快，当 APP IO 多的话，writeback 速度会调低。
-2. 当 partition 层数据被多次访问后会 promote 到 cache 层，判断条件是 30 分钟内访问 3 次，此时数据在 cache 和 partition 中各有一份。
-
-
-
-zbs 迁移策略（数字代表优先级）
-
-1. chunk remove 迁移
-
-   * prio extent
-
-     1. 若 lhs 和 rhs 其中有不具备 prio 能力的，先选具备 prio 能力的，再选 v5.5.0 节点但 planned_prs 为 0，最后选老版本节点，否则说明都具备 prio 能力，执行下一步；
-     2. 若 lhs 和 rhs 在容纳一个新副本后都是 low prio，按本地化 + 局部化 + topo 安全策略选；若只有一个是 low prio，选这个；否则说明都无法容纳，执行下一步；
-     3. 若 lhs 和 rhs 在容纳一个新副本后都是 medium prio，选 valid_cache_space - allocated_prs 更大的；若只有一个是 medium prio，选这个；否则说明都无法容纳，执行下一步；
-     4. 选 lhs 和 rhs 中 allocated_prs - valid_cache_space 更小的，选取结束。
-
-   * normal extent
-     1. 若集群是中低负载，按本地化 + 局部化 + topo 安全策略选，否则执行下一步；
-     2. 若 prefer local 节点是中低负载，按本地化 + topo 安全策略选，否则执行下一步；
-     3. 按 topo 安全策略 + 低容量优先选。
-
-2. even volume 均匀分布迁移：prio 与 normal 一致，都是让 even volume 卷内 extent 先做 topo 安全，若满足 topo 安全，再做 topo 不降级 extent 数量均衡。
-
-3. prior 超载迁移（存在 medium/high prio chunk）：在保证有足够的性能层和容量层空间前提下，按以下优先级做 topo 不降级节点 prio 负载均衡。
-   1. high prio 到 low prio 
-   2. high prio 到 medium prio 
-   3. medium prio 到 low prio 
-4. normal 低负载迁移（< 75%）：normal 和 prio extent 都按本地化 + 局部化 + topo 安全做迁移，normal 只需要保证有足够的容量层空间，而 prio 需要保证有足够的容量层和性能层空间，并且不引发 prio 超载。
-5. normal 中高负载迁移（>= 75%）：先做 prio 和 normal extent 的 topo 安全，若满足 topo 安全，再做 normal extent 的 topo 不降级容量均衡。
-6. normal 超高负载（>= 95%）：只做 normal extent 的 topo 不降级容量均衡。
-
-prio 超载迁移的负载均衡终态只要求各 prio chunk 处于 low prio load，不要求 prio extent 在各节点均匀分布。另外，欠载 prio chunk 上的 extent 分布会在 normal 低、中高负载迁移中被调整。
-
-chunk 级别的 prio-space 负载分为 3 种，计算方式：
-
-1. 低负载（low_prior_load）： allocated_prs <= planned_prs；
-2. 中负载（medium_prior_load）：planned_prs < allocated_prs <= valid_cache_space；
-3. 高负载（high_prior_load）：valid_cache_space < allocated_prs；
-
-cluster 级别的 prio-space 负载分为 2 种，计算方式：
-
-1. 欠载（underload）：不存在中、高负载的 chunk
-2. 过载（overload）：存在中负载或高负载的 chunk
+2. 现有代码在 EnqueueCmd 的时候会将 migrate src_cid 设置成 lease owner，但如果 src_cid 跟 dst_cid 跨 zone，或者是 failslow，（他可能没有 cmd quota 了，不过这个条件在生成时是硬性规定的，派发时倒不用）这么选还是好事吗？
+2. 目前 migrate 中的逻辑是每次获取一个 pid 的 entry 都要通过 GetPhysicalExtentTableEntry 调用一次锁，但在 p rior  extent 的迁移中，可以批量获取 diff_pids 中所有的 pentry，因此可以相应做优化。
+2. 机架 A 有节点 1 2 3 4，机架 B 有节点 5 6 7 ，normal extent 容量均衡会去算一个 avg_load，B 上的节点负载都大于 avg_load，A 上的都小于 avg_load，5 容量不够了，只能往 1 2 3 4 迁，但是他们都在 A 上，由于 topo 降级所以都没法迁。改进使得 5 可以向 6/7 上迁。
+2. scan_extents_num 应该放在 ReGenerateMigrateForUnevenVolume 这个函数中去做统计，虽然实际上 all_pool 中就一个，且一次只会因为一种方式去 migrate(本地化/容量均衡)。
+2. GenerateRecoverCmds 里面的 src 也可以有选择策略的，目前的写法太乱了。
 
 
 
@@ -897,22 +406,17 @@ pin 的 allocation 中的空间计算方式，以及初次写的 lease，怎么�
 
 
 
-
-
 FunctionalTest::SetUp()  --> new MiniCluster(kNumChunks);
 
 gtest系列之事件机制
 
 “事件” 本质是框架给你提供了一个机会, 让你能在这样的几个机会来执行你自己定制的代码, 来给测试用例准备/清理数据。gtest提供了多种事件机制，总结一下gtest的事件一共有三种：
-1、TestSuite事件
-需要写一个类，继承testing::Test，然后实现两个静态方法：SetUpTestCase方法在第一个TestCase之前执行；TearDownTestCase方法在最后一个TestCase之后执行。
-2、TestCase事件
-是挂在每个案例执行前后的，需要实现的是SetUp方法和TearDown方法。SetUp方法在每个TestCase之前执行；TearDown方法在每个TestCase之后执行。
-3、全局事件
-要实现全局事件，必须写一个类，继承testing::Environment类，实现里面的SetUp和TearDown方法。SetUp方法在所有案例执行前执行；TearDown方法在所有案例执行后执行。
-例如全局事件可以按照下列方式来使用：
-除了要继承testing::Environment类，还要定义一个该全局环境的一个对象并将该对象添加到全局环境测试中去
-原文链接：https://blog.csdn.net/ONEDAY_789/article/details/76718463
+
+1. TestSuite事件：需要写一个类，继承testing::Test，然后实现两个静态方法：SetUpTestCase方法在第一个TestCase之前执行；TearDownTestCase方法在最后一个TestCase之后执行。
+2. TestCase事件：是挂在每个案例执行前后的，需要实现的是SetUp方法和TearDown方法。SetUp方法在每个TestCase之前执行；TearDown方法在每个TestCase之后执行。
+3. 全局事件：要实现全局事件，必须写一个类，继承testing::Environment类，实现里面的SetUp和TearDown方法。SetUp方法在所有案例执行前执行；TearDown方法在所有案例执行后执行。
+
+例如全局事件可以按照下列方式来使用：除了要继承testing::Environment类，还要定义一个该全局环境的一个对象并将该对象添加到全局环境测试中去。原文链接：https://blog.csdn.net/ONEDAY_789/article/details/76718463
 
 
 
@@ -926,7 +430,7 @@ C++ 中为减少内存/读多写少的情况，可以用 absl::flat_hash_map 代
 
 C++ 中 map 嵌套使用，vector 添加一个 vector 中所有元素 https://zhuanlan.zhihu.com/p/121071760
 
-protobuf 中 optional/repeated/ 等用法，https://blog.csdn.net/liuxiao723846/article/details/105564742
+protobuf 中 optional/repeated/ 等用法，https://blog.csdn.net/liuxiao723846/article/details/105564742，如果不是 id 类的字段，最好都用 optional，便于做兼容性升级
 
 linux主分区、扩展分区、逻辑分区的区别、磁盘分区、挂载，https://blog.csdn.net/qq_24406903/article/details/118763610
 
@@ -949,3 +453,5 @@ stl 容器迭代器失效问题，https://stackoverflow.com/questions/6438086/it
 vscode 中用 vim 插件，这样可以按区域替换代码
 
 一个遗留问题是，单测里面想要触发两次 recover cmd，怎么让 entry 的 GetLocation() 得到及时更新，试了 sleep(9) 不行，可能不止需要一个心跳周期，还有其他条件没触发。
+
+以一个 functional test 单测为例子展开看 zbs 系统的启动流程。

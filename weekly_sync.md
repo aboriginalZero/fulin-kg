@@ -1,7 +1,9 @@
 1. 做 meta 的同学，互相 review 或者 CC，像 ec group 比如 fanyang / tengqiu，我跟 weipeng/shunkai；
 2. 建议在设计文档中，最终 Owner 能用一个表格的形式体现出策略对比，清晰直接；
 2. 生产代码应该少的出现断言，避免引起不必要的 coredump？
-2. zhiwei 提议，测试版可以多点日志，正式发布的时候再去掉
+2. zhiwei 提议，测试版可以多点日志，等要上 df 的时候再去掉
+2. 为啥 recover/migrate cmd queue 一个用 list 一个用 set
+2. 如果要重构 recover manager 的思路
 
 
 

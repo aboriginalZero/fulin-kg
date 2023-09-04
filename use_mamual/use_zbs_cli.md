@@ -133,6 +133,8 @@ zbs-tool elf get_vm_by_pid [pid]
 观察 ELF 集群厚制备副本分配情况
 
 ```shell
+# 查看 pextent 所属的 volume
+zbs-meta pextent getref <pid>
 # 查看 elf 集群中 2/3 副本、thin/thick 4 种情况的 target
 # 到对应 target 里面找在 tower 界面上创建的指定大小的虚拟卷对应的 lun
 zbs-iscsi target list

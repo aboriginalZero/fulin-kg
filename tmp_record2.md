@@ -1,15 +1,3 @@
-
-
-1. 移除节点上 prio-extent 的迁移
-2. 将 prior-extent 与 normal extent 策略单独开来
-3. 为避免性能下降，需要做本地化处理
-4. 在 Pin in perf 出现 over load 情况的时候需要加速迁移任务
-5. Pin extent 迁移过程中也应该占用 Pin 的 space 计数
-6. pin 容量均衡中不允许拓扑降级。
-7. pin 且 even 的卷，按照已有的 even 策略执行。
-
-
-
 独立处理 prio-extent 的迁移逻辑，不跟 normal extent 搅和。
 
 even prio-pextent 迁移
