@@ -1,40 +1,79 @@
-pin 的 3 个参数
+### ChunkSpaceInfo 字段
 
-1. meta 下发的 planned_prs 是 extent 粒度，值等于 valid_cache_space * prio_space_percentage，valid_cache_space 是 lsm 上一轮心跳汇报的结果，prio_space_percentage 是用户通过 rpc 设置的值；
+1. total_data_capacity  = 94% * 所有 HHD 物理容量
 
-    > 除了 rpc 更新会立即下发最新的 prio_space_percentage，在日常心跳中每轮也会通过 reserve_prio_space 字段下发给 lsm
+   > ZBS 在写入数据时需要额外的空间保存数据的校验和信息以发现静默错误，比例大约为 512 checksum / (8 KiB data + 512 checksum) = 94%
 
-2. meta 下发的 allocated_prs 是 extent 粒度，值等于 prioritized_pids * 256 MiB；
+2. total_cache_capacity < 94% * 所有 SSD 物理容量
+
+   > 除了检验和占据数据空间，ZBS 中 SSD 会有部分空间用于装载 OS，ZBS 内部的 MetaData、Journal 与 Cache 自己的元数据都会占用部分 SSD 空间
+
+3. v5.4.x 之后忽略 Used Space 和 Provisioned Space，只关注 allocated_data_space，该值等于以下 3 项累加：
+
+   1. Thick Space：meta 侧在分配 thick extent 时得到的 extent 粒度 thick 占用；
+   2. Thin Space：lsm 本次上报的 pblob 粒度 thin 占用 + 未包含在本次上报的 extent 粒度 thin 占用；
+   3. RX：meta 侧在 reposition 时为 dst 预留的 extent 粒度占用，不论 thick/thin。
+
+4. invalid_data_space 在 zbs-meta chunk list 中没有显示，可以在 zbs-meta cluster summary 中看到；
+
+5. thin_used_data_space 包含这个 chunk 最近一次上报的 thin extent 总空间消耗，用于在 meta 切换后进行集群 used_data_space 计算，在该 chunk 未再次上报 used space 前也能显示较为合理的集群空间消耗，v5.4.x 引入的字段；
+
+pin 开始在 ChunkSpaceInfo 引入的 3 个参数
+
+1. meta 下发的 planned_prs 是 extent 粒度，值等于 valid_cache_space * prior_space_percentage，valid_cache_space 是 lsm 上一轮心跳汇报的结果，prior_space_percentage 是用户通过 rpc 设置的值；
+
+    > 除了 rpc 更新会立即下发最新的 prior_space_percentage，在日常心跳中每轮也会通过 reserve_prior_space 字段下发给 lsm
+
+2. meta 下发的 allocated_prs 是 extent 粒度，值等于 (prioritized_pids + prior_rx_pids) * 256 MiB；
 
     > lsm 目前汇报的 allocated_prs = prior_extent_num * extent_size，不管实际数据使用量多少，也不管有没有共享 pblob，不过它汇报的这个值目前还没用，以后想用的话用 Meta - LSM 的就知道哪些空间还没有落到 LSM 上
 
-3. lsm 汇报的 downg_prs 是 pblob 粒度，值等于 (all_prior_pblob - (planned_prs * 1024)) * 256 KiB，不管 prio pblob 是在 normal cache 还是 partition；
+3. lsm 汇报的 downg_prs 是 pblob 粒度，值等于 (all_prior_pblob - (planned_prs * 1024)) * 256 KiB，不管 prior pblob 是在 normal cache 还是 partition；
 
     > 由于会有共享的 pblob，所以即使汇报的 allocated_prs > planned_prs，downg_prs 也可能为 0
 
 
 
-chunk 级别的 prio-space 负载分为 3 种，计算方式：
+### ListCacheResponse 字段
 
-1. 低负载（low_prior_load）： allocated_prs <= planned_prs；
-2. 中负载（medium_prior_load）：planned_prs < allocated_prs <= valid_cache_space；
-3. 高负载（high_prior_load）：valid_cache_space < allocated_prs；
+zbs-chunk cache list 显示结果
 
-cluster 级别的 prio-space 负载分为 2 种，计算方式：
+```shell
+TOTAL ACTIVE:    768.0K ( 0.00%)
+TOTAL INACTIVE:    2.7G ( 5.40%)
+TOTAL CLEAN:         0B ( 0.00%)
+TOTAL FREE:       38.3G (76.60%)
+```
 
-1. 欠载（underload）：不存在中、高负载的 chunk
-2. 过载（overload）：存在中负载或高负载的 chunk
+这 4 个字段目前都是普通缓存的统计，prior space 不算在内，因为 lsm 缓存使用 LRU 策略，所以 active 和 inactive 代表是否过期：
+
+* dirty = active + inactive，即 dirty cache space，数据在 SSD cache 但未写入 HDD 时会被标记为脏；
+* used = active + inactive + clean，即 used cache space，已使用的 cache 空间；
+* total = active + inactive + clean + free，即 cache capacity，可使用的 cache 空间。
 
 
 
-prio pblob 生命周期：
+在 lsm 视角，extent 只是 pblob 的数据集合，实际承担数据的是 256 KiB 的 pblob。prior pblob 的生命周期：
 
-1. planned_prs 是在 meta 侧的值，也是用户视角的 prio 的空间大小，通过心跳下发给 chunk，LSM 为其在 cache 中预留 planned_prs * 1024 个 pblob 的空间（即 prio pblob，仅预留，未实际使用）；
-2. 对 prio volume IO 时，卷内分配 prio extent，meta 下发请求到 lsm，lsm 根据这个 prio extent 实际使用的 pblob 数（extent 未必写满）在 prio pblob 预留空间里去分配 prio pblob；
-3. 在 prio IO 一段时间后，如果预留的 prio pblob 空间都写完了，就会用 normal cache，此时 downg_prs 开始从 0 递增；
-4. 继续分配 prio pblob 到 normal cache 都被用尽，那只能分配到 paritition 上，在 partition 上的 pblob 也算在 downg_prs 里面。
+1. planned_prs 是在 meta 侧的值，也是用户视角的 prior 的空间大小，通过心跳下发给 chunk，LSM 为其在 cache 中预留 planned_prs * 1024 个 pblob 的空间（即 prior pblob，仅预留，未实际使用）；
+2. 对 prior volume IO 时，卷内分配 prior extent，meta 下发请求到 lsm，lsm 根据这个 prio extent 实际使用的 pblob 数（extent 未必写满）在 prior pblob 预留空间里去分配 prio pblob；
+3. 在 prior IO 一段时间后，如果预留的 prior pblob 空间都写完了，就会用 normal cache，此时 downg_prs 开始从 0 递增；
+4. 继续分配 prior pblob 到 normal cache 都被用尽，那只能分配到 paritition 上，在 partition 上的 pblob 也算在 downg_prs 里面。
 
-预期内的 planned_prs 都是小于 valid_cache_space 的，但如果出现掉 cache 盘，会导致 planned_prs > valid_cache_space，在掉盘而 planned_prs 还没更新的这段时间里，prio extent 会分配到 partition，但在一次心跳过后（request 传递 valid_cache_space，response 据此计算 reserved_prio_space 并下发作为 lsm 的 planned_prs）又可以保证 planned_prs < valid_cache_space。
+预期内的 planned_prs 都是小于 valid_cache_space 的，但如果出现掉 cache 盘，会导致 planned_prs > valid_cache_space，在掉盘而 planned_prs 还没更新的这段时间里，prior extent 会分配到 partition，但在一次心跳过后（request 传递 valid_cache_space，response 据此计算 reserved_prior_space 并下发作为 lsm 的 planned_prs）又可以保证 planned_prs < valid_cache_space。
+
+5.5.x 开始，prior extent 在 planned_prs 内的数据会常驻 cache 层，而 normal extent 是保留之前的 IO 行为：
+
+1. IO 到 lsm 侧是先写 cache 层，cache 层的 pblob 会被 writeback 到 parition 层，在 cache 负载率超过 90% 时， writeback 完了之后变成 clean 的 pblob 会被淘汰；
+
+    >  cache 负载率不高的话，writeback 了也不会被淘汰，淘汰的操作就是更改 pblob 的元数据，把 pblob 的 cache_blob_id 设为空，这样数据就不存在于 cache 上了，释放的 cache block 又可以被其他 pblob 重用。
+    >  writeback 一直在进行，只是限速会动态改变，当 cache 负载率高的话，writeback 速度会加快，当 APP IO 多的话，writeback 速度会调低。
+
+2. 当 partition 层数据被多次访问后会 promote 到 cache 层，判断条件是 30 分钟内访问 3 次，此时数据在 cache 和 partition 中各有一份。
+
+
+
+卸载数据盘，会引发 lsm 的盘间数据迁移，从一个 parition 到另一个 partition，如果剩余的 partition 不够容纳就卸载不掉，除非强制拔盘，那就成丢副本了。
 
 
 
@@ -46,36 +85,22 @@ prior extent 分配策略
 
 
 
-
-
-lsm
-
-在 lsm 视角，extent 只是 pblob 的数据集合，实际承担数据的是 256 KiB 的 pblob。
-
-5.5.x 开始，prio extent 在 planned_prs 内的数据会常驻 cache 层，而 normal extent 是保留之前的 IO 行为：
-
-1. IO 到 lsm 侧是先写 cache 层，cache 层的 pblob 会被 writeback 到 parition 层，在 cache 负载率超过 90% 时， writeback 完了之后变成 clean 的 pblob 会被淘汰；
-
-    >  cache 负载率不高的话，writeback 了也不会被淘汰，淘汰的操作就是更改 pblob 的元数据，把 pblob 的 cache_blob_id 设为空，这样数据就不存在于 cache 上了，释放的 cache block 又可以被其他 pblob 重用。
-    >  writeback 一直在进行，只是限速会动态改变，当 cache 负载率高的话，writeback 速度会加快，当 APP IO 多的话，writeback 速度会调低。
-
-2. 当 partition 层数据被多次访问后会 promote 到 cache 层，判断条件是 30 分钟内访问 3 次，此时数据在 cache 和 partition 中各有一份。
-
-
-
-连续快照的 allocated_data_space 不对劲
-
-chunk.chunk_space_info.thin_used_data_space 包含这个 chunk 最近一次上报的 thin extent 总空间消耗，用于在 meta 切换后进行集群 used_data_space 计算，在该 chunk 未再次上报 used space 前也能显示较为合理的集群空间消耗，空间分配改进中引入的字段。
-
-
-
-
-
 ### zbs 副本迁移策略
 
 #### synopsis
 
-（数字代表优先级）
+chunk 级别的 prior-space 负载分为 3 种，计算方式：
+
+1. 低负载（low_prior_load）： allocated_prs <= planned_prs；
+2. 中负载（medium_prior_load）：planned_prs < allocated_prs <= valid_cache_space；
+3. 高负载（high_prior_load）：valid_cache_space < allocated_prs；
+
+cluster 级别的 prior-space 负载分为 2 种，计算方式：
+
+1. 欠载（underload）：不存在中、高负载的 chunk
+2. 过载（overload）：存在中负载或高负载的 chunk
+
+（以下策略中，数字代表优先级）
 
 1. chunk remove 迁移
 

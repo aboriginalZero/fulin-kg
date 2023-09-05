@@ -1,3 +1,129 @@
+```cpp
+CO_TEST_F(PrioFunctionalTest, SnapshotManyAndMigrate) {
+    // 需要调低，否则 migrate 结束剔除副本的时候，由于 lsm 一直没 free，一直通过心跳上报自己有的 pid
+    // meta 一直认为这个 pid 需要剔除，一直下发 gc cmd
+    // flags gc 在这设置不生效，得放到集群一开始运行的位置
+    // FLAGS_gc_interval_s = 1;
+    // FLAGS_reposition_trigger_interval_ms = 100;
+    // FLAGS_recover_scan_interval_ms = 1500;
+    // FLAGS_migrate_scan_in_high_load_interval_ms = 1500;
+
+    constexpr auto* pool_name = "pool";
+    constexpr auto size_1g = 1ULL << 30;
+    constexpr auto block_size = 1ULL << 12;  // 4 KiB
+    auto* meta = cluster_->GetMeta();
+
+    LOG(INFO) << "yiwu init";
+    ASSERT_STATUS(meta->SwitchRecover(false));
+    ASSERT_STATUS(meta->SwitchMigrate(false));
+
+    ShowChunkInfo(meta);
+
+    auto get_volume_path = [](uint idx) -> meta::VolumePath {
+        meta::VolumePath volume_path;
+        volume_path.mutable_pool_path()->set_pool_name(pool_name);
+        volume_path.set_volume_name(FormatString("volume%u", idx));
+        return volume_path;
+    };
+
+    ASSERT_STATUS(meta->CreatePool(pool_name, 2));
+    ASSERT_TRUE(WaitPrsReady());
+    LOOP(kNumChunks) { ASSERT_STATUS(GetMeta()->SetChunkPrioSpaceRatio({{i + 1, 20}})); }
+
+    LOG(INFO) << "yiwu after SetChunkPrioSpaceRatio";
+    ShowChunkInfo(meta);
+
+    Volume volume;
+    ASSERT_STATUS(meta->CreateVolumeByPath(
+        get_volume_path(1), size_1g,
+        CREATE_VOLUME_PARAMS(.stripe_size = 256 * 1024, .stripe_num = 1, .prioritized = true, .preferred_cid = 1),
+        &volume));
+
+    LOG(INFO) << "yiwu after create volume";
+    ShowChunkInfo(meta);
+
+    auto buf = CREATE_UNIQUE_BUFFER(block_size);
+    GenerateRandomBuffer(buf.get(), block_size);
+    auto* client = cluster_->GetClient(1);
+
+    LOOP(4) { ASSERT_STATUS(client->Write(volume.id(), buf.get(), block_size, i * kExtentSize)); }
+    ASSERT_CLUSTER_APRS(2 * size_1g);  // 因为 2 副本，所以 * 2
+
+    LOG(INFO) << "yiwu after first write";
+    ShowChunkInfo(meta);
+
+    int loop_num = 8;
+    LOOP(loop_num, i) {
+        Volume snapshot;
+        meta::SnapshotPath snapshot_path;
+        std::string snap_name = "snap" + std::to_string(i);
+        snapshot_path.mutable_volume_path()->CopyFrom(get_volume_path(1));
+        snapshot_path.set_snapshot_name(snap_name);
+        snapshot_path.set_secondary_id(snap_name);
+        ASSERT_STATUS(meta->CreateSnapshotByPath(snapshot_path, &snapshot));
+        LOG(INFO) << "yiwu after snapshot " << i;
+        // 刚快照完，还没 write 以及 gc-scan，所以还被当作是 prior extent？
+        // ShowChunkInfo(meta);
+        // sleep(2);
+        // LOG(INFO) << "yiwu sleep 2s";
+        // ShowChunkInfo(meta);
+
+        LOG(INFO) << "yiwu after snapshot and before write " << i;
+        LOOP(4, j) { ASSERT_STATUS(client->Write(volume.id(), buf.get(), block_size, j * kExtentSize)); }
+        // 这边写完导致 allocated_prs 从 0 0 0 0 0 变成 3 1 3 0 1，开足够大的 planned_prs 空间能够先避免
+
+        LOG(INFO) << "yiwu after snapshot and after write " << i;
+        ShowChunkInfo(meta);
+    }
+
+    std::vector<Chunk> chunks;
+    ASSERT_STATUS(meta->ListChunk(&chunks));
+    LOG(INFO) << "yiwu ListChunk";
+    FOREACH (chunks, it) { LOG(INFO) << "yiwu cid " << it->id() << " status " << it->status(); }
+
+    ASSERT_STATUS(meta->SwitchMigrate(true));
+    ASSERT_STATUS(meta->EnableScanMigrateImmediate());
+    LOG(INFO) << "yiwu after enable";
+
+    // 需要时间来 migrate scan
+    sleep(200);
+    std::vector<RecoverCmd> cmds;
+    ASSERT_STATUS(meta->ListMigrate(&cmds));
+    LOG(INFO) << "yiwu cmds.size " << cmds.size();
+    for (auto& cmd : cmds) {
+        LOG(INFO) << "yiwu pid " << cmd.pid() << " src id " << cmd.src_chunk() << " dst id " << cmd.dst_chunk()
+                  << " replace id " << cmd.replace_chunk();
+    }
+
+    std::vector<PExtentResp> pextents;
+
+    ASSERT_STATUS(meta->ShowVolumeById(volume.id(), &volume, &pextents));
+    for (auto& pextent : pextents) {
+        LOG(INFO) << "yiwu volume pid " << pextent.pid() << (pextent.prioritized() ? " prior" : " normal");
+    }
+
+    LOOP(loop_num, i) {
+        Volume snapshot;
+        std::string pool_name2 = "pool";
+        std::string snapshot_name = "snap" + std::to_string(i);
+
+        meta::SnapshotPath snap_path;
+        snap_path.mutable_volume_path()->mutable_pool_path();
+        snap_path.set_secondary_id(snapshot_name);
+        ASSERT_STATUS(meta->ShowSnapshotByPath(snap_path, &snapshot));
+
+        ASSERT_STATUS(meta->ShowVolumeById(snapshot.id(), &snapshot, &pextents));
+        for (auto& pextent : pextents) {
+            LOG(INFO) << "yiwu snapshot pid " << pextent.pid() << (pextent.prioritized() ? " prior" : " normal");
+        }
+    }
+
+    ShowChunkInfo(meta);
+}
+```
+
+
+
 1. 刚快照并对原卷写后，所有的 extent 都还是 prior 的，不先禁掉 migrate 的话，会引发 prior load migrate。
 
     禁掉之后，空间的值是符合预期的

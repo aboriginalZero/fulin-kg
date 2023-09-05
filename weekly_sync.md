@@ -4,6 +4,7 @@
 2. zhiwei 提议，测试版可以多点日志，等要上 df 的时候再去掉
 2. 为啥 recover/migrate cmd queue 一个用 list 一个用 set
 2. 如果要重构 recover manager 的思路
+2. pin meta 侧的工作，除了空间计算和副本分配/迁移/恢复，还有什么内容
 
 
 

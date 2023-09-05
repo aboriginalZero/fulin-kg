@@ -1,57 +1,3 @@
-
-
-1. 我需要整理一下 prefer local，lease owner 的变更情况，怎么生成，怎么变更，怎么释放的。
-
-2. 把 prior 快照 + IO 的 functional test 单测流程记下来，便于后续排查问题
-
-   块存储对外接口并不多，一般就是快照/克隆之后的 COW 让问题变复杂，性能变慢
-
-3. lsm 测跟 dongdong 的聊天内容
-
-   meta 侧空间计算中的字段含义，
-   [快照/克隆对空间参数的影响](https://docs.google.com/document/d/1oOZ6CENaLFBU_AG6tZ4nnxv1CFUNvv3ND_NWVGVN2PY/edit#heading=h.x0vh71hjzfds)
-
-4. migrate 这段时间的跟 zhiwei 的聊天，smtxos 和 pin test 频道中的 case 整理
-
-   目前遇到的高负载下不迁移：要么 topo 降级了，要么 lease owner 没释放
-
-
-
-zbs 当前行为：
-
-zbs chunk 将每小时 io 大于 3600（iops > 1）的 zbs volume 视为 active volume。
-zbs chunk 每隔 1h 上报一次 active zbs volume 的信息给 zbs meta，不会上报 inactive volume。
-对于一个 zbs volume，zbs meta 收到 6 次 volume 信息上报后（即 6h 后），会更新其 prefer cid 字段，同时更新其所有 pextent 的 prefer local 字段。
-
-
-
-允许在 server san 模式下人工指定 access point，融合模式下，接入点总是快速的自动切换至本地，因此对于融合模式下的 Target 执行对应的配置不会产生期望的效果。
-
-根据 access point 去变化 prefer local 的。
-
-当一个共享卷被大于等于 3 个接入点同时访问时（Xen 平台的 iSCSI DataStore 模式，Xen 将一个 LUN（Volume） 作为一个池，不同节点上的 VM 将仅访问其中的部分数据） 。将不会触发 Local Transfer 事件。相关的 Extent 会保持初次写入时的接入节点作为 prefer local
-
-在副本分配策略 in ZBS 中搜 prefer local。
-
-每个数据链路会尽量分散给不同的 Access 处理，尽量避免链路资源竞争（在这里就可以把数据链路理解成 access point）
-
-
-
-iscsi access point 3 部分策略：iscsi 建立连接、异常重定向、动态平衡
-
-修改 iscsi 接入点选择策略：双活集群下，Target 开启外部接入模式时（非 qemu 发起的 iscsi 连接），如果主可用域至少有一个节点可用，则必须选择在主可用域中的节点作为接入点。如果主可用域没有可用节点，则返回次级可用域的接入点。
-
-修改 iscsi 接入点平衡策略：（每 3 分钟执行一次接入点平衡检查，每次检查最多移动一个接入点）
-平衡策略目标是：使得每个接入点的数量在主可用域的节点之间内尽可能平均，次可用域内 iscsi 接入点数量应当为 0。如果 iscsi 接入点已经在主可用域上，即使主可用域所有节点都宕机，也不允许主动迁移和修改 access record 到次可用域。客户端发起重试后，会返回次可用域的临时接入点， access record 仍然在主可用域。
-
-临时异常回切：对于临时分配到次可用域的接入点，一旦主可用域有一个节点恢复，且该节点对应的 access session 存活超过一定时间（3分钟），则自动平衡检查时应当尝试将其迁移回主可用域。
-
-https://docs.google.com/document/d/1t14uKF6YCaijgXAq-bS-WR_I1SaLhYxbOnKXhspBtlQ/edit#heading=h.iidguj2la1
-
-
-
-
-
 策略类梳理（seq means prior）
 
 1. 通过 rpc 显示指定的 recover cmd（这个不一定要支持）
@@ -68,7 +14,7 @@ https://docs.google.com/document/d/1t14uKF6YCaijgXAq-bS-WR_I1SaLhYxbOnKXhspBtlQ/
 
     待做 [ZBS-21443](http://jira.smartx.com/browse/ZBS-21443)，节点移除还要考虑其他节点的负载情况。
 
-    因为节点移除时，他上面的副本需要马上迁移完，否则那条 cli 就一直执行不完。从存储池中移除节点的时候，仅考虑 migrate dst cid 在不迁出副本的情况下是否可以容纳待迁移的数据，但这样可能导致 dst cid 超高负载或满载后，副本还没迁移完。
+    因为节点移除时，他上面的副本需要尽快迁移完，否则不会执行下一条命令（zbs-deploy-manage meta_remove_node < storage ip>）。从存储池中移除节点的时候，仅考虑 migrate dst cid 在不迁出副本的情况下是否可以容纳待迁移的数据，但这样可能导致 dst cid 超高负载或满载后，副本还没迁移完。
 
     例如节点 a b c d ，存在大量 extent 的 3 副本分布在 b c d，此时如果移除 c ，那么只能向 a 迁移，a 如果容量较小，可能会被 c 来的数据填满。
 
@@ -129,7 +75,6 @@ https://docs.google.com/document/d/1t14uKF6YCaijgXAq-bS-WR_I1SaLhYxbOnKXhspBtlQ/
     2. 能够查看 generate/pending_recover 的数量
     3. 能够查看 need_migrate 的数量
 3. 智能模式中，值变化的时候添加 log
-3. 
 3. 改 recover manager 中的函数名，比如 GenerateRecoverCmds 实际代表 DistributeRecoverCmds，还有计数相关的，recover 处有 2 个，可以精简的，把 recover 和 migrate 做到对称。
 3. 改 Prefer Local / TopoAware / Localized 三个比较器名字，[ZBS-25802](http://jira.smartx.com/browse/ZBS-25802)
 
@@ -420,7 +365,63 @@ gtest系列之事件机制
 
 
 
+1. 我需要整理一下 prefer local，lease owner 的变更情况，怎么生成，怎么变更，怎么释放的。
 
+   Meta 的 Lease 过期策略，出于性能的考虑，Meta 未将对外授权的 Lease 信息持久化在 MetaDB 中。因此新的 Meta Leader 无法知晓上一任 Leader 分发的 Extent Lease Owner 是谁 ，因此它在开始服务之前需要确保之前授予的所有 Lease 都被清空，重新由自身进行授予。此时如果有一个 Access（Chunk） 失联，为了确保已经失联的 Access 将所有从上一任 Leader 中获得的 Lease 丢弃，需要等待失连的 Session 一定超时（ **12 s**）, ZBS 5.2.0 之后调整为 **7s**
+
+   分配 lease 代码，AccessManager::AllocOwner、GenerateLease、
+
+2. 把 prior 快照 + IO 的 functional test 单测流程记下来，便于后续排查问题
+
+   块存储对外接口并不多，一般就是快照/克隆之后的 COW 让问题变复杂，性能变慢
+
+3. lsm 测跟 dongdong 的聊天内容
+
+   meta 侧空间计算中的字段含义，
+   [快照/克隆对空间参数的影响](https://docs.google.com/document/d/1oOZ6CENaLFBU_AG6tZ4nnxv1CFUNvv3ND_NWVGVN2PY/edit#heading=h.x0vh71hjzfds)
+
+4. migrate 这段时间的跟 zhiwei 的聊天，smtxos 和 pin test 频道中的 case 整理
+
+   目前遇到的高负载下不迁移：要么 topo 降级了，要么 lease owner 没释放
+
+
+
+zbs 当前行为：
+
+zbs chunk 将每小时 io 大于 3600（iops > 1）的 zbs volume 视为 active volume。
+zbs chunk 每隔 1h 上报一次 active zbs volume 的信息给 zbs meta，不会上报 inactive volume。
+对于一个 zbs volume，zbs meta 收到 6 次 volume 信息上报后（即 6h 后），会更新其 prefer cid 字段，同时更新其所有 pextent 的 prefer local 字段。
+
+
+
+允许在 server san 模式下人工指定 access point，融合模式下，接入点总是快速的自动切换至本地，因此对于融合模式下的 Target 执行对应的配置不会产生期望的效果。
+
+根据 access point 去变化 prefer local 的，MetaRpcServer::ReportVolumeAccess
+
+当一个共享卷被大于等于 3 个接入点同时访问时（Xen 平台的 iSCSI DataStore 模式，Xen 将一个 LUN（Volume） 作为一个池，不同节点上的 VM 将仅访问其中的部分数据） 。将不会触发 Local Transfer 事件。相关的 Extent 会保持初次写入时的接入节点作为 prefer local
+
+在副本分配策略 in ZBS 中搜 prefer local。
+
+每个数据链路会尽量分散给不同的 Access 处理，尽量避免链路资源竞争（在这里就可以把数据链路理解成 access point）
+
+https://docs.google.com/document/d/1rcpxCZDNb7YFnEYVIJg-WzZVCzI8rArTFuzLNjJLNhc/edit#heading=h.gye9t51u3igb
+
+
+
+为 Volume 增加 access point （cid 列表）属性， Extent 增加 Prefer Local （cid）的属性，用于表示数据的访问点。
+
+
+
+iscsi access point 3 部分策略：iscsi 建立连接、异常重定向、动态平衡
+
+修改 iscsi 接入点选择策略：双活集群下，Target 开启外部接入模式时（非 qemu 发起的 iscsi 连接），如果主可用域至少有一个节点可用，则必须选择在主可用域中的节点作为接入点。如果主可用域没有可用节点，则返回次级可用域的接入点。
+
+修改 iscsi 接入点平衡策略：（每 3 分钟执行一次接入点平衡检查，每次检查最多移动一个接入点）
+平衡策略目标是：使得每个接入点的数量在主可用域的节点之间内尽可能平均，次可用域内 iscsi 接入点数量应当为 0。如果 iscsi 接入点已经在主可用域上，即使主可用域所有节点都宕机，也不允许主动迁移和修改 access record 到次可用域。客户端发起重试后，会返回次可用域的临时接入点， access record 仍然在主可用域。
+
+临时异常回切：对于临时分配到次可用域的接入点，一旦主可用域有一个节点恢复，且该节点对应的 access session 存活超过一定时间（3分钟），则自动平衡检查时应当尝试将其迁移回主可用域。
+
+https://docs.google.com/document/d/1t14uKF6YCaijgXAq-bS-WR_I1SaLhYxbOnKXhspBtlQ/edit#heading=h.iidguj2la1
 
 
 
