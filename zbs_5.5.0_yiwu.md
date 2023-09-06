@@ -205,7 +205,7 @@ src_cid
 replace_cid
 // replace cid must meet
 //   - not prefer local
-//   - engough cmd quota （replace_cid 应该不用考虑命令配额）
+//   - enough cmd quota （replace_cid 应该不用考虑命令配额）
 
 // replace cid should meet
 //   1. not owner
@@ -234,6 +234,67 @@ dst_cid
 中高负载，在 topo 安全不降级的情况下，优先选 prefer local，如果 prefer local 不能让拓扑结构更健康，迁移的 dst 是不会选 prefer local 的。
 
 > TODO 可以改进成：先 dst_cid 再 src_cid 再 replace_cid
+
+期望改成
+
+replace_cid 跟 dst_cid 的选择是互相制约的，因为 topo distance better 的可能有多种组合
+
+```shell
+replace_cid
+// replace cid must meet
+//   - worse or equal topo safety than replace cid
+
+// replace cid should meet
+//   1. not owner
+//   2. failslow
+//   3. not prefer local
+//   3. lower available capacity
+
+dst_cid
+// dst_cid must meet:
+//   - not in alive loc
+//   - not failslow 
+//   - enough remain valid space （这 2 个情况只是限速器导致的，啥都不干，过段时间也清出来了）
+//   - enough cmd quota 
+//   - better topo safety than replace cid
+
+// dst_cid should meet:
+//   1. prefer local
+//   2. comparator above (more valid space)
+
+src_cid
+// src_cid must meet:
+//   - enough cmd quota 
+
+// src_cid should meet:
+//   1. not failslow
+//   2. same zone with dst_cid （这两个顺序值得商榷）
+```
+
+1. 若有 prefer local 且 topo dis 最优
+
+   不迁移
+
+2. 若有 prefer local 且 topo dis 不是最优
+
+   1. replace_cid 是 prefer local 之外的副本能让  topo 等级更高，迁移
+   2. replace_cid 是 prefer local 能让  topo 等级更高，迁移
+   3. 没能让 topo 等级更高，不迁移
+
+3. 若无 prefer local （不论此时 topo dis）
+
+   1. dst_cid 是 prefer local 能让 topo 不降级，迁移
+   2. dst_cid 是 prefer local 之外的副本能让  topo 等级更高，迁移
+   3. 不迁移
+
+
+
+
+
+1. 考虑到副本处于 FailSlow 节点上的数据安全风险，要显著高于处于一个正常但是拓扑接近的节点。因此，在选择迁移的目的节点时，选择健康节点的优先级，要高于拓扑安全；
+2. 对于源端节点选择来说，如果一次迁移可以提高拓扑安全等级，即使没有健康的源端节点，也应该选择一个 Failslow 节点做尝试
+
+
 
 中高负载，容量均衡迁移，其中，中负载可以容忍容量没那么均匀，并且允许此时最高负载和最低的如果 ratio 相差不超过 0.01 或者 extent 数量不超过 20 个。
 
