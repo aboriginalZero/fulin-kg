@@ -164,6 +164,8 @@ LOG(INFO) << "prefer_zone_idx " << prefer_zone_idx;
    目前的写法好像都是先更新内存再更新 metaDB，需要调整顺序吗？
    
    ZBS-25386 有描述一个当 lsm 读取速度过慢时，会导致大部分迁移命令超时的问题，因此并发度也可以根据 lsm 读取速率来调节
+   
+   jiewei 的想法是如果满足上一轮的 recover cmd queue 是满的，且当前这轮是空的，那么在下一个 4s 就触发扫描，而不需要等 5 分钟，这样来保证能喂满 chunk。
 
 
 

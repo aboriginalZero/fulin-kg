@@ -246,8 +246,8 @@ replace_cid
 
 // replace cid should meet
 //   1. not owner
-//   2. failslow
-//   3. not prefer local
+//   2. not prefer local
+//   3. failslow
 //   3. lower available capacity
 
 dst_cid
@@ -271,23 +271,14 @@ src_cid
 //   2. same zone with dst_cid （这两个顺序值得商榷）
 ```
 
-1. 若有 prefer local 且 topo dis 最优
-
-   不迁移
-
-2. 若有 prefer local 且 topo dis 不是最优
-
-   1. replace_cid 是 prefer local 之外的副本能让  topo 等级更高，迁移
-   2. replace_cid 是 prefer local 能让  topo 等级更高，迁移
-   3. 没能让 topo 等级更高，不迁移
-
-3. 若无 prefer local （不论此时 topo dis）
-
-   1. dst_cid 是 prefer local 能让 topo 不降级，迁移
-   2. dst_cid 是 prefer local 之外的副本能让  topo 等级更高，迁移
-   3. 不迁移
+1. 若有 prefer local 且 topo dis 最优，不迁移，否则执行下一步；
+2. 若 dst_cid 是 prefer local 能让 topo 不降级就迁移，若dst_cid 不是 prefer local 能让 topo 升级才迁移。
 
 
+
+对 src 的选取是通用的，默认为 replace，优先选 
+
+局部化找到的副本其实考虑了双活场景，因为副本分配也用的 LocalizationComparator 这个比较器。
 
 
 
