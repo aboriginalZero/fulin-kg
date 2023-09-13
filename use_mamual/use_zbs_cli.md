@@ -118,6 +118,8 @@ systemctl restart tuna-rest-server zbs-rest-server
 
 可参考，https://docs.google.com/document/d/1ctc_g51UC_yBsHOkUM4iRzjlYrN8y6buDuxJ6oLg4lU/edit#heading=h.efb25l4u0lco
 
+替换 meta leader，先 stripe src/zbs-metad 再 scp，如果 restart 失败，可用通过 journalctl -u zbs-metad.service 找原因
+
 指定 meta leader 节点位置
 
 ```shell

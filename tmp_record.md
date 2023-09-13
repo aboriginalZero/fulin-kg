@@ -1,3 +1,61 @@
+那这里还有两个问题：
+
+1. 卸载 partition 盘的时候，chunk 和 meta 分别会做哪些校验，分别用的哪个字段；
+2. 卸载盘（或者拔盘）之后，可能会出现 allocated space > data capacity，进而导致数据迁移受到影响。meta 能否在集群数据恢复完成之后，保证 allocated space <= data capacity 呢？
+
+
+
+如果允许出现 allocated_data_space 大于 valid_data_space，感觉空间计算部分都会有负数的情况
+
+
+
+
+
+
+
+1. zbs-deploy-manage storage_pool_remove_node < storage ip> 
+   1. 这个命令会调用 zbs 侧的 RemoveChunkFromStoragePool rpc，只做剩余空间检查，检查通过后，chunk 状态改成 REMOVING，日志里出现 REMOVE CHUNK FROM STORAGEPOOL；
+   2. recover manager 有个 4s 定时器会为状态为 REMOVING 的 chunk 生成迁移命令并下发，而对 migrate dst 的选取，如果是在集群 normal low/medium load，会按本地化 + 局部化 + topo 安全策略选，如果是 normal high load，优先考虑 topo 安全，然后才是剩余容量；
+   3. 等待这个 chunk  pextent 全被 remove（命令行看 provisioned_data_space 为 0），chunk manager 有个 4s 的定时器会将状态为 REMOVING 且它上面的 pextent 全被 remove 的 chunk 改成 IDLE；
+2. zbs-deploy-manage meta_remove_node < storage ip>
+   1. 这个命令会调用 zbs 侧的 RemoveChunk rpc，此时要求 chunk 处于 IDLE；
+   2. 把 chunk 的各种持久化信息从 metaDB 中删除；
+   3. 清空 meta 内存里各种表（chunk_table, chunk_id_map,  topo_objs_map, ）中的记录；
+   4. 清空 meta 侧这个 chunk 相关 session，在 iscsi_table/nvmf_table 中把这个 chunk 标记为 inactive（避免新的数据接入），通过心跳异步告知其他 chunk 这个 chunk session 失效；
+   5. 日志里出现 REMOVE CHUNK；
+
+
+
+[ZBS-25686](http://jira.smartx.com/browse/ZBS-25686) 前，只在 recover 里用上了 maintenance cid， 代码是 RecoverManager::NeedRecover 中的 IsChunkInMaintenanceMode，[ZBS-25686](http://jira.smartx.com/browse/ZBS-25686) 后，在 migrate 中也用上了 maintenance cid，是借助 isolated 来实现的，isolated 包括 maintenance 和 failslow。
+
+维护模式的 chunk 上的副本存在以下 2 种情况：
+
+- 被修改的数据，一定需要恢复。离线节点上的数据已经不再是有效的最新数据，这种类型的数据恢复如果希望减少会是一个比较大的结构性改动，暂时不会考虑；
+
+  > 如果在维护期间 Extent 上**没有发生写请求**，则 Meta 在检测副本状态时，可以识别到当前节点正处于存储维护模式中，属于预期内的离线，不会因为副本失联而触发数据恢复，在 Chunk 退出存储维护模式后直接恢复到预期副本数，也不会触发相关数据恢复
+
+- 未被修改的数据，默认触发恢复的逻辑是超时（默认 10 分钟）没有上报数据健康就会认为数据需要恢复。在节点进入维护模式后，如果一个数据的损失的所有副本都是维护节点上的失联副本，则不会触发恢复；
+
+  - 如果数据的当前总副本数小于期望（发生 IO 剔除），会触发恢复；
+  - 如果数据的所有失联副本中有部分不在维护模式的节点上，会触发恢复；
+
+  > 如果在维护期间 Extent 上**发生写请求**，由于当前副本不是最新的，因此需要进行数据恢复，但 ZBS 将通过使用更小恢复单元的方式，将恢复粒度从 Extent 变为 Block，从而减少数据恢复量（敏捷恢复）。
+  >
+  > ZBS 发现此副本处于存储维护模式中，会进行如下操作：
+  >
+  > 1. 先将此副本从有效副本中剔除，将相关的写请求内容暂时记录在 Access 的内存中，并正常完成写操作，过程中不会触发数据恢复；
+  > 2. 当 Chunk 退出存储维护模式后，Meta 会再次检测到此副本信息，此时会触发数据恢复，将维护期间在内存中记录的写操作数据恢复到原始副本中。
+
+维护模式和目前的节点状态可叠加，处于维护模式的节点可能是健康的，也可能是失去连接的。
+
+维护模式会在集群中持久化，即维护模式过程中即便集群重启，也不会改变节点的维护模式状态。并且维护模式只能由用户动作触发变化，不会超时自动退出维护模式。
+
+集群中最多仅能有一个节点进入维护模式，进入维护模式后，所有失联的数据依然会展示在待恢复数据中，只是不会真的触发恢复。在节点状态恢复正常后，将自动的从待恢复数据中清理。
+
+敏捷恢复设计文档，https://docs.google.com/document/d/1JZ6trjE_D1ewfWbaSuewPoFzUksbfno8AyS1wj2Lkio/edit
+
+
+
 策略类梳理（seq means prior）
 
 1. 通过 rpc 显示指定的 recover cmd（这个不一定要支持）
@@ -16,11 +74,11 @@
 
     因为节点移除时，他上面的副本需要尽快迁移完，否则不会执行下一条命令（zbs-deploy-manage meta_remove_node < storage ip>）。从存储池中移除节点的时候，仅考虑 migrate dst cid 在不迁出副本的情况下是否可以容纳待迁移的数据，但这样可能导致 dst cid 超高负载或满载后，副本还没迁移完。
 
-    例如节点 a b c d ，存在大量 extent 的 3 副本分布在 b c d，此时如果移除 c ，那么只能向 a 迁移，a 如果容量较小，可能会被 c 来的数据填满。
+    例如节点 a b c d ，存在大量 extent 的 3 副本分布在 b c d，此时如果移除 c 上的 2 副本，那么只能向 a 迁移，a 如果容量较小，可能会被 c 来的数据填满。
 
     这个过程中，当 a 进入高负载，可以考虑将部分副本移出，以腾出空间给 c 要移动过来的副本。需要确认一下 a 在作为 migrate dst 且进入高负载时，是否有机会把自己可迁移的数据迁移出去。
 
-    要在这个逻辑里加上，到了超高负载时，先执行 ReGenerateMigrateForBalanceInStoragePool()
+    要在这个逻辑里加上，到了超高负载时，允许在 removing chunk 的过程中先执行 replace_cid 为 a 的 ReGenerateMigrateForBalanceInStoragePool
 
 4. 通过 rpc 显示指定的 migrate cmd
 
