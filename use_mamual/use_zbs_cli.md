@@ -120,6 +120,18 @@ systemctl restart tuna-rest-server zbs-rest-server
 
 替换 meta leader，先 stripe src/zbs-metad 再 scp，如果 restart 失败，可用通过 journalctl -u zbs-metad.service 找原因
 
+查找 even volume
+
+```shell
+zbs-meta volume find even
+```
+
+查看一个卷是否有快照，需要给 pool_name + volume_name
+
+```
+zbs-meta snapshot list target2 1a8df188-6d4d-4ed5-8759-6324b2dacc98
+```
+
 指定 meta leader 节点位置
 
 ```shell
@@ -130,6 +142,7 @@ zbs-tool service set_priority --force meta 10.0.0.222:10100:2
 
 ```shell
 zbs-tool elf get_vm_by_pid [pid]
+zbs-meta pextent getref <pid> 
 ```
 
 观察 ELF 集群厚制备副本分配情况

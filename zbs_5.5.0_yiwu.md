@@ -34,6 +34,18 @@ pin 开始在 ChunkSpaceInfo 引入的 3 个参数
 
 
 
+chunk table 里的 GetReportSpaceInfo() 设置的字段都是 chunk 侧的字段（除了 dirty_cache_space 会额外加上 meta 侧的 allocated_prs 字段），这是 chunk 通过心跳上报的，不会被 meta 添油加醋，包括 used_data_space
+
+通过心跳上报的 used_data_space 走的是 LSM::GetSpaceInfoLikeLSM1()，用的是 einode_map_Size() * kExtentSize，对应 zbs-meta chunk list 中看到的数值（对应 Used Space 列）。
+
+而用 zbs-chunk -f json summary 看到的 used_data_space 才是这台 chunk 使用的 partition 数据容量，该数值等于用 zbs-chunk partition list 看到的 USED SIZE 列值之和。如果要卸数据盘的话，关注的是同机器上的其他数据盘上是否可以容纳卸盘的 USED SIZE（看 A 的 TOTAL SIZE - USED SIZE 是否大于 B 的 USED SIZE）。另外，因为一块盘可以做成多个分区，TOTAL SIZE 字段显示的只是这个盘中作为 partition 的分区的大小。
+
+掉盘之后，可能会出现 allocated_data_space > data capacity  的情况，原因是存在没有写的 thick pextent，这部分数据并没有在 chunk 侧真实存在，不过虽然心跳上报中没有它们，但是 meta 侧的逻辑是伪 thick pextent 预留 256 MiB 的空间，不管他们写没写。
+
+另外，由于 meta 没有收到这些未写过的 thick extent 的状态上报，所以也不会认为有副本损失，不会触发 recover。
+
+副本的 ever_exist 为空，那么 alive_replica 可以为空，且不会触发 recover，但 meta 会计算使用空间，而 thick 的话就被算成 256 MiB 了。
+
 ### ListCacheResponse 字段
 
 zbs-chunk cache list 显示结果
