@@ -1,3 +1,5 @@
+rx_pids -> dst_pids，tx_pids -> replace_cids, recover_src_pids -> src_pids
+
 那这里还有两个问题：
 
 1. 卸载 partition 盘的时候，chunk 和 meta 分别会做哪些校验，分别用的哪个字段；
