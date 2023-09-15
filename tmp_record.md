@@ -1,3 +1,11 @@
+VIP 设计文档，https://docs.google.com/document/d/1M34zaIje2xkUSv9Q41waRH4GCPZ5yv7hwZqOK77vCq8/edit#heading=h.feb6l5x4y4vk
+
+双活设计文档，https://docs.google.com/document/d/1z2cUXLrQ7pZnkJXiCPCLp-BPxkpZCSFIwrmvDxrUYX4/edit#heading=h.rxadnjfqdyav
+
+
+
+重构 recover manager 的话，可以不用再考虑支持 Storage Pool 了吧？我看 CheckUpgradeThinProvision 里面都没有去遍历各个 StoragePool
+
 rx_pids -> dst_pids，tx_pids -> replace_cids, recover_src_pids -> src_pids
 
 那这里还有两个问题：
