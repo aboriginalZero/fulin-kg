@@ -19,33 +19,7 @@ rx_pids -> dst_pids，tx_pids -> replace_cids, recover_src_pids -> src_pids
 
 
 
-迁移前
 
-cid 1 thick_pids 1714,  thin_used_data_space 123125104640, allocated_data_space 583223476224, valid_data_space 612005576704, total_data_capacity 612005576704
-cid 4 thick_pids 2122,  thin_used_data_space 122710654976, allocated_data_space 692330692608, valid_data_space 579804856320, total_data_capacity 579804856320
-
-迁移后
-
-cid 1 thick_pids 1821,  thin_used_data_space 123141357568, allocated_data_space 611962322944, valid_data_space 612005576704, total_data_capacity 612005576704
-cid 4 thick_pids 2015,  thin_used_data_space 122710654976, allocated_data_space 663608098816, valid_data_space 579804856320, total_data_capacity 579804856320
-
-
-
-106 
-
-迁移副本的 pid 从 6511 到 6617，对应同一个 volume，这是个 thick volume，共有 106 个 thick pextent，所以应该只会影响到 thick_pids 的变化，但是这里 cid 4 的 thick_pids 计算是 2122 - 2015 = 107，看起来是多迁移了一个 thick_pids，并不符合预期。
-
-另外 cid1 在迁移前后的 thin_used_data_space 有变化，感觉是不符合预期的，预期并不会迁移 thin extent。
-
-
-
-
-
-
-
-感觉可能是后续的 thick 创建没有检查剩余空间，或者是写 thin 副本没有检验剩余空间，因为 lsm 侧无法感知到 thick_pids。
-
-在分配 thick pextents 会检查已有空间，> 0.99 就不允许分配
 
 thick_pids insert 的位置是 ChunkTable::ReplacePExtent 和 ChunkTable::AddPExtent
 
@@ -58,8 +32,6 @@ SpaceTransaction::PersistPExtents() 和 ReserveVolumeSpaceTransaction::Commit() 
 感觉是没有触发迁移。
 
 CowPExtentTransaction::Commit()
-
-
 
 CowPExtentTransaction，UpdateVolumeTransaction，ReserveVolumeSpaceTransaction
 
