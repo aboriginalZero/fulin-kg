@@ -1,3 +1,52 @@
+```c++
+// 用以表示 Chunk 视角的是否能够正常运行
+enum ChunkState {
+  // 默认状态，当 Chunk 确定所属的 Storage Pool 后，就会进入 IN_USE 
+  // 而 Chunk 在新加入集群时一定从属于某个 Storage Pool，所以这个状态存在时间很短
+  CHUNK_STATE_UNKNOWN = 0;
+  
+  // 只有 Idle 状态的 Chunk 才允许加入新的 SP 或是从 ZBS 集群中退出，其不属于任何 SP
+  // Meta 仅仅定期探测 Chunk 状态，不会再向 Chunk 分配任何 Extent
+  CHUNK_STATE_IDLE = 1;
+  
+  // 只有这个阶段的 Chunk 可以被正常分配数据
+  CHUNK_STATE_IN_USE = 2;
+  
+  // 当操作 Chunk 从 Storage Pool 中退出时， Chunk 将从 Inuse 切换至 Removing 
+  // Meta 不会再向 Removing 状态的节点分配新的数据，其上的 extent 会被迁移到其他 Chunk
+  // 当 Removing 状态下的 Chunk 已经没有任何 Extent 时，将把 Chunk 置为 Idle 状态
+  CHUNK_STATE_REMOVING = 3;
+}
+
+// 用以表示 meta 感知的每个 Chunk 的连接状态
+enum ChunkStatus {
+  // Chunk 加入集群/重新启动后的初始状态
+  // Meta Leader 刚刚启动，从未获取过任何的 Chunk 状态信息时展示的状态，
+  // 或者 Chunk 已经和 Meta 建立连接但是本地尚未完成初始化工作无法提供存储服务的状态
+  CHUNK_STATUS_INITIALIZING = 1,
+  
+  // Chunk 在本地完成所有功能初始化并正常之后，通过心跳上报，将由 Initializing 进入 Healthy 状态
+  // Chunk 正常与 Meta 建立连接，并处于可正常提供服务的状态
+  CHUNK_STATUS_CONNECTED_HEALTHY = 2,
+  
+  // Chunk 正常与 Meta 建立连接，但是本地 LSM 处于异常状态（通常原因是没有可用的 Journal 分区）
+  // 此时 Meta 不会向 Chunk 分配新的 Extent ，但也不会立即触发数据迁移动作；
+  CHUNK_STATUS_CONNECTED_ERROR = 3,
+  
+  // 这 2 个实际未使用
+  CHUNK_STATUS_CONNECTED_WARNING = 4, 	
+  CHUNK_STATUS_CONNECTING = 5,		
+  
+  // 当前的 Meta Leader 生命周期内曾经和 Chunk 建立过健康连接，但此时已经和 Chunk 失去连接
+  // Chunk 与 Meta 失去连接，其上的数据副本将因为长期未更新存活状态而触发 Meta 的数据恢复动作
+  CHUNK_STATUS_SESSION_EXPIRED = 6
+};
+```
+
+
+
+
+
 VIP 设计文档，https://docs.google.com/document/d/1M34zaIje2xkUSv9Q41waRH4GCPZ5yv7hwZqOK77vCq8/edit#heading=h.feb6l5x4y4vk
 
 双活设计文档，https://docs.google.com/document/d/1z2cUXLrQ7pZnkJXiCPCLp-BPxkpZCSFIwrmvDxrUYX4/edit#heading=h.rxadnjfqdyav
