@@ -234,6 +234,8 @@ pick 到非 master 分支如 v5.4.x 时
 
 放弃所有子模块的修改，git submodule foreach --recursive git restore .
 
+查看版本库中最新提交修改的文件列表 git show --stat 
+
 #### 管理指定文件
 
 在项目根目录下添加 .gitnore 文件，下面是一些.gitignore文件忽略的匹配规则：

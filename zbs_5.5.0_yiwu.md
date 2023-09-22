@@ -46,6 +46,8 @@ chunk table 里的 GetReportSpaceInfo() 设置的字段都是 chunk 侧的字段
 
 副本的 ever_exist 为空，那么 alive_replica 可以为空，且不会触发 recover，但 meta 会计算使用空间，而 thick 的话就被算成 256 MiB 了。
 
+meta leader 在收到 CreateVolume rpc 创建一个 thick volume 时，会立即回复心跳让 chunk 预留足够空间
+
 ### ListCacheResponse 字段
 
 zbs-chunk cache list 显示结果

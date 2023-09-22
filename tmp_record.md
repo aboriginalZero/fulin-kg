@@ -1,3 +1,9 @@
+MetaRpcServer::MarkAllocEvenIfNecessary、MetaRpcServer::ResetVolumeAllocEven 会调用
+
+
+
+
+
 ```c++
 // 用以表示 Chunk 视角的是否能够正常运行
 enum ChunkState {
@@ -247,10 +253,6 @@ LOG(INFO) << "prefer_zone_idx " << prefer_zone_idx;
 1. 能够观察 recover 真正 IO 的数据量，block 粒度的（比如如果有敏捷恢复，这个 pextent 就不会恢复 256 MB）
 2. 能够查看 generate/pending_recover 的数量
 3. 能够查看 need_migrate 的数量
-
-
-
-记录一下 chunkspaceinfo 上几个字段的意思，参考跟 wangsai yutian 的聊天
 
 
 
