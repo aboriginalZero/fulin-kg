@@ -2,8 +2,6 @@ MetaRpcServer::MarkAllocEvenIfNecessary、MetaRpcServer::ResetVolumeAllocEven �
 
 
 
-
-
 ```c++
 // 用以表示 Chunk 视角的是否能够正常运行
 enum ChunkState {
@@ -566,6 +564,21 @@ https://docs.google.com/document/d/1t14uKF6YCaijgXAq-bS-WR_I1SaLhYxbOnKXhspBtlQ/
 
 
 待整理
+
+
+
+unmap 是针对精简配置的存储阵列做空间回收，提高存储空间使用效率，应用于删除虚拟机文件的场景。VMware 向存储阵列发送 UNMAP 的 SCSI 指令，存储释放相应空间。
+
+https://blog.51cto.com/xmwang/1678350
+
+TRIM 是一种由操作系统发出的命令，用于告知 SSD 哪些闪存单元包含已删除文件的数据，可以被标记为空闲状态
+
+SSD 从不像 HDD 那样直接将新数据覆盖写入旧数据。在所有存储单元都被擦干净之前，无法用新数据对存储单元进行写入，且擦除必须在块级别进行，而写入则在页级别（更小的粒度）进行，这意味着对 SSD 进行写入比擦除要快得多。
+
+- `discard` 是一个由操作系统在删除文件时自动发送给 SSD 的命令，它是实时执行的。
+- `fstrim` 是一个由用户手动调用的命令，用于释放整个文件系统中的未使用空间，也可以被自动调度为定期任务执行。
+
+
 
 C++ 中为减少内存/读多写少的情况，可以用 absl::flat_hash_map 代替 std::unordered_map，https://zhuanlan.zhihu.com/p/614105687
 

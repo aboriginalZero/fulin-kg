@@ -1,3 +1,13 @@
+### 540 遗留问题
+
+Meta 面向 LSM 的心跳回复会稍晚于 Meta 侧的空间扣减，因此这个模式下可能会产生长度为一个心跳周期（ 7s 左右），LSM 的预留空间参数较大，而 Meta 处较小导致新分配的数据可能无法写下去的问题。因为这个是在节点本身空间已经满载并且新产生 Snapshot 的情况下才会发生，所以暂时不考虑单独改进这个问题。
+
+可能会有部分 Thin 和 Thick Extent 会共享部分空间，例如一个 Thin 的 Volume，克隆出一个 Thin Volume，发生了 COW。而后将新的 Thin Volume 转化为 Thick 就会出现这个场景。 Thin 的此时同时计算在 Thin 和 Thick 的空间里是可以接受的（这个情况目前可能存在吗？）
+
+Read Only Thick Space，Thick Extent 已经被标为 COW 状态，并且有了 Child 之后它占用的空间就不再会增长了，此时虽然 Extent Thick 属性，但是计算它的空间消耗时可以考虑实际消耗么而不用计算为 256 M 完整占用会对用户更有利；（第一阶段中并未实现，简单处理为全占用）
+
+
+
 ### ChunkSpaceInfo 字段
 
 1. total_data_capacity  = 94% * 所有 HHD 物理容量
