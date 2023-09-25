@@ -58,9 +58,16 @@ chunk table 里的 GetReportSpaceInfo() 设置的字段都是 chunk 侧的字段
 
 meta leader 在收到 CreateVolume rpc 创建一个 thick volume 时，会立即回复心跳让 chunk 预留足够空间
 
-### ListCacheResponse 字段
+### Chunk Cache 空间分类
 
-zbs-chunk cache list 显示结果
+zbs 中的缓存空间一共有 4 种状态：
+
+1. Active：最近经常访问的活跃数据；
+2. Inactive：最近一段时间相对不活跃的数据；
+3. Clean：最近并没有访问的数据，并且已经安全的下沉到持久化层，可以随时按需被重新分配给新的数据块；
+4. Free：从未被分配的空间，集群运行一段时间之后这个空间会变为 0。
+
+zbs-chunk cache list 显示结果，对应 ListCacheResponse 字段
 
 ```shell
 TOTAL ACTIVE:    768.0K ( 0.00%)
@@ -75,7 +82,35 @@ TOTAL FREE:       38.3G (76.60%)
 * used = active + inactive + clean，即 used cache space，已使用的 cache 空间；
 * total = active + inactive + clean + free，即 cache capacity，可使用的 cache 空间。
 
+新缓存仅能分配到 Clean / Free 的空间，并且总是倾向先使用 Free 的空间，因此 Active + Inactive 被视作 Dirty 的。
 
+虽然其中 Inactive 未必是 Dirty 的 ，比如，读请求触发的缓存提升，此时数据本身是 Clean 的，如果直接将其标记为 Clean 状态，则容易在后续 IO 中被直接淘汰，读的提升就没有效果了。
+
+Cache 状态变化
+
+LSM 中使用 3 个 LRU 链表管理 Active，Inactive 和 Clean 的数据（LRU 是 LSM 整体所有缓存磁盘共享的，不会对每个缓存磁盘单独记录，另外，为了数据访问的效率，链表末端存放最活跃的数据），
+
+1. Block 新加入 Cache 时（空间会来自 Free 和 Clean，这两者在空间分配时等价），会被加入 Inactive 链表的末端；
+
+2. 在 Active/Inactive 链表中的数据被再次访问时（不论读写），会被放入 Active 链表的末端；
+
+    如果 Active 链表的数据长度大于 Inactive 链表（默认为超过 limit = 128 个 Block）时候会将 Active 链表中最不经常访问的 1/2 limit 的数据放入 Inacive 链表，这样可以基本保持 Active 链表将始终小于 Inactive 链表；
+
+3. LSM 会周期性的将 Inactive 列表中最不活跃的数据下刷至 Partition 中，完成后将其加入 Clean 链表：
+
+    如果 Block 是因为读请求被提升到 Cache 中的，本身不包含脏数据，此时不会发生实际的下刷；
+
+    下刷的带宽会受到 LSM 业务 IO 的影响，如果业务压力较大的时候，下刷带宽会较小，以尽量的保证业务自身带宽需求，但是如果缓存接近满的时候也会增大下刷的带宽，以保证有 Cache 空间可用；
+
+从这个过程可以看到，ZBS 读写 Cache 是统一空间管理的，并且不论是读的干净 Cache/写的脏 Cache 都统一使用 Active/Inactive 机制标记为活跃与非活跃。活跃数据都会尽量保持在 Cache 中不被淘汰。
+
+数据写入的时候，如果已经是 256 KiB 完整的，则在 Cache 空间足够的情况下，无需 Promotion 即可直接写入 Cache。如果 Cache 已经有对应的 Block，则会重新分配合适的位置。
+
+如果数据不是 256 KiB 完整的，则 Cache 中存在也可以更新原有的 Cache Block。如果没有并且数据是热的（热的定义是至少满足半小时内每个 10 分钟内至少访问 1 次）则会尝试 Promotion（将已经存在于 Parition 中的数据提升到 Cache 中）后再写入 Cache。Promotion 也可以不经过 IO 处触发，会在后台主动进行，但此类主动 Promotion 在 Cache 利用率大于一定比例（默认 98%）时不会触发。读请求也会遵循相同的逻辑触发 Promotion。
+
+
+
+LSM 
 
 在 lsm 视角，extent 只是 pblob 的数据集合，实际承担数据的是 256 KiB 的 pblob。prior pblob 的生命周期：
 

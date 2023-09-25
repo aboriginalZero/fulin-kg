@@ -362,7 +362,9 @@ Sync Gen 的一项重要工作是检查各个副本的 Gen 是否一致，如果
 
 ### 相关问题
 
-1. 快照/克隆时，要收回 lease，但快照也不更改数据，那支持读会有什么问题吗？如果一个 volume 快照后 write ，他到底在哪改了 cow = false？
+1. 快照/克隆时，要收回 lease，但快照也不更改数据，那支持读会有什么问题吗？
+
+    ZBS 的快照是先 revoke lease 后复制一份 vtable 并对 src 和 dst 都打上 COW 的标记。先 revoke lease 可能保证快照后 extent 无法写入的语义，否则旧 Lease 会让快照仍然可写。
 
 2. 三副本集群，如果两个副本坏了被剔除，只剩下一个副本，然后这个副本还失败了，重试还失败，返回给客户失败之后，客户可能会怎么做？zbs 会有回滚吗？有的话，什么时候回滚？块磁盘为什么可以接受写失败数据处于未知状态？
 
@@ -400,9 +402,11 @@ Sync Gen 的一项重要工作是检查各个副本的 Gen 是否一致，如果
 
 9. ExternalIOClient::SplitIO 其实就是条带化，如果不开启条带化，写 16K 的数据是在 1 块 extent 上写 16K。如果让 stripe_num = 4，tripe_size = 4k，写 16K 的数据，就会到需要到 4 块 extent 上各写 4K，磁盘可以并行写。
 
-10. vextent_no 在 splitIO 中计算得到，volume_id 是用户传入的
+10. vextent_no 在 splitIO 中计算得到，volume_id 是用户传入的，volume_id + vextent_no 就可以找到对应的 pextent。
 
-11. 看起来 vtable 好像也是从 ptable 中复制来的？MetaRpcServer::GetVTable
+11. 看起来 vtable 好像也是从 ptable 中复制来的？
+
+     是的，MetaRpcServer::GetVTable，vtable 看起来只记录 volume 对应的 vextent_id 以及 location 和 alive_location 三个字段的信息。重要信息都在 pextent table 中。
 
 12. LSM 的底层写还是调用 memcpy / pmem_memcpy，所以还是要借助 OS 调用磁盘驱动程序来具体落盘？AIO Engine
 
@@ -478,7 +482,7 @@ VMware vSphere 和阿里云 ECS 快照都是 ROW 模式，SMTX OS 是 COW 模式
 
 <img src="https://mmbiz.qpic.cn/mmbiz_jpg/NPFGvdyPsl6Lk9soPje7VS3sulYIvEBL7AwVSib8uXia3PFdB2GwkHEicnLQibNWmw1Jz5uMHxWdUltjcGG58KIaoA/640?wx_fmt=jpeg&wxfrom=5&wx_lazy=1&wx_co=1" alt="图片" style="zoom:50%;" />
 
-#### ZBS 做法
+#### SMTX OS 做法
 
 SMTX OS 中虚拟机快照支持通过某个时刻的快照实现重建（克隆）虚拟机的操作。其采用 COW 的快照方式，同一个虚拟机的多个快照分别拥有自己独立的元数据如所有数据块的物理位置信息，该元数据保存在 zbs metaDB 中，持久化在 SSD 且常驻内存。
 
@@ -490,6 +494,18 @@ SMTX OS 中虚拟机快照支持通过某个时刻的快照实现重建（克隆
 
 1. 文件系统的元数据会占用磁盘空间；
 2. 文件系统为了降低性能消耗，删除文件时只在文件属性中创建弃用标记。磁盘无法感知删除指令，数据块仍然是已分配状态，同时数据块会被拷贝到快照中导致快照容量大于文件系统。
+
+#### ZBS 做法
+
+ZBS 的快照实现是 ROW 和 COW 的混合，更接近 ROW。
+
+在 ZBS 中每个 Volume 会包含若干 256 MiB 大小的Extent，每个 Extent 在节点上保存的时候也会拆分 1024 个 256 KiB 的 Block。因此数据的寻址就包括两个阶段：Volume IO -> Extent IO -> Block IO。其中 Volume IO -> Extent IO 的过程可以认为是 Meta 完成的，客户端在尝试对虚拟卷的某个区域进行读写的时候，Meta 会告知客户端所连接的 Access 该区域对应的 Extent 与 Extent 各副本所在的节点位置。Access 向 Extent 副本所在的节点发起 Extent IO。Extent 副本所在的 LSM 会找到 Extent IO 对应 Block，转化为 Block IO 写入磁盘。
+
+在执行快照时，所做的全部修改就是 Meta 将 Volume 中包含的 Extent ID 列表复制了一遍给予快照，并对每个 Extent ID 打上 COW 标记。在刚刚执行完快照的时候，快照和源 Volume 持有完全一致的 Extent 列表。在 Volume 发生写入时，Volume 对应位置 Extent ID 会被替换为一个新的以源 ID 作为父级的新 ID。即 Volume 对应的数据区域被重定向到了一个新的 Extent。
+
+因此从 Meta 的角度来看，他并没有复制源 Extent 的数据，而是将 Volume 对应的位置**重定向**到了新的 Extent，快照是一个 **ROW** 动作。
+
+在 LSM 处理新的 Extent IO 时，他也会采用相同的机制为当前的 Extent 复制一份父级 Extent 的 Block ID list，但是与 Meta 不同的是，Meta 处理的 Extent ID 都是原子化更新，每次固定的更新一个 ID，因此是始终保持一个 ROW 动作即可。而每个用户 IO 大部分情况下对应的不是完整的 256 KiB 粒度的单个 Block ，4 KiB 或者 8 KiB 之类是常见的大小。而 LSM 管理的最小粒度是 256 KiB，此时就需要从父级 Extent 复制完整的原始 Block 数据后再按需更新为子级 Extent 的 Block，这个过程是 **COW** 的。
 
 ## ZBS 实现
 
