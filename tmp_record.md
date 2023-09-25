@@ -165,6 +165,10 @@ CowPExtentTransaction，UpdateVolumeTransaction，ReserveVolumeSpaceTransaction
 
     可以对外做 2 个接口，一个是 pid 为粒度的，一个是 volume 为粒度的（MigrateForVolumeRemoving）
 
+    需要支持 prior volume 吗？
+
+    
+
 5. 低负载
 
     ReGenerateMigrateForLocalizeInStoragePool()，让副本位置符合 LocalizedComparator
@@ -191,7 +195,10 @@ CowPExtentTransaction，UpdateVolumeTransaction，ReserveVolumeSpaceTransaction
    目前在高负载情况下，数据不再会遵循本地化分配原则，而是会尽量的均匀分布。这可能会造成部分虚拟机在迁移之后和原来的性能有较大的差异。需要考虑改善这个场景，也许有两个方向需要考虑：
 
    - 允许用户用命令行触发一个集中策略（向指定的节点聚集一个副本，不需要完整局部化，仅本地化即可），但是不能让指定节点进入超高负载状态（95%）
+
    - 调整平衡策略，在中高负载集群相对均衡后，尝试本地化聚集（不需要局部化，仅保证一个副本在 prefer cid 所在节点即可）
+
+     看起来得单独另其一个策略函数，在 migrate for rebalance 之后，以 pid 为粒度去遍历，仅靠以 cid 为粒度的两两匹配做不到这个。
 
    prefer local 节点上没有副本的入口有且仅有这 2 个：
 
@@ -347,6 +354,16 @@ lsm1 回收空间的速率非常慢，所以如果删除一个 extent，存在 c
 
 
 ZBS-20993
+
+允许 RPC 产生 recover cmd，考虑到如果 need recover 的 volume 很多，那么可以优先恢复某些卷的
+
+所以先知考虑允许 RPC 产生 migrate cmd，然后做 volume 级别的，允许有 replace 和 dst 的偏好，但不保证严格执行。
+
+
+
+那还得允许查询哪些还在执行中
+
+
 
 允许 RPC 产生恢复/迁移命令，可以指定源和目的地，在运维场景或许会有用。
 
