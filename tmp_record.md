@@ -1,3 +1,27 @@
+
+
+存储分层模式，可以选择混闪配置或者全闪配置，其中全闪配置至少需要 1 块低速 SSD 作为数据盘，混闪配置至少需要 1 块 HDD 作为数据盘。
+
+存储不分层模式，不设置缓存盘，除了含有系统分区的物理盘，剩余的所有物理盘都作为数据盘使用，只能使用全闪配置。
+
+smtx os 5.1.1 中不论存储是否分层，都要求 2 块容量至少 130 GiB 的 SSD 作为 SMTX OS 系统盘（含元数据分区的缓存盘），为啥要 2 块做软 raid 1？
+
+
+
+在恢复或者迁移任务结束时，新加入副本的状态被设置为未知，需要等待下一次心跳周期 LSM 上报副本后才可以确认副本为健康。
+
+在心跳开始之前，如果执行 find need recover extent 命令，将会把这样的 extent 返回，这会导致升级过程中，如果有数据迁移发生，则会被判定会产生了恢复，导致升级过程退出。
+
+修复方式为调整新加入的副本状态，从未知（需要修复）调整为不需要修复，但是最近并不活跃，并不能直接清理恢复命令。 
+
+
+
+```
+ssh -i /vmfs/volumes/65128d50-5afed7ff-1661-005056ab5edf/vmware_scvm_failure/.smartx_key/smartx_reroute_id_rsa -o ServerAliveInterval=1 -o BatchMode=yes -o ConnectTimeout=1 -o StrictHostKeyChecking no -o UserKnownHostsFile /dev/null -o GSSAPIAuthentication no root@10.97.60.236 timeout 2 curl -H 'Content-Type: application/json' -X PUT -d '{"local_clients_ips":"192.168.77.36,10.97.60.235"}' http://10.97.60.236/api/v2/zbs_session/session/86dccf70-f0c8-4a02-ab6d-ca9a49ffcd74
+```
+
+
+
 MetaRpcServer::MarkAllocEvenIfNecessary、MetaRpcServer::ResetVolumeAllocEven 会调用
 
 
