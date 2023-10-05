@@ -1,17 +1,10 @@
-
-
-
-
-
-
 > 待整理的 zbs 零碎知识
 
 疑惑
 
-1. FOREACH_SAFE 和 FOREACH 的区别？怎么体现 safe 了
+1. FOREACH_SAFE 和 FOREACH 的区别？怎么体现 safe 了？迭代器失效问题。
 2. access handler 中为啥都以事件回调的形式来注册 Session Handler 的相关接口
 3. ZBS 中的一个 extent，读的同时不允许写？为啥不用多版本机制来管理（块存储覆盖写的原因？还是块存储没必要提供）
-4. 代码中 [(zbs.labels).as_str = true] 的意思，标记一个可以被安全转换为str 的 bytes field，对于之后向 zbs-proto 提交的新字段，除了明确需要使用 bytes类型存放的字段，其他字符串类型都建议直接使用 “string” 关键字标记，减少不必要的 bytes 类型的使用。引入这个功能的原因是 python2 中 string 为 bytes 的 alias, 但 python3 中 string 和 bytes 则完全不同。 zbs-client-py 的下游用户如果直接适配这种改变需要编写很多针对性的垃圾代码。
 5. gtest 如何开启 VLOG DLOG 部分的日志
 6. CreateSession 这个过程 SessionMaster 做什么
 

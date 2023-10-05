@@ -1,3 +1,33 @@
+1. 怎么看在哪里调用了 pyzbs 中的 update_reroute_version 函数
+
+2. xen 平台还有人在使用吗？
+
+3. reroute.py 中提供了 LOOP 和 ROUTE 模式，后者应该是用于人工指定一个 target i，相当于一个智能模式，一个静态模式。
+
+4. RerouteConfig.LOOP_FINISHED 貌似没有 true 的时候
+
+5. 为啥要软链接一份日志 check_lock_and_log_file
+
+6. smartx token 为啥每 2 秒获取一次，token 过期时长是 7 天？refresh_service_token，或许可以改成如果 bearer_token 为 None 时才获取，不为 None 验证过期了再获取。
+
+7. 怎么看 /api/v3/sessions 对应的 pyzbs 中的方法
+
+8. 每 200 次判断一下是否 enable reroute 和 enable secondary data channel？对 enable 的响应会不会太慢？200 * 2 = 400s 才能变更状态。不过其实也不会有多经常变更，所以也还好。
+
+9. 从 shell 切 python，reroute version 从 1.6 变成 2.1
+
+10. 为啥要对 target_ip send heartbeat
+
+11. ping 发 icmp 包为啥要自实现一个 ICMPHandler？
+
+    客户的 vmware 环境里 scvm vNIC 开启了 MTU check，网络包大小如果超过了 MTU 值会被 drop 掉
+
+12. ioreroute 需要在非常明确的场景下才进行路由切换，https://cs.smartx.com/cases/detail?id=1050822
+
+13. 需要预防 python 中的 shuffle 不会吞掉 ip_list 中的值，参考 http://gerrit.smartx.com/c/pyzbs/+/40696
+
+
+
 
 
 存储分层模式，可以选择混闪配置或者全闪配置，其中全闪配置至少需要 1 块低速 SSD 作为数据盘，混闪配置至少需要 1 块 HDD 作为数据盘。
@@ -625,17 +655,13 @@ C++ 中为减少内存/读多写少的情况，可以用 absl::flat_hash_map 代
 
 C++ 中 map 嵌套使用，vector 添加一个 vector 中所有元素 https://zhuanlan.zhihu.com/p/121071760
 
-protobuf 中 optional/repeated/ 等用法，https://blog.csdn.net/liuxiao723846/article/details/105564742，如果不是 id 类的字段，最好都用 optional，便于做兼容性升级
+stl 容器迭代器失效问题，https://stackoverflow.com/questions/6438086/iterator-invalidation-rules-for-c-containers
 
 linux主分区、扩展分区、逻辑分区的区别、磁盘分区、挂载，https://blog.csdn.net/qq_24406903/article/details/118763610
 
 git submodule ，https://git-scm.com/book/zh/v2/Git-%E5%B7%A5%E5%85%B7-%E5%AD%90%E6%A8%A1%E5%9D%97，https://zhuanlan.zhihu.com/p/87053283
 
-protobuf 用法，https://bbs.huaweicloud.com/blogs/289568，参考我写的 reposition 中的 patch
 
-遍历 repeat，https://blog.51cto.com/u_5650011/5389330
-
-stl 容器迭代器失效问题，https://stackoverflow.com/questions/6438086/iterator-invalidation-rules-for-c-containers
 
 对于 cmp
 

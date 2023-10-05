@@ -149,7 +149,7 @@ promethus prometheus HC!r0cks ，http://meta/leader_mgt_ip:9090
     运行指令
 
     ```shell
-    cd /home/code/zbs && ./src/zbs_test --gtest_filter="*FunctionalTest.WriteResize*"  --gtest_repeat=100
+    cd /home/code/zbs/build/src && ./zbs_test --gtest_filter="*FunctionalTest.WriteResize*"  --gtest_repeat=100
     ```
 
 12. 安装 git-review 并提交新代码到 gerrit

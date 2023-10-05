@@ -19,7 +19,7 @@ ccache -z; 	ccache -s;
 # 开启多种编译特性
 cmake3 -DCMAKE_BUILD_TYPE=Release -DUSE_SANITIZE=address -DBUILD_BENCHMARKS=ON -GNinja ..; 
 # 运行单测
-cd /home/code/zbs3 && ./src/zbs_test --gtest_filter="*FunctionalTest.WriteResize*"  --gtest_repeat=100
+cd /home/code/zbs3/build/src && ./zbs_test --gtest_filter="*FunctionalTest.WriteResize*"  --gtest_repeat=100
 zrt zbs3 FunctionalTest.WriteResize
 ```
 
