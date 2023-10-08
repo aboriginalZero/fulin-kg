@@ -57,7 +57,29 @@ MetaRpcServer::MarkAllocEvenIfNecessary、MetaRpcServer::ResetVolumeAllocEven �
 
 
 ```c++
-// 用以表示 Chunk 视角的是否能够正常运行
+// PhysicalExtentTableEntry 的 Status
+enum PExtentStatus {
+  PEXTENT_HEALTHY = 0,
+  
+  // 活跃副本数是否为 0
+  PEXTENT_DEAD = 1,
+  
+  // 副本数是否为 0
+  PEXTENT_BROKEN = 2,
+  
+  // 只看 garbage_ 字段是否为 true，不管其他的
+  PEXTENT_GARBAGE = 4,
+	
+  // 
+  PEXTENT_NEED_RECOVER = 3,
+  
+  PEXTENT_MAY_RECOVER = 5
+};
+```
+
+ChunkState，用以表示 Chunk 视角的是否能够正常运行
+
+```cpp
 enum ChunkState {
   // 默认状态，当 Chunk 确定所属的 Storage Pool 后，就会进入 IN_USE 
   // 而 Chunk 在新加入集群时一定从属于某个 Storage Pool，所以这个状态存在时间很短
@@ -75,8 +97,11 @@ enum ChunkState {
   // 当 Removing 状态下的 Chunk 已经没有任何 Extent 时，将把 Chunk 置为 Idle 状态
   CHUNK_STATE_REMOVING = 3;
 }
+```
 
-// 用以表示 meta 感知的每个 Chunk 的连接状态
+ChunkStatus，用以表示 meta 感知的每个 Chunk 的连接状态
+
+```cpp
 enum ChunkStatus {
   // Chunk 加入集群/重新启动后的初始状态
   // Meta Leader 刚刚启动，从未获取过任何的 Chunk 状态信息时展示的状态，

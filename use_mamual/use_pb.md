@@ -33,9 +33,45 @@ optional bool alloc_even = 81 [default = false];
    * mutable_xxx(idx)，获取可修改的指定对象指针；
    * add_xxx()，获取可修改的对象指针；
 
+```cpp
+// 写入
+tutorial::Person::PhoneNumber* phone_number = person->add_phone(); 
+phone_number->set_number("13051889399");
+phone_number->set_type(tutorial::Person::MOBILE);
+// 读取
+const tutorial::Person::PhoneNumber& phone_number = person.phone(j);
+cout << phone_number.number() << phone_number.type();
+```
+
 repeated message 可以视为 std::vector，允许通过 [] 方法访问数组成员，另外，提供 xxx_size() 方法返回数组大小，mutable_xxx() 方法返回指针，add_xxx() 方法增加一个成员。
 
 对于对象类型，可以使用 mutable_xxx() 获取对象指针，然后设置对象属性，也可以使用 CopyFrom() 直接拷贝，也可以使用 Swap() 进行交换。
+
+```cpp
+syntax = "proto2";
+
+message Test {
+  optional Obj obj = 1;
+}
+
+message Obj {
+  optional int64 id = 1;
+  optional string name = 2;
+}
+```
+
+对其使用方式为
+
+```cpp
+Test test;
+Obj o1;
+test.mutable_obj()->CopyFrom(o1);
+test.mutable_obj()->Swap(&o1);
+```
+
+
+
+
 
 string DebugString() const; 返回 message 的可阅读字符串，可用于调试程序；
 
@@ -53,6 +89,14 @@ for (int i = 0; i < times; i ++) {
 
 
 
+
+
+如果为 optional，发送端没有包含该属性，则接收端在解析式采用默认值。对于默认值，如果已设置默认值，则采用默认值，如果未设置，则类型特定的默认值为使用，例如 string 的默认值为 “”。
+
+代码中 [(zbs.labels).as_str = true] 的意思，标记一个可以被安全转换为 str 的 bytes field，对于之后向 zbs-proto 提交的新字段，除了明确需要使用 bytes 类型存放的字段，其他字符串类型都建议直接使用 “string” 关键字标记，减少不必要的 bytes 类型的使用。引入这个功能的原因是 python2 中 string 为 bytes 的 alias，但 python3 中 string 和 bytes 则完全不同。 zbs-client-py 的下游用户如果直接适配这种改变需要编写很多针对性的垃圾代码。
+
+
+
 pb message 升级原则
 
 1. 如果不是 id 类的字段，最好都用 optional，便于做兼容性升级；
@@ -63,13 +107,7 @@ pb message 升级原则
 
 
 
-
-
-如果为 optional，发送端没有包含该属性，则接收端在解析式采用默认值。对于默认值，如果已设置默认值，则采用默认值，如果未设置，则类型特定的默认值为使用，例如 string 的默认值为 “”。
-
-代码中 [(zbs.labels).as_str = true] 的意思，标记一个可以被安全转换为 str 的 bytes field，对于之后向 zbs-proto 提交的新字段，除了明确需要使用 bytes 类型存放的字段，其他字符串类型都建议直接使用 “string” 关键字标记，减少不必要的 bytes 类型的使用。引入这个功能的原因是 python2 中 string 为 bytes 的 alias，但 python3 中 string 和 bytes 则完全不同。 zbs-client-py 的下游用户如果直接适配这种改变需要编写很多针对性的垃圾代码。
-
-
+pb 反射机制
 
 ```cpp
 auto set_value = [&params, &request](const std::string& field_name, uint64_t lower, uint64_t upper) {
