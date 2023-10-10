@@ -1,3 +1,7 @@
+[ZBS-26042](http://jira.smartx.com/browse/ZBS-26042) 还缺一个 even volume 的 ut 验证 [ZBS-25847](http://jira.smartx.com/browse/ZBS-25847)
+
+
+
 1. 怎么看在哪里调用了 pyzbs 中的 update_reroute_version 函数
 
 2. xen 平台还有人在使用吗？
@@ -28,6 +32,8 @@
 
 
 
+一个 extent 只要写过 1 次真实数据，EverExist 就是 true，如果从没有写过并且不是来自 COW ，那它就没有任何有效数据。在副本迁移或者恢复的时候可以有一些简化的特殊处理。
+
 
 
 存储分层模式，可以选择混闪配置或者全闪配置，其中全闪配置至少需要 1 块低速 SSD 作为数据盘，混闪配置至少需要 1 块 HDD 作为数据盘。
@@ -56,15 +62,31 @@ MetaRpcServer::MarkAllocEvenIfNecessary、MetaRpcServer::ResetVolumeAllocEven �
 
 
 
+chunk 视角的 PExtentStatus
+
+```cpp
+enum PExtentStatus {
+  PEXTENT_STATUS_INIT = 99,
+  PEXTENT_STATUS_INVALID = 0,
+  PEXTENT_STATUS_ALLOCATED = 1,
+  PEXTENT_STATUS_RECOVERING = 2,
+  PEXTENT_STATUS_OFFLINE = 3,
+  PEXTENT_STATUS_CORRUPT = 4,
+  PEXTENT_STATUS_IOERROR = 5,
+  PEXTENT_STATUS_UMOUNTING = 6
+};
+```
+
+meta 视角的 PExtentStatus
+
 ```c++
-// PhysicalExtentTableEntry 的 Status
 enum PExtentStatus {
   PEXTENT_HEALTHY = 0,
   
-  // 活跃副本数是否为 0
+  // 不是 staging/garbage 且写过真实数据且当前时刻活跃副本数为 0
   PEXTENT_DEAD = 1,
   
-  // 副本数是否为 0
+  // 不是 staging/garbage 且写过真实数据且当前时刻副本数为 0
   PEXTENT_BROKEN = 2,
   
   // 只看 garbage_ 字段是否为 true，不管其他的
