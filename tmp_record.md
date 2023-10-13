@@ -1,5 +1,65 @@
 [ZBS-26042](http://jira.smartx.com/browse/ZBS-26042) 还缺一个 even volume 的 ut 验证 [ZBS-25847](http://jira.smartx.com/browse/ZBS-25847)
 
+perf_distribute_cmds_per_chunk_limit 或许得改成 perf_generate_cmds_per_chunk_limit 更符合语义。
+
+
+
+1. recover 支持分批扫描
+
+   比较纠结的是，目前 recover_manager 中 scan_extents_per_round_limit 这个参数只限制了 recover / migrate for localization / migrate for repair topo 一次扫描的 pextent 数量，而对其他类型的 migrate （如 migrate for even volume/ prior extent / rebalance）并没有做限制，这让他的语义并不完整。
+
+   根据 review 意见修改
+
+   http://gerrit.smartx.com/c/zbs/+/8495
+
+   http://gerrit.smartx.com/c/zbs/+/26377
+
+   http://gerrit.smartx.com/c/zbs/+/16123/3
+
+2. 区分 distribute_cmds_per_chunk_limit 和 generate_cmds_per_chunk_limit，目前把他两混用了，或者考虑下是否需要引入新的字段；在 recover / migrate 中的限制并不相同。
+
+   ```c++
+   // GenerateRecoverCmds() 中用法可能有问题
+   if (recover_cmd_nums >= generate_cmds_per_round_limit_) {
+               break;
+           }
+   ```
+
+3. 改 recover manager 中的函数名，比如 GenerateRecoverCmds 实际代表 DistributeRecoverCmds，还有计数相关的，recover 处有 2 个，可以精简的，把 recover 和 migrate 做到对称。
+
+4. 互斥的做法
+
+   ```
+   // 这个写法有起到互斥的作用吗？
+       {
+           LockGuard l(&mutex_);
+           wait_recover_count = active_waiting_recover_count_;
+           wait_recover = active_waiting_recover_;
+       }
+   ```
+
+5. 为啥没有 active_waiting_migrate_count_ 和 passive_waiting_migrate_count_，这是以 chunk 为粒度的，记录的 generated recover cmd，
+
+6. reposition params 支持分层，相对修改 zbs-client-py 的代码，两个 patch 一起
+
+
+
+
+
+
+
+单测里面
+
+```cpp
+// 验证双活生效
+RecoverManager* recover_manager = GetMetaContext().recover_manager;
+
+// 验证 GFLAGS 更改生效
+RecoverManager recover_manager(&(GetMetaContext()));
+```
+
+
+
 
 
 1. 怎么看在哪里调用了 pyzbs 中的 update_reroute_version 函数
@@ -321,7 +381,7 @@ CowPExtentTransaction，UpdateVolumeTransaction，ReserveVolumeSpaceTransaction
     3. 能够查看 need_migrate 的数量
 3. 智能模式中，值变化的时候添加 log
 
-改 recover manager 中的函数名，比如 GenerateRecoverCmds 实际代表 DistributeRecoverCmds，还有计数相关的，recover 处有 2 个，可以精简的，把 recover 和 migrate 做到对称。
+
 
 1. 改 Prefer Local / TopoAware / Localized 三个比较器名字，[ZBS-25802](http://jira.smartx.com/browse/ZBS-25802)
 
@@ -354,7 +414,7 @@ LOG(INFO) << "prefer_zone_idx " << prefer_zone_idx;
 
 实现命令行
 
-多个参数用一个 DB、考虑升级兼容性问题、reposition 跟 recover migrate 分开、额外添加 rpc 用法
+reposition 跟 recover migrate 分开、额外添加 rpc 用法
 
 1. 能够观察 recover 真正 IO 的数据量，block 粒度的（比如如果有敏捷恢复，这个 pextent 就不会恢复 256 MB）
 2. 能够查看 generate/pending_recover 的数量
