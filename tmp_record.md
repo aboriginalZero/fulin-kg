@@ -42,6 +42,22 @@ perf_distribute_cmds_per_chunk_limit 或许得改成 perf_generate_cmds_per_chun
 
 6. reposition params 支持分层，相对修改 zbs-client-py 的代码，两个 patch 一起
 
+    reposition 晚点加进来，先把其他的搞成支持分层
+
+    分层之后，perf speed limit 与 cap speed limit 必然不同，但是要怎么限制呢？
+
+    分层之后，盘就是分开用了，perf 层用 ssd，cap 层用 hdd
+
+    补充对应的单测
+
+    access_io_stats.h 中 access_io_perf_t 和 access_io_stats_t 的区别？前者在 zbs 内部用，后者好像是给 zbs 外部用的
+
+    PExtentIOHandler 中把各种 OP Submit 到 lsm_cmd_queue 之后，在哪看去消费 lsm_cmd_queue 中的内容？好像是 EpollLSMIOContext 的 Flush() 把 LsmCmd SubmitIO 给 lsm，各个 OP 在 lsm 侧的行为看 lsm2 中的 SubmitIO() 和 DoIO()
+
+    为啥 LocalIOHandler 也是往 lsm_cmd_queue Submit
+
+    变量  to_submit_iocbs_ 看起来不是线程安全的，还是说他不需要保证线程安全，access_handler 和 local_io_handler 和 temporary_replica_io_handler 等都是在一个线程？
+
 
 
 
