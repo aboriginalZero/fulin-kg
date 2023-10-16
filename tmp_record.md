@@ -78,31 +78,31 @@ RecoverManager recover_manager(&(GetMetaContext()));
 
 
 
-1. 怎么看在哪里调用了 pyzbs 中的 update_reroute_version 函数
+1. 怎么看在哪里调用了 pyzbs 中的 update_reroute_version 函数？这个是对外提供的命令，代码中如果搜不到的话，可以在文档中搜索，http://docs.fev.smartx.com/
 
-2. xen 平台还有人在使用吗？
+1. 怎么看 /api/v3/sessions 对应的 pyzbs 中的方法？可以在 https://newgh.smartx.com/cluster-platform/harbor/blob/master/swagger/yaml/crab.yaml
+
+2. xen 平台还有人在使用吗？xen 要保证可以工作
 
 3. reroute.py 中提供了 LOOP 和 ROUTE 模式，后者应该是用于人工指定一个 target i，相当于一个智能模式，一个静态模式。
 
-4. RerouteConfig.LOOP_FINISHED 貌似没有 true 的时候
-
-5. 为啥要软链接一份日志 check_lock_and_log_file
-
-6. smartx token 为啥每 2 秒获取一次，token 过期时长是 7 天？refresh_service_token，或许可以改成如果 bearer_token 为 None 时才获取，不为 None 验证过期了再获取。
-
-7. 怎么看 /api/v3/sessions 对应的 pyzbs 中的方法
-
-8. 每 200 次判断一下是否 enable reroute 和 enable secondary data channel？对 enable 的响应会不会太慢？200 * 2 = 400s 才能变更状态。不过其实也不会有多经常变更，所以也还好。
+3. shlex.split(cmd) 是用来当 shell=false 时，把 shell cmd 进行分割，期望传入一个数组，比如 ["ls", "-a"]。
 
 9. 从 shell 切 python，reroute version 从 1.6 变成 2.1
 
-10. 为啥要对 target_ip send heartbeat
+10. 为啥要对 target_ip send heartbeat？为了让 insight 可以感知到 reroute 状态，if reroute other host，insight 是 zbs 中的模块，用以感知探测 + 报警 zbs 状态。
 
 11. ping 发 icmp 包为啥要自实现一个 ICMPHandler？
 
     客户的 vmware 环境里 scvm vNIC 开启了 MTU check，网络包大小如果超过了 MTU 值会被 drop 掉
 
-12. ioreroute 需要在非常明确的场景下才进行路由切换，https://cs.smartx.com/cases/detail?id=1050822
+9. ioreroute 需要在非常明确的场景下才进行路由切换，https://cs.smartx.com/cases/detail?id=1050822
+
+   如果 http 失败，不应该切换
+
+10. 日志在 /scratch/log/scvm_failure.log，为什么还要软链接一份到 /var/log/scvm_failure.log，   check_lock_and_log_file() 
+
+11. smartx token 为啥每 2 秒获取一次，会不会过于高频，token 过期时长是 7 天？refresh_service_token，或许可以改成如果 bearer_token 为 None 时才获取，不为 None 验证过期了再获取。
 
 13. 需要预防 python 中的 shuffle 不会吞掉 ip_list 中的值，参考 http://gerrit.smartx.com/c/pyzbs/+/40696
 
