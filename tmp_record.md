@@ -82,13 +82,19 @@ RecoverManager recover_manager(&(GetMetaContext()));
 
 1. 怎么看 /api/v3/sessions 对应的 pyzbs 中的方法？可以在 https://newgh.smartx.com/cluster-platform/harbor/blob/master/swagger/yaml/crab.yaml
 
+1. http://remote_ip/api/v2/zbs_session/session/session_id 是用于更新 session 的做法，具体实现是 zbs 中的  SessionMaster::RefreshLocalNFSClientIPs()，
+
 2. xen 平台还有人在使用吗？xen 要保证可以工作
 
-3. reroute.py 中提供了 LOOP 和 ROUTE 模式，后者应该是用于人工指定一个 target i，相当于一个智能模式，一个静态模式。
+3. reroute.py 中提供了 LOOP 和 ROUTE 模式，后者应该是用于人工指定一个 target i，相当于一个智能模式，一个静态模式，对应原来的 change_route_route.sh
 
 3. shlex.split(cmd) 是用来当 shell=false 时，把 shell cmd 进行分割，期望传入一个数组，比如 ["ls", "-a"]。
 
-9. 从 shell 切 python，reroute version 从 1.6 变成 2.1
+7. 从 shell 切 python，reroute version 从 1.4 变成 1.5， 1.6 变成 2.1
+
+   1. 1.4 版本开始把 zbs cli 都替换成 restful 的形式，并设有 timeout 机制
+   2. 1.5 版本开始使用 reroute.py，1.5 到 1.6 之间修了一些小 bug，所以对外形式可以理解成，1.5 开始一定是用的 reroute.py
+   3. smtx 5.x 开始用的 reroute 脚本都是 2.x，这样 4.x 再打 patch 的话可以从 1.6 开始接着用，另外，2.1 到 2.2 变化并不大
 
 10. 为啥要对 target_ip send heartbeat？为了让 insight 可以感知到 reroute 状态，if reroute other host，insight 是 zbs 中的模块，用以感知探测 + 报警 zbs 状态。
 
@@ -96,15 +102,26 @@ RecoverManager recover_manager(&(GetMetaContext()));
 
     客户的 vmware 环境里 scvm vNIC 开启了 MTU check，网络包大小如果超过了 MTU 值会被 drop 掉
 
-9. ioreroute 需要在非常明确的场景下才进行路由切换，https://cs.smartx.com/cases/detail?id=1050822
+10. ioreroute 需要在非常明确的场景下才进行路由切换，https://cs.smartx.com/cases/detail?id=1050822
 
-   如果 http 失败，不应该切换
+    如果 http 失败，不应该切换
 
-10. 日志在 /scratch/log/scvm_failure.log，为什么还要软链接一份到 /var/log/scvm_failure.log，   check_lock_and_log_file() 
+11. 日志在 /scratch/log/scvm_failure.log，为什么还要软链接一份到 /var/log/scvm_failure.log，   check_lock_and_log_file() 
 
-11. smartx token 为啥每 2 秒获取一次，会不会过于高频，token 过期时长是 7 天？refresh_service_token，或许可以改成如果 bearer_token 为 None 时才获取，不为 None 验证过期了再获取。
+12. back to normal 限制要 180s ，是否可以减少？
 
 13. 需要预防 python 中的 shuffle 不会吞掉 ip_list 中的值，参考 http://gerrit.smartx.com/c/pyzbs/+/40696
+
+14. when scvm is down the session may need some time to expire, we should use ping to ensure it's alive
+
+    When SCVM is down, meta leader will need some time to detect the session
+    lost, and reroute should not rely on it since IO may hang in this
+    period. In this patch, we will actively use ping to check if the dst ip
+    is alive, and if not, reroute will be triggered. Now it'll take about 4
+    seconds to do reroute if the dst is down, which is mostly consumed by
+    the function 'can_ping'.
+
+15. 什么时候应该 refresh_local_hypervisor_ip，在 shell 版本是在 refresh_local_hypervisor_ip 成功之后，才会去 del_route/add_route，但在 python 版本中并没有，怀疑可能会影响到 NFS 接入点的唯一性保证。
 
 
 
