@@ -190,15 +190,27 @@ git pull 之后想撤销，先 git reflog 看一下想回退到之前的哪一�
 pick 到非 master 分支如 v5.4.x 时
 
 1. 在 master 分支上 git pull && git submodule update --init --recursive
+
 2. 拉取远端最新代码 git checkout remotes/origin/v5.4.x -B v5.4.x
+
+   > 拉取远程 tag，gc v5.1.2-rc10 -B v5.1.2-rc10
+
 3. 此时在 v5.4.x 分支 git submodule update 
+
 4. 把 gerrit 上的 patch 拉过来 git review -x 49627，这是网址 http://gerrit.smartx.com/c/zbs/+/49627
+
 5. git status 发现 proto 有冲突
+
 6. 放弃此时分支上的 proto 版本，其实就是远程分支， git checkout HEAD src/proto 
+
 7. git status 发现干净了
+
 8. git cherry-pick --continue
+
 9. 此时进入 cd src/proto && git review -d 44444，这是 proto 的提交 patch
+
 10. 然后 cd .. && cd .. 回到 zbs 目录 git add -u
+
 11. 然后 git commit --amend && git review v5.4.x -R（-R 表示不变基，在这有无都行）
 
 

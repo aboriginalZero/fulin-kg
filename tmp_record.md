@@ -60,10 +60,6 @@ perf_distribute_cmds_per_chunk_limit 或许得改成 perf_generate_cmds_per_chun
 
 
 
-
-
-
-
 单测里面
 
 ```cpp
@@ -75,6 +71,21 @@ RecoverManager recover_manager(&(GetMetaContext()));
 ```
 
 
+
+```
+exsi
+192.168.85.11 12 13
+
+scvm
+192.168.85.15 16 17
+10.10.85.15 16 17
+```
+
+
+
+1. 去掉 shell 版代码；
+2. 在每次 add route 之后，都主动调用一次 update_local_hypervisor_ip 去刷新 zbs 侧的 session 记录信息，以保证接入点的唯一性；
+3. 试着重写一下 check_scvm_reroute_status，让路由切换优先级的定义更清晰，明确 session exist/a lie 的使用，考虑 chunk 会反复重启等特殊场景，减少不必要的路由切换。
 
 
 
