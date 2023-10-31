@@ -2,6 +2,8 @@
 
 perf_distribute_cmds_per_chunk_limit 或许得改成 perf_generate_cmds_per_chunk_limit 更符合语义。
 
+针对 ec 的 best topo distance 的计算，斯坦纳树问题，对应的 DP 做法 Dreyfus-Wagner 算法。
+
 
 
 为什么要有一个 pid_to_lid_map，且为啥放在 meta_context 这个全局变量里，且看着 perf_pid 和 cap_pid 共同占用的 pid 数量上限是 8M。
@@ -61,6 +63,8 @@ perf_distribute_cmds_per_chunk_limit 或许得改成 perf_generate_cmds_per_chun
     为啥 LocalIOHandler 也是往 lsm_cmd_queue Submit
 
     变量  to_submit_iocbs_ 看起来不是线程安全的，还是说他不需要保证线程安全，access_handler 和 local_io_handler 和 temporary_replica_io_handler 等都是在一个线程？
+    
+7. 重构 recover manager 时，需要考虑 prior extent 不需要在低负载下支持局部化，master 分支上目前还是支持，但 5.5.x 已经不支持了
 
 
 
