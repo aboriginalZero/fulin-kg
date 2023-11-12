@@ -66,6 +66,34 @@ alias zrt=zbs_run_test
 
 #### vscode 
 
+为每个项目的 .vscode/c_cpp_properties.json 配置一下内容，按照 c++17 的标准做语法解析，不会出现不必要的红色波浪线
+
+```json
+{
+    "configurations": [
+        {
+            "name": "centos",
+            "includePath": [
+                "${workspaceFolder}/**"
+            ],
+            "defines": [
+                "_DEBUG",
+                "UNICODE",
+                "_UNICODE"
+            ],
+            "compilerPath": "/usr/local/bin/gcc", // 你的编译器路径
+            "cStandard": "c17",
+            "cppStandard": "c++17",
+            "intelliSenseMode": "clang-x64"
+        }
+    ],
+    "version": 4
+}
+
+```
+
+
+
 【cmd + ,】打开设置面板，右上角找到 setting.json
 
 ```json
