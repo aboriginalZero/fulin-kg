@@ -10,6 +10,10 @@ perf_distribute_cmds_per_chunk_limit 或许得改成 perf_generate_cmds_per_chun
 
 
 
+ZbsClient::Write() --> ZbsClient::DoIO<>() --> ZbsClient::SplitIO() --> ZbsClient::SubmitIO() --> InternalIOClient::SubmitIO() --> 网络或本地 --> AccessIOHandler::SubmitWriteVExtent() --> AccessIOHandler::WriteVExtent() --> Meta::GetVExtentLease() -->Meta::CacheVExtentLease() --> Meta::CacheLease()
+
+
+
 1. recover 支持分批扫描
 
    比较纠结的是，目前 recover_manager 中 scan_extents_per_round_limit 这个参数只限制了 recover / migrate for localization / migrate for repair topo 一次扫描的 pextent 数量，而对其他类型的 migrate （如 migrate for even volume/ prior extent / rebalance）并没有做限制，这让他的语义并不完整。
@@ -65,6 +69,8 @@ perf_distribute_cmds_per_chunk_limit 或许得改成 perf_generate_cmds_per_chun
     变量  to_submit_iocbs_ 看起来不是线程安全的，还是说他不需要保证线程安全，access_handler 和 local_io_handler 和 temporary_replica_io_handler 等都是在一个线程？
     
 7. 重构 recover manager 时，需要考虑 prior extent 不需要在低负载下支持局部化，master 分支上目前还是支持，但 5.5.x 已经不支持了
+
+7. zhaoguo 建议，ever_exist = false 的 recover cmd 应该提高限制命令数，或许 meta 侧的命令数限制应该只限制 ever exist = true 的，false 的直接放行。
 
 
 
