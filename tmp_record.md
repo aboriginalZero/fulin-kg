@@ -1,3 +1,12 @@
+1. 支持分层的 params zbs 侧扩展
+2. 支持分层的 params client-py 侧扩展
+3. concurrency params 用起来
+4. 自动调节 recover / migrate 变速
+5. summary recover perf 
+6. 双活在单可用域中创建 2 副本，分别提交到不同分支上
+
+
+
 [ZBS-26042](http://jira.smartx.com/browse/ZBS-26042) 还缺一个 even volume 的 ut 验证 [ZBS-25847](http://jira.smartx.com/browse/ZBS-25847)
 
 perf_distribute_cmds_per_chunk_limit 或许得改成 perf_generate_cmds_per_chunk_limit 更符合语义。
