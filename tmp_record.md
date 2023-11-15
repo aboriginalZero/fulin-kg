@@ -2,6 +2,7 @@
 2. 支持分层的 params client-py 侧扩展
 3. concurrency params 用起来
 4. 自动调节 recover / migrate 变速
+5. 把  recover_layer_common 中的 GetReplicaGeneration() 挪回去
 5. summary recover perf 
 6. 双活在单可用域中创建 2 副本，分别提交到不同分支上
 
