@@ -97,15 +97,22 @@ promethus prometheus HC!r0cks ，http://meta_leader_mgt_ip:9090
     EOF
     ```
 
-10. 编译 zbs
+10. 安装 Clang-Format 插件
 
     ```shell
-    cd /home/code/zbs && rm -rf build/ && mkdir build && cd build && cmake -G Ninja ..
-    ninja zbs_test zbs-metad
-    strip ./src/zbs-metad
+    yum install llvm-toolset-11.0.x86_64
+    yum install llvm-toolset-11.0-clang-tools-extra-11.0.1-1.el7_9.x86_64
     ```
+    
+11. 编译 zbs
 
-    其中，strip ./src/zbs-taskd 有选择地除去行号信息、重定位信息、调试段、typchk 段、注释段、文件头以及所有或部分符号表，后续难以调试，但能够有效减少二进制文件大小。
+     ```shell
+     cd /home/code/zbs && rm -rf build/ && mkdir build && cd build && cmake -G Ninja ..
+     cd /home/code/zbs && ./script/format.sh && cd build && mold -run ninja zbs_test zbs-metad
+     strip ./src/zbs-metad
+     ```
+
+     其中，strip ./src/zbs-taskd 有选择地除去行号信息、重定位信息、调试段、typchk 段、注释段、文件头以及所有或部分符号表，后续难以调试，但能够有效减少二进制文件大小。
 
 11. 单测运行
 
