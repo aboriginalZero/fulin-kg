@@ -2,9 +2,11 @@
 2. 支持分层的 params client-py 侧扩展
 3. concurrency params 用起来
 4. 自动调节 recover / migrate 变速
-5. 把  recover_layer_common 中的 GetReplicaGeneration() 挪回去
 5. summary recover perf 
-6. 双活在单可用域中创建 2 副本，分别提交到不同分支上
+6. io metrics 调整
+    1. LocalIOHandler 中的 ctx->sw.Start() 应该放在所有会执行 LocalIODone 前？
+    2. METRIC_INITIALIZE 中的 args 是怎么用起来的呢？
+
 
 
 
@@ -16,11 +18,25 @@ perf_distribute_cmds_per_chunk_limit 或许得改成 perf_generate_cmds_per_chun
 
 
 
-为什么要有一个 pid_to_lid_map，且为啥放在 meta_context 这个全局变量里，且看着 perf_pid 和 cap_pid 共同占用的 pid 数量上限是 8M。
+zbs io trace
+
+1. --> ZbsClient::Write() --> ZbsClient::DoIO<>() --> ZbsClient::SplitIO() --> ZbsClient::SubmitIO() --> InternalIOClient::SubmitIO()
+2.  --> 判断走网络还是本地，VExtent 粒度，路由到合适的 AccessIOHandler，此时有获取一次 lease，根据 lease owner uuid 跟本地 session uuid 判断是否相等
+3. --> AccessIOHandler::SubmitWriteVExtent() --> AccessIOHandler::WriteVExtent() 
+4. --> Meta::GetVExtentLease() -->Meta::CacheVExtentLease() --> Meta::CacheLease() ，此时也有一次获取 Lease，是根据 volume_id 和 vextent_no 拿到 pextent 的 location 等信息，对 location 上的每一个 cid 执行下面操作
+5. --> ECIOHandler / ReplicaIOHandler::Write() --> PextentIOHandler::Write() 
+6. --> 判断走网络还是本地，PExtent 粒度，本地的话直接在 PextentIOHandler 塞入队列，如果是走网络，是通过远程 Chunk 上的 LocalIOHandler 塞入队列
+7. --> LSMCmdQueue::Submit，队列中的元素会被 lsm 根据不同的 op code 执行不同的操作，比如 LSM_CMD_RECOVER_START 等；
+8. --> LSM::DoIO() --> LSM::RecoverWrite() --> LSM::DoRecoverWrite() --> ExtentInode::SetupRecoverWrite() ，此时会有 pblob 层面的操作。
 
 
 
-ZbsClient::Write() --> ZbsClient::DoIO<>() --> ZbsClient::SplitIO() --> ZbsClient::SubmitIO() --> InternalIOClient::SubmitIO() --> 网络或本地 --> AccessIOHandler::SubmitWriteVExtent() --> AccessIOHandler::WriteVExtent() --> Meta::GetVExtentLease() -->Meta::CacheVExtentLease() --> Meta::CacheLease()
+LSMCmdQueue 在哪被消费呢？
+
+1. LSM::Init() ，将 cmd_event_poller_ 设为 LSM::HandleCmdAndEvents()，在这里会用 coroutine 执行 LSM::DoIO()；
+2. LSM::DoIO()，其中，根据不同的 op code 执行不同的操作，比如 LSM_CMD_RECOVER_START 等；
+3. LSM::RecoverWrite()，LSM::DoRecoverWrite()；
+4. ExtentInode::SetupRecoverWrite()，会有 pblob 层面的操作，
 
 
 
