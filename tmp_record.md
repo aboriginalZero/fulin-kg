@@ -6,6 +6,45 @@
 6. io metrics 调整
     1. LocalIOHandler 中的 ctx->sw.Start() 应该放在所有会执行 LocalIODone 前？
     2. METRIC_INITIALIZE 中的 args 是怎么用起来的呢？
+    2. 目前 Acccess IO Stats 中的统计是 app io 的流量，在 access handler 的调节中，后续要考虑 sink io，先不用做 recover io metrics；
+    2. 在 access io handler 中做的 UpdateIOStats，对外展示有好处，但实际上没有流量，自动调节的话，可以忽略这部分。
+7.  io 分成 app io, recover io 和 sink io 共 3 种，粗略理解，sink io 保性能，recover io 保安全，然后他们在不同场景下的优先级应该不一样：
+    1. 比如 app io 流量小的话，应该让 recover io 高，sink io 小一些；
+    2. 比如 app io 流量大的话，或许是可以允许 sink io 高，但是 recover io 得小一些这样的
+8. 分层之后，cap 层还可以统计盘的数量，perf 层需要统计的是 perf space  used rate
+9. 需要拿到 sink io metrics 的统计
+
+
+
+recover 自动限速调整
+
+
+
+```c++
+// 用 app io metrics 比较
+// 升速条件：
+total_iops > limit.normal_io_busy_iops_throttle || 
+total_bandwidth > limit.normal_io_busy_bps_throttle
+
+// 降速条件：
+recover_handler_.migrate_throughput_in_last_duration() > 
+migrate_speed_limit * kRepositionIOPercentThrottle
+```
+
+
+
+
+
+
+
+
+
+recover > sink > migrate
+
+分层之后，io 分成 app io, recover io 和 sink io 共 3 种。其中，app io 优先级最高，sink io 保其它副本的性能，recover io 保副本安全，在不同场景下的优先级应该不一样
+
+1. 若 app io 流量较小，此时业务不应该让 recover io；
+2. recover 的默认值是上限的 0.2，migrate 是 0.1；
 
 
 
@@ -18,7 +57,7 @@ perf_distribute_cmds_per_chunk_limit 或许得改成 perf_generate_cmds_per_chun
 
 
 
-zbs io trace
+zbs app io trace
 
 1. --> ZbsClient::Write() --> ZbsClient::DoIO<>() --> ZbsClient::SplitIO() --> ZbsClient::SubmitIO() --> InternalIOClient::SubmitIO()
 2.  --> 判断走网络还是本地，VExtent 粒度，路由到合适的 AccessIOHandler，此时有获取一次 lease，根据 lease owner uuid 跟本地 session uuid 判断是否相等
@@ -31,12 +70,59 @@ zbs io trace
 
 
 
-LSMCmdQueue 在哪被消费呢？
+zbs reposition io trace
 
-1. LSM::Init() ，将 cmd_event_poller_ 设为 LSM::HandleCmdAndEvents()，在这里会用 coroutine 执行 LSM::DoIO()；
-2. LSM::DoIO()，其中，根据不同的 op code 执行不同的操作，比如 LSM_CMD_RECOVER_START 等；
-3. LSM::RecoverWrite()，LSM::DoRecoverWrite()；
-4. ExtentInode::SetupRecoverWrite()，会有 pblob 层面的操作，
+1. --> RecoverManager::GenerateRecoverCmds() --> RecoverManager::AddRecoverCmdUnlock() --> AccessManager::EnqueueRecoverCmd()
+
+2. --> AccessManager::ComposeAccessResponse() --> 通过心跳下发给 access handler --> AccessHandler::HandleAccessResponse()
+
+3. --> RecoverHandler::NotifyRecover() --> RecoverHandler::TriggerMoreRecover() --> RecoverHandler::ScheduleRecover() --> RecoverHandler::DoScheduleRecover()
+
+4. 根据 resiliency_type，分别给到 ECRecoverHandler / ReplicaRecoverHandler
+
+5. --> ReplicaRecoverHandler::HandleRecoverNotification() --> ReplicaRecoverHandler::DoRecover() 
+
+6. --> ReplicaRecoverHandler::RecoverStart() 
+
+   1. --> PExtentIOHandler::SyncRecoverStart() --> PExtentIOHandler::RecoverStart()
+   2. --> ReplicaRecoverHandler::GetReplicaGeneration() ，向 dst_cid 获取 gen 并校验；
+
+7. --> 按 256 KiB 为粒度，做 1024 次 ReadFromSrc() + WriteToDst() 
+
+   1. --> ReplicaRecoverHandler::ReadFromSrc() --> PExtentIOHandler::RecoverRead() 
+
+   2. --> 判断走网络还是本地，PExtent 粒度，本地的话直接在 PextentIOHandler 塞入队列，如果是走网络，是通过远程 Chunk 上的 LocalIOHandler 塞入队列
+
+   3. 读是没法避免的，而写的话，如果读的时候 LSM 返回 ELSMNotAllocData 且支持敏捷恢复和 unmap 时，会通过 unmap 来完成这次 recover block write；如果走普通恢复并且 ELSMNotAllocData 或用 all_zero_buf 写 dst cap layer，那么直接完成本次 recover lock write，不会有真实的 IO 流量。
+
+      > lsm 会记录 perf 层有效数据 bitmap，所以如果用 all_zero_buf 写 dst perf layer 不能直接跳过
+
+   4. --> ReplicaRecoverHandler::WriteToDst() --> ReplicaRecoverHandler::DoRecoverWrite() --> PExtentIOHandler::SyncRecoverWrite() --> PExtentIOHandler::RecoverWrite()
+
+   5. --> 判断走网络还是本地，PExtent 粒度，本地的话直接在 PextentIOHandler 塞入队列，如果是走网络，是通过远程 Chunk 上的 LocalIOHandler 塞入队列
+
+8. -->ReplicaRecoverHandler::RecoverEnd() 
+
+9. --> ReplicaRecoverHandler::ReplacePExtentReplica()
+
+
+
+LSMCmdQueue 中的元素在哪被消费呢？
+
+1. EpollLSMIOContext 的 Flush() 把 LsmCmd SubmitIO 给 lsm；
+2. LSM::Init() ，将 cmd_event_poller_ 设为 LSM::HandleCmdAndEvents()，在这里会用 coroutine 执行 LSM::DoIO()；
+3. LSM::DoIO()，其中，根据不同的 op code 执行不同的操作，比如 LSM_CMD_RECOVER_START 等；
+4. LSM::RecoverWrite()，LSM::DoRecoverWrite()；
+5. ExtentInode::SetupRecoverWrite()，会有 pblob 层面的操作。
+
+
+
+reposition io 与 app io 的并发处理
+
+1. 若当前正在 recover block a，normal read block a 是会等待 recover 完成再写，因为 recover 通过 lease 中的 barrier 已经设置了屏障；
+2. 若当前正在 normal read / write block a，recover block a 不会等待 normal read / write 完成再读写，因为 generation 机制，如果 normal read / write 的 gen 是 1，recover 会是 gen + 1，这样来保证 normal read 的同时，recover 也可以进行。
+
+
 
 
 
@@ -88,15 +174,11 @@ LSMCmdQueue 在哪被消费呢？
 
     access_io_stats.h 中 access_io_perf_t 和 access_io_stats_t 的区别？前者在 zbs 内部用，后者好像是给 zbs 外部用的
 
-    PExtentIOHandler 中把各种 OP Submit 到 lsm_cmd_queue 之后，在哪看去消费 lsm_cmd_queue 中的内容？好像是 EpollLSMIOContext 的 Flush() 把 LsmCmd SubmitIO 给 lsm，各个 OP 在 lsm 侧的行为看 lsm2 中的 SubmitIO() 和 DoIO()
-
-    为啥 LocalIOHandler 也是往 lsm_cmd_queue Submit
-
     变量  to_submit_iocbs_ 看起来不是线程安全的，还是说他不需要保证线程安全，access_handler 和 local_io_handler 和 temporary_replica_io_handler 等都是在一个线程？
-    
+
 7. 重构 recover manager 时，需要考虑 prior extent 不需要在低负载下支持局部化，master 分支上目前还是支持，但 5.5.x 已经不支持了
 
-7. zhaoguo 建议，ever_exist = false 的 recover cmd 应该提高限制命令数，或许 meta 侧的命令数限制应该只限制 ever exist = true 的，false 的直接放行。
+8. 一个 extent 只要写过 1 次真实数据，EverExist 就是 true，如果从没有写过并且不是来自 COW ，那它就没有任何有效数据。在副本迁移或者恢复的时候可以有一些简化的特殊处理。zhaoguo 建议，ever_exist = false 的 recover cmd 应该提高限制命令数，或许 meta 侧的命令数限制应该只限制 ever exist = true 的，false 的直接放行。
 
 
 
@@ -114,8 +196,6 @@ RecoverManager recover_manager(&(GetMetaContext()));
 
 
 
-一个 extent 只要写过 1 次真实数据，EverExist 就是 true，如果从没有写过并且不是来自 COW ，那它就没有任何有效数据。在副本迁移或者恢复的时候可以有一些简化的特殊处理。
-
 
 
 存储分层模式，可以选择混闪配置或者全闪配置，其中全闪配置至少需要 1 块低速 SSD 作为数据盘，混闪配置至少需要 1 块 HDD 作为数据盘。
@@ -129,14 +209,6 @@ smtx os 5.1.1 中不论存储是否分层，都要求 2 块容量至少 130 GiB 
 在恢复或者迁移任务结束时，新加入副本的状态被设置为未知，需要等待下一次心跳周期 LSM 上报副本后才可以确认副本为健康。
 
 在心跳开始之前，如果执行 find need recover extent 命令，将会把这样的 extent 返回，这会导致升级过程中，如果有数据迁移发生，则会被判定会产生了恢复，导致升级过程退出。
-
-修复方式为调整新加入的副本状态，从未知（需要修复）调整为不需要修复，但是最近并不活跃，并不能直接清理恢复命令。 
-
-
-
-```
-ssh -i /vmfs/volumes/65128d50-5afed7ff-1661-005056ab5edf/vmware_scvm_failure/.smartx_key/smartx_reroute_id_rsa -o ServerAliveInterval=1 -o BatchMode=yes -o ConnectTimeout=1 -o StrictHostKeyChecking no -o UserKnownHostsFile /dev/null -o GSSAPIAuthentication no root@10.97.60.236 timeout 2 curl -H 'Content-Type: application/json' -X PUT -d '{"local_clients_ips":"192.168.77.36,10.97.60.235"}' http://10.97.60.236/api/v2/zbs_session/session/86dccf70-f0c8-4a02-ab6d-ca9a49ffcd74
-```
 
 
 
@@ -240,7 +312,7 @@ VIP 设计文档，https://docs.google.com/document/d/1M34zaIje2xkUSv9Q41waRH4GC
 
 
 
-重构 recover manager 的话，可以不用再考虑支持 Storage Pool 了吧？我看 CheckUpgradeThinProvision 里面都没有去遍历各个 StoragePool
+重构 recover manager 的话，可以不用再考虑支持 Storage Pool 了吧？我看 CheckUpgradeThinProvision 里面都没有去遍历各个 StoragePool，需要保留。
 
 rx_pids -> dst_pids，tx_pids -> replace_cids, recover_src_pids -> src_pids
 
@@ -394,18 +466,12 @@ CowPExtentTransaction，UpdateVolumeTransaction，ReserveVolumeSpaceTransaction
 
 
 
-
-
-1. http://gerrit.smartx.com/c/zbs/+/53689 代码更新，并补充对应的 zbs cli
-2. zbs cli 中加上 reposition cli，并添加 rpc，跟手动触发 mgirate rpc 指令一起做
+1. zbs cli 中加上 reposition cli，并添加 rpc，跟手动触发 mgirate rpc 指令一起做
     1. 能够观察 recover 真正 IO 的数据量，block 粒度的（比如如果有敏捷恢复，这个 pextent 就不会恢复 256 MB）
     2. 能够查看 generate/pending_recover 的数量
     3. 能够查看 need_migrate 的数量
-3. 智能模式中，值变化的时候添加 log
-
-
-
-1. 改 Prefer Local / TopoAware / Localized 三个比较器名字，[ZBS-25802](http://jira.smartx.com/browse/ZBS-25802)
+2. 智能模式中，值变化的时候添加 log
+3. 改 Prefer Local / TopoAware / Localized 三个比较器名字，[ZBS-25802](http://jira.smartx.com/browse/ZBS-25802)
 
 
 
