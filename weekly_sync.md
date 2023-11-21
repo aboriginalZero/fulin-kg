@@ -151,6 +151,8 @@
 
 1. 厚制备 elf 没有传递 Volume 所属的 Chunk id 给 ZBS，所以副本分配没法使用本地优先，此时第一副本会挑选为分配时集群空间比例最小的节点，然后其他 2 个副本在第一个副本的基础上再按照局部化原则选择。对应的 Extent 有真实 IO 之后会打上 prefer cid 的标记，再被定时扫描触发副本迁移；
 
+   thick volume 一创建就会分配 extent，但创建的时候没法确定接入点，thin volume 是在 io 时才分配 extent。
+
 2. 2 副本的数据分布，prefer local 是 2，副本分布一开始在 chunk 2 3，stop chunk2 之后，recover 从 3 到 4，副本分布是 3 和 4。此时在 chunk 3 上写 pid1，chunk4 上写 pid2，对应的 lease owner 分别是 3 和 4，chunk2 start，scan immediate，这个时候把 pid1 4 上的副本迁移到 2 上好理解，因为此时满足局部化/本地化期望副本分布是 2 3。
 
    对于 pid2，此时 lease owner 在 4，触发的副本迁移 dst 是 prefer local = 2（dst_cid 的选取规则是优先选择没有副本且不处于 failsow 的 prefer local，次选符合期望分布，即符合 LocalizedComparator 分配策略的下一个副本），replaced_cid 的选取规则是从活跃副本中选出不满足期望分布且不是 lease owner 的 cid，如果有多个可选，则选择第一个 failslow 的 cid；那在这里因为 4 是 lease owner，3 又符合以 2 为 prefer local 的分布期望，所以 replace_cid 应该是 0，也就是不触发 pid2 的副本迁移才是，当 lease owner 过期（owner = 0），此时就可以将 pid2 在 4 上的副本迁移到 2 了。

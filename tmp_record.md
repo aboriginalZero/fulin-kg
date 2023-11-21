@@ -11,7 +11,7 @@
 7.  io 分成 app io, recover io 和 sink io 共 3 种，粗略理解，sink io 保性能，recover io 保安全，然后他们在不同场景下的优先级应该不一样：
     1. 比如 app io 流量小的话，应该让 recover io 高，sink io 小一些；
     2. 比如 app io 流量大的话，或许是可以允许 sink io 高，但是 recover io 得小一些这样的
-8. 分层之后，cap 层还可以统计盘的数量，perf 层需要统计的是 perf space  used rate
+8. 分层之后，cap 层还可以统计盘的数量，perf 层需要统计的是 perf space used rate
 9. 需要拿到 sink io metrics 的统计
 
 
@@ -21,6 +21,8 @@ recover 自动限速调整
 
 
 ```c++
+// 并发数提升条件：
+
 // 用 app io metrics 比较
 // 升速条件：
 total_iops > limit.normal_io_busy_iops_throttle || 
@@ -30,10 +32,6 @@ total_bandwidth > limit.normal_io_busy_bps_throttle
 recover_handler_.migrate_throughput_in_last_duration() > 
 migrate_speed_limit * kRepositionIOPercentThrottle
 ```
-
-
-
-
 
 
 
