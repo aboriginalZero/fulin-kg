@@ -214,6 +214,36 @@ MetaRpcServer::MarkAllocEvenIfNecessary、MetaRpcServer::ResetVolumeAllocEven �
 
 
 
+zbs 端口使用
+
+| 服务名            | 使用网络           | 使用端口         | 备注                       |
+| ----------------- | ------------------ | ---------------- | -------------------------- |
+| zookeeper         | 存储网络           | 2181、2888、3888 |                            |
+| prometheus        | 管理网络、存储网络 | 9090             | 用 http 而非 https 访问    |
+| zbs-deploy-server | 管理网络           | 10403            |                            |
+| zbs-rest-server   | 管理网络、存储网络 | 10402            |                            |
+| zbs-inspector     | 存储网络           | 10700、10701     | zbs-insight 也在同一进程   |
+| zbs-taskd         | 管理网络、存储网络 | 10600、10601     | task dispatcher and runner |
+|                   |                    |                  |                            |
+| zbs-metad         |                    | 10100            | meta rpc server            |
+| zbs-metad         |                    | 10101            | meta status server         |
+| zbs-metad         |                    | 10102            | meta sm server             |
+| zbs-metad         | meta leader        | 10103            | meta access manager        |
+| zbs-metad         |                    | 10104            | meta http server           |
+|                   |                    | 10105            | meta grpc server           |
+|                   |                    |                  |                            |
+| zbs-chunkd        |                    | 10200            | chunk rpc server           |
+| zbs-chunkd        |                    | 10201            | chunk data channel         |
+| zbs-chunkd        |                    | 10202            | chunk http server          |
+| zbs-chunkd        |                    | 10203            | chunk perf server          |
+| zbs-chunkd        |                    | 10206            | meta proxy rpc service     |
+| zbs-chunkd        |                    | 10207            | meta proxy status service  |
+| zbs-chunkd        |                    | 10208            | chunk grpc server          |
+
+
+
+
+
 chunk 视角的 PExtentStatus
 
 ```cpp
