@@ -1,18 +1,23 @@
-1. 支持分层的 params zbs 侧扩展
-2. 支持分层的 params client-py 侧扩展
-3. concurrency params 用起来
-4. 自动调节 recover / migrate 变速
-5. summary recover perf 
+1. 忽略 ever exist = false 的 
+2. 把 avail cmd slots 提前算好放 exclude_cids 
+3. 对 recover 加个分批处理
+4. 让 cli 可以看到 avail cmd slots
+
+
+
+1. concurrency params 用起来
+2. 自动调节 recover / migrate 变速
+3. summary recover perf 
 6. io metrics 调整
     1. LocalIOHandler 中的 ctx->sw.Start() 应该放在所有会执行 LocalIODone 前？
     2. METRIC_INITIALIZE 中的 args 是怎么用起来的呢？
     2. 目前 Acccess IO Stats 中的统计是 app io 的流量，在 access handler 的调节中，后续要考虑 sink io，先不用做 recover io metrics；
     2. 在 access io handler 中做的 UpdateIOStats，对外展示有好处，但实际上没有流量，自动调节的话，可以忽略这部分。
-7.  io 分成 app io, recover io 和 sink io 共 3 种，粗略理解，sink io 保性能，recover io 保安全，然后他们在不同场景下的优先级应该不一样：
+5.  io 分成 app io, recover io 和 sink io 共 3 种，粗略理解，sink io 保性能，recover io 保安全，然后他们在不同场景下的优先级应该不一样：
     1. 比如 app io 流量小的话，应该让 recover io 高，sink io 小一些；
     2. 比如 app io 流量大的话，或许是可以允许 sink io 高，但是 recover io 得小一些这样的
-8. 分层之后，cap 层还可以统计盘的数量，perf 层需要统计的是 perf space used rate
-9. 需要拿到 sink io metrics 的统计
+6. 分层之后，cap 层还可以统计盘的数量，perf 层需要统计的是 perf space used rate
+7. 需要拿到 sink io metrics 的统计
 
 
 
@@ -762,8 +767,9 @@ Status RecoverManager::AddMigrateCmd(pid_t pid, cid_t src, cid_t dst, cid_t repl
 recover manager 中 recover 和 migrate 的不同之处：
 
 1. migrate 和 recover 只是共用 RecoverCmd 这个数据结构，各自的命令队列（recover 是 std::set，migrate 是  std::list）、触发时机、选取 dst/src 的时机并不相同；
-2. recover 的那个扫描只是一个非常浅的过滤 extent，分配 src dst 是在下发阶段，migrate 的 src dst 在扫描阶段就定下来了，下发阶段最多根据 lease owner 改一下 src
+2. recover 的那个扫描只是一个非常浅的过滤 extent，分配 src dst 是在下发阶段，migrate 的 src dst 在扫描阶段就定下来了。不论是 recover 还是 migrate，下发阶段都会根据 avail_cmd_slots 过滤命令，另外在放到 session 的 queue 之前还有可能根据 lease owner 改 src，被 space 过滤
 2. recover 是可以跨 zone，topo 降级的，但是 migrate 在 2 : 1 的情况下不会有跨域 migrate，且 migrate 需要满足 topo 安全
+2. 理论上 migrate 也应该把 generate 和 distribute 合在一起，但 generate migrate cmd 相较于 migrate 策略  更复杂，计算复杂度更高，如果合在一起会卡很久。
 
 
 
