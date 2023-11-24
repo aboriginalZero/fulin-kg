@@ -1,7 +1,9 @@
-1. 忽略 ever exist = false 的 
-2. 把 avail cmd slots 提前算好放 exclude_cids 
-3. 对 recover 加个分批处理
-4. 让 cli 可以看到 avail cmd slots
+1. 调整 PEntryElement 的体积
+2. 调整给 status server 的 recover summary
+3. 卡槽统计时，忽略 ever exist = false 的 
+4. 把 avail cmd slots 提前算好放 exclude_cids 
+5. 对 recover 加个分批处理
+6. 让 cli 可以看到 avail cmd slots
 
 
 
@@ -770,6 +772,7 @@ recover manager 中 recover 和 migrate 的不同之处：
 2. recover 的那个扫描只是一个非常浅的过滤 extent，分配 src dst 是在下发阶段，migrate 的 src dst 在扫描阶段就定下来了。不论是 recover 还是 migrate，下发阶段都会根据 avail_cmd_slots 过滤命令，另外在放到 session 的 queue 之前还有可能根据 lease owner 改 src，被 space 过滤
 2. recover 是可以跨 zone，topo 降级的，但是 migrate 在 2 : 1 的情况下不会有跨域 migrate，且 migrate 需要满足 topo 安全
 2. 理论上 migrate 也应该把 generate 和 distribute 合在一起，但 generate migrate cmd 相较于 migrate 策略  更复杂，计算复杂度更高，如果合在一起会卡很久。
+2. chunk removing 要求尽快迁移，所以不考虑 topo 安全，跟 recover 用的同一个选择策略，
 
 
 
