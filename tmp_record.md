@@ -8,6 +8,8 @@
 
 5. 调整 recover summary
 
+    复用 [ZBS-26142](http://gerrit.smartx.com/c/zbs/+/56770)
+
     采用事先统计的方式，http://gerrit.smartx.com/c/zbs/+/8495，在 zbs3
 
 6. 忽略 ever exist = false 的，在 zbs2
