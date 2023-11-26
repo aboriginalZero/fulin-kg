@@ -1,7 +1,31 @@
-1. 忽略 ever exist = false 的 
-2. 把 avail cmd slots 提前算好放 exclude_cids 
-3. 对 recover 加个分批处理
-4. 让 cli 可以看到 avail cmd slots
+1. 引入 RecoverElem
+
+2. 对 recover 加个分批处理
+
+3. 调整 Recover manager 中锁的使用方式
+
+4. 调整打印日志，在 zbs4
+
+5. 调整 recover summary
+
+    采用事先统计的方式，http://gerrit.smartx.com/c/zbs/+/8495，在 zbs3
+
+6. 忽略 ever exist = false 的，在 zbs2
+
+7. 把 avail cmd slots 提前算好放 exclude_cids 
+
+8. 让 cli 可以看到 avail cmd slots
+
+9. 把 distributeRecoverCmds 中的生成部分函数抽出来
+
+
+
+会被其他线程访问他们的使用结果：
+
+1. 对 active_waiting_recover_xxx 的操作需要加锁，不论是跟 passive 的交换还是他自己 push back 新的元素
+2. 对 pid_cmds_ 的访问需要加锁
+3. 对 even_volumes 的访问
+4. 避免对 passive 的访问加锁，因为他并不会被其他线程访问
 
 
 
