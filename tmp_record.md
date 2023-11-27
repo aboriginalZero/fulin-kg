@@ -1,9 +1,34 @@
-1. 调整 PEntryElement 的体积
-2. 调整给 status server 的 recover summary
-3. 卡槽统计时，忽略 ever exist = false 的 
-4. 把 avail cmd slots 提前算好放 exclude_cids 
-5. 对 recover 加个分批处理
-6. 让 cli 可以看到 avail cmd slots
+
+1. 引入 RecoverElem
+
+2. 对 recover 加个分批处理
+
+3. 调整 Recover manager 中锁的使用方式
+
+4. 调整打印日志，在 zbs4
+
+5. 调整 recover summary
+
+    复用 [ZBS-26142](http://gerrit.smartx.com/c/zbs/+/56770)
+
+    采用事先统计的方式，http://gerrit.smartx.com/c/zbs/+/8495，在 zbs3
+
+6. 忽略 ever exist = false 的，在 zbs2
+
+7. 把 avail cmd slots 提前算好放 exclude_cids 
+
+8. 让 cli 可以看到 avail cmd slots
+
+9. 把 distributeRecoverCmds 中的生成部分函数抽出来
+
+
+
+会被其他线程访问他们的使用结果：
+
+1. 对 active_waiting_recover_xxx 的操作需要加锁，不论是跟 passive 的交换还是他自己 push back 新的元素
+2. 对 pid_cmds_ 的访问需要加锁
+3. 对 even_volumes 的访问
+4. 避免对 passive 的访问加锁，因为他并不会被其他线程访问
 
 
 
@@ -152,24 +177,9 @@ reposition io 与 app io 的并发处理
            }
    ```
 
-3. 改 recover manager 中的函数名，比如 GenerateRecoverCmds 实际代表 DistributeRecoverCmds，还有计数相关的，recover 处有 2 个，可以精简的，把 recover 和 migrate 做到对称。
+4. 为啥没有 active_waiting_migrate_count_ 和 passive_waiting_migrate_count_，这是以 chunk 为粒度的，记录的 generated recover cmd，
 
-4. 互斥的做法
-
-   ```
-   // 这个写法有起到互斥的作用吗？
-       {
-           LockGuard l(&mutex_);
-           wait_recover_count = active_waiting_recover_count_;
-           wait_recover = active_waiting_recover_;
-       }
-   ```
-
-5. 为啥没有 active_waiting_migrate_count_ 和 passive_waiting_migrate_count_，这是以 chunk 为粒度的，记录的 generated recover cmd，
-
-6. reposition params 支持分层，相对修改 zbs-client-py 的代码，两个 patch 一起
-
-    reposition 晚点加进来，先把其他的搞成支持分层
+6. reposition params 支持分层
 
     分层之后，perf speed limit 与 cap speed limit 必然不同，但是要怎么限制呢？
 
@@ -201,8 +211,6 @@ RecoverManager recover_manager(&(GetMetaContext()));
 
 
 
-
-
 存储分层模式，可以选择混闪配置或者全闪配置，其中全闪配置至少需要 1 块低速 SSD 作为数据盘，混闪配置至少需要 1 块 HDD 作为数据盘。
 
 存储不分层模式，不设置缓存盘，除了含有系统分区的物理盘，剩余的所有物理盘都作为数据盘使用，只能使用全闪配置。
@@ -214,10 +222,6 @@ smtx os 5.1.1 中不论存储是否分层，都要求 2 块容量至少 130 GiB 
 在恢复或者迁移任务结束时，新加入副本的状态被设置为未知，需要等待下一次心跳周期 LSM 上报副本后才可以确认副本为健康。
 
 在心跳开始之前，如果执行 find need recover extent 命令，将会把这样的 extent 返回，这会导致升级过程中，如果有数据迁移发生，则会被判定会产生了恢复，导致升级过程退出。
-
-
-
-MetaRpcServer::MarkAllocEvenIfNecessary、MetaRpcServer::ResetVolumeAllocEven 会调用
 
 
 
@@ -246,10 +250,6 @@ zbs 端口使用
 | zbs-chunkd        |                    | 10206            | meta proxy rpc service     |
 | zbs-chunkd        |                    | 10207            | meta proxy status service  |
 | zbs-chunkd        |                    | 10208            | chunk grpc server          |
-
-
-
-
 
 chunk 视角的 PExtentStatus
 
@@ -457,8 +457,6 @@ CowPExtentTransaction，UpdateVolumeTransaction，ReserveVolumeSpaceTransaction
 
     需要支持 prior volume 吗？
 
-    
-
 5. 低负载
 
     ReGenerateMigrateForLocalizeInStoragePool()，让副本位置符合 LocalizedComparator
@@ -551,8 +549,6 @@ reposition 跟 recover migrate 分开、额外添加 rpc 用法
 
 [ZBS-24563](http://jira.smartx.com/browse/ZBS-24563) 缓存命中率下降，副本恢复任务并发度过高，导致恢复任务执行过慢
 
-[ZBS-13041](http://jira.smartx.com/browse/ZBS-13041)允许在线调整恢复/迁移的命令数量
-
 4 个 ticket 4 件事
 
 1. 冷热数据识别（梳理 lsm 侧的需求给到 lsm 同学做，识别冷热数据）
@@ -571,27 +567,15 @@ reposition 跟 recover migrate 分开、额外添加 rpc 用法
 
    这里权衡 Chunk 的负载指标可能采用的有：1）Chunk LSM 是否 Busy，即 LSM 的 IsLSMBusy，根据当前 Journal 可用数量来判别。2）Chunk Node 的各项性能指标，包括 cpu/memory/disk/network，见 node_monitor，但是现在的实现貌似只有全局的指标，例如 cpu 是所有的核心 summary，disk 不好区分是哪个盘需要做读写。不大好设置阈值。3）根据 Recover IO 与 正常 IO 之间的比例来判定，
 
+   ZBS-25386 有描述一个当 lsm 读取速度过慢时，会导致大部分迁移命令超时的问题，因此并发度也可以根据 lsm 读取速率来调节
+
 3. recover cmd slot 默认 128，根据 extent 的稀疏情况以及 recover extent 的完成情况向上向下调节（auto mode）
 
    怎么判断 extent 的稀疏情况？lsm 上报的心跳中有 thin pid 的信息
 
    recover extent 的完成情况可以是 meta 侧统计的下发出去的命令在单位时间内的完成数量
 
-4. recover 并发度、recover cmd slot 支持通过命令行手动调整该值（static mode）
-
-   recover cmd slot 是在 recover manager 上的参数，可以立即生效。max_recover_cmds_per_chunk
-
-   recover 并发度跟限速一样，跟随心跳下发，所以不保证立即生效。
-
-   用一个 metadb 放下所有相关的参数
-
-   目前的写法好像都是先更新内存再更新 metaDB，需要调整顺序吗？
-   
-   ZBS-25386 有描述一个当 lsm 读取速度过慢时，会导致大部分迁移命令超时的问题，因此并发度也可以根据 lsm 读取速率来调节
-   
-   jiewei 的想法是如果满足上一轮的 recover cmd queue 是满的，且当前这轮是空的，那么在下一个 4s 就触发扫描，而不需要等 5 分钟，这样来保证能喂满 chunk。
-
-
+   jiewei 的想法是如果满足上一轮的 recover cmd queue 是满的，且当前这轮是空的，那么在下一个 4s 就触发扫描，而不需要等 5 分钟，这样来保证能喂满 chunk
 
 
 
