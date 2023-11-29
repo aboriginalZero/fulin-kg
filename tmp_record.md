@@ -1,34 +1,48 @@
+**Python 3.2** 引入了concurrent.futures。 3.4版本引入了asyncio到标准库， python3.5以后使用async/await语法。
 
-1. 引入 RecoverElem
 
-2. 对 recover 加个分批处理
 
-3. 调整 Recover manager 中锁的使用方式
+ESXi 6.7.0 build-14320388，Python 3.5.7
 
-4. 调整打印日志，在 zbs4
+ESXi 7.0.3 build-19482537，Python 3.8.8
 
-5. 调整 recover summary
+ESXi 8.0.1 build-21813344，Python Python 3.8.16
+
+
+
+在开发机上用 Python 3.5.6 和 Python 3.5.7 都可以正常使用 asyncio，但 esxi 上报错如下：
+
+```
+Traceback (most recent call last):
+  File "yiwu_test.py", line 65, in <module>
+    run(main)
+  File "yiwu_test.py", line 60, in run
+    loop.run_until_complete(main())
+  File "/build/mts/release/bora-14320388/bora/build/esx/release/vmvisor/sys-boot/lib64/python3.5/asyncio/base_events.py", line 454, in run_until_complete
+  File "/build/mts/release/bora-14320388/bora/build/esx/release/vmvisor/sys-boot/lib64/python3.5/asyncio/base_events.py", line 421, in run_forever
+  File "/build/mts/release/bora-14320388/bora/build/esx/release/vmvisor/sys-boot/lib64/python3.5/asyncio/base_events.py", line 1389, in _run_once
+  File "/build/mts/release/bora-14320388/bora/build/esx/release/vmvisor/sys-boot/lib64/python3.5/selectors.py", line 445, in select
+OSError: [Errno 22] Invalid argument
+```
+
+还需要对比一下，原本的线程池做法跟用了异步的做法，有什么区别
+
+
+
+
+1. 调整 recover summary
 
     复用 [ZBS-26142](http://gerrit.smartx.com/c/zbs/+/56770)
 
     采用事先统计的方式，http://gerrit.smartx.com/c/zbs/+/8495，在 zbs3
 
-6. 忽略 ever exist = false 的，在 zbs2
+2. 忽略 ever exist = false 的，在 zbs2
 
-7. 把 avail cmd slots 提前算好放 exclude_cids 
+3. 把 avail cmd slots 提前算好放 exclude_cids 
 
-8. 让 cli 可以看到 avail cmd slots
+4. 让 cli 可以看到 avail cmd slots
 
-9. 把 distributeRecoverCmds 中的生成部分函数抽出来
-
-
-
-会被其他线程访问他们的使用结果：
-
-1. 对 active_waiting_recover_xxx 的操作需要加锁，不论是跟 passive 的交换还是他自己 push back 新的元素
-2. 对 pid_cmds_ 的访问需要加锁
-3. 对 even_volumes 的访问
-4. 避免对 passive 的访问加锁，因为他并不会被其他线程访问
+5. 把 distributeRecoverCmds 中的生成部分函数抽出来
 
 
 
