@@ -57,7 +57,7 @@ PING_SELECT_TIMEOUT_S/PING_SELECT_COUNT 用 0.1 10 的效果
 
 
 
-11 的性能虽好，但是太敏感了？
+11 的性能虽好，但是太敏感了，在性能差的嵌套集群上，会认为大部分 ip unreachable，导致路由频繁切换，还是选用 0.1 和 10
 
 
 
