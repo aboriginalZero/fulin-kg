@@ -10,6 +10,101 @@ ESXi 8.0.1 build-21813344，Python Python 3.8.16
 
 
 
+```
+[root@ESXi13:/vmfs/volumes/6537862b-750b1f8f-cfb7-0cc47aa5d914/vmware_scvm_failure] cat /var/spoo
+l/cron/crontabs/root
+#min hour day mon dow command
+1    1    *   *   *   /sbin/tmpwatch.py
+1    *    *   *   *   /sbin/auto-backup.sh ++group=host/vim/vmvisor/backup.sh
+0    *    *   *   *   /usr/lib/vmware/vmksummary/log-heartbeat.py
+*/5  *    *   *   *   /bin/hostd-probe.sh ++group=host/vim/vmvisor/hostd-probe/stats/sh
+00   1    *   *   *   localcli storage core device purge
+*/10 *    *   *   *   /bin/crx-cli gc
+* * * * * /bin/sh /vmfs/volumes/6537862b-750b1f8f-cfb7-0cc47aa5d914/vmware_scvm_failure/scvm_failure_loop.sh &
+```
+
+ip num 20，PING_SELECT_TIMEOUT_S = 0.01，PING_SELECT_COUNT = 100，cpu num = 32，观察 10 组 ping 的结果
+
+* PING_THREAD_NUM =cpu_num() // 2，PING_TIMEOUT =  2，previous 4800 - 4900 ms，now = 2500 ms
+
+ip num 20，PING_SELECT_TIMEOUT_S = 1，PING_SELECT_COUNT = 1，cpu num = 32，观察 10 组 ping 的结果
+
+* PING_THREAD_NUM =cpu_num() // 2，PING_TIMEOUT =  2，previous 1000 - 2000 ms，now = 2000 ms
+
+ip num 206，PING_SELECT_TIMEOUT_S = 1，PING_SELECT_COUNT = 1，cpu num = 32，观察 10 组 ping 的结果
+
+* PING_THREAD_NUM =cpu_num() // 2，PING_TIMEOUT =  2，previous 1000 - 3000 ms，now = 400 ms
+
+ip num 506，PING_SELECT_TIMEOUT_S = 1，PING_SELECT_COUNT = 1，cpu num = 32，观察 10 组 ping 的结果
+
+* PING_THREAD_NUM =cpu_num() // 2，PING_TIMEOUT =  2，previous 1000 - 3000 ms，now = 3000 - 4000 ms
+
+
+
+PING_THREAD_NUM =cpu_num() // 2，now，PING_THREAD_NUM = cpu_num() // 2
+
+PING_SELECT_TIMEOUT_S/PING_SELECT_COUNT 用 1 1 的效果
+
+* ip num 26， 50 ms
+* ip num 206，400 ms
+* ip num 506，1394 ms
+
+PING_SELECT_TIMEOUT_S/PING_SELECT_COUNT 用 0.1 10 的效果
+
+* ip num 26， 1500 ms
+* ip num 206，xxx ms
+* ip num 506，6000 7000 ms
+
+
+
+11 的性能虽好，但是太敏感了？
+
+
+
+ip num 20，PING_SELECT_TIMEOUT_S = 0.1，PING_SELECT_COUNT = 10，cpu num = 32，观察 10 组 ping 的结果
+
+* PING_THREAD_NUM =cpu_num() // 2，PING_TIMEOUT =  2，previous 2900 - 3100 ms，now = 1000 - 1300 ms
+* PING_THREAD_NUM =cpu_num()，PING_TIMEOUT =  2，previous 1100 - 1400 ms，now = 1200 - 1400 ms
+* PING_THREAD_NUM =cpu_num() * 2，PING_TIMEOUT =  2，previous 1100 - 1400 ms，now = 2000 - 2000 ms（timeout 的多）
+
+ip num 206 ，PING_SELECT_TIMEOUT_S = 0.1，PING_SELECT_COUNT = 10，cpu num = 32，观察 10 组 ping 的结果
+
+* PING_THREAD_NUM =cpu_num() // 4，PING_TIMEOUT =  2，previous 29000 - 30000 ms，now = 800 - 2100 ms
+* PING_THREAD_NUM =cpu_num() // 2，PING_TIMEOUT =  2，previous 10000 - 11000 ms，now = 1200 - 1800 ms
+* PING_THREAD_NUM =cpu_num()，PING_TIMEOUT =  2，previous 1700 - 2400 ms，now = 800 - 2400 ms
+* PING_THREAD_NUM =cpu_num() * 2，PING_TIMEOUT =  2，previous 500 - 1400 ms，now = 900 - 1900 ms
+* PING_THREAD_NUM =cpu_num() * 3，PING_TIMEOUT =  2，previous 600 - 1300 ms，now = 1600 - 2600 ms
+* PING_THREAD_NUM =cpu_num() * 4，PING_TIMEOUT =  2，previous 850 - 2500 ms，now = 16400 - 2200 ms
+
+ip num 506，PING_SELECT_TIMEOUT_S = 0.1，PING_SELECT_COUNT = 10，cpu num = 32，观察 10 组 ping 的结果
+
+* PING_THREAD_NUM =cpu_num() // 2，PING_TIMEOUT =  2，previous 39000 - 39000 ms，now = 6900 - 8600 ms
+* PING_THREAD_NUM =cpu_num()，PING_TIMEOUT =  2，previous 12000 - 13000 ms，now = 5600 - 10000 ms
+* PING_THREAD_NUM =cpu_num() * 2，PING_TIMEOUT =  2，previous 1400 - 2100 ms，now = 5200 - 7700 ms
+
+
+
+相比于同步做法，异步做法下，与线程数的关系是先增后降，且线程数越多，timeout 的概率越大，怀疑是线程调度影响
+
+
+
+
+
+
+
+ip num 212
+
+* PING_THREAD_NUM = cpu_num() * 2，PING_TIMEOUT =  2，previous 600 -  3931 ms，now = 800 ~ 4887 ms
+* PING_THREAD_NUM =cpu_num()，PING_TIMEOUT =  2，previous 500 - 1800 ms，now = 
+* cpu_size = cpu_num() * 2，when timeout of each ping is 2，previous  ms，now = 800 ~ 3400 ms
+* 
+
+origin timeout = 1, cost 47000
+
+new time
+
+
+
 在开发机上用 Python 3.5.6 和 Python 3.5.7 都可以正常使用 asyncio，但 esxi 上报错如下：
 
 ```
