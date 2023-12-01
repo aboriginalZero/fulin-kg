@@ -1,4 +1,11 @@
+
 售后问题 [ZBS-19469](http://jira.smartx.com/browse/ZBS-19469)
+
+先验证第一个 patch 在 3 个版本上的有效性，有无的区别，给出具体的数值对比
+
+验证第 2 个 patch 在不同版本上的区别，给出用原来的方式和新方式的数值对比
+
+
 
 **Python 3.2** 引入了concurrent.futures。 3.4版本引入了asyncio到标准库， python3.5以后使用async/await语法。
 
