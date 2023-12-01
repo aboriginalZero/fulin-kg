@@ -1,3 +1,5 @@
+售后问题 [ZBS-19469](http://jira.smartx.com/browse/ZBS-19469)
+
 **Python 3.2** 引入了concurrent.futures。 3.4版本引入了asyncio到标准库， python3.5以后使用async/await语法。
 
 
@@ -11,8 +13,7 @@ ESXi 8.0.1 build-21813344，Python Python 3.8.16
 
 
 ```
-[root@ESXi13:/vmfs/volumes/6537862b-750b1f8f-cfb7-0cc47aa5d914/vmware_scvm_failure] cat /var/spoo
-l/cron/crontabs/root
+[root@ESXi13:/vmfs/volumes/6537862b-750b1f8f-cfb7-0cc47aa5d914/vmware_scvm_failure] cat /var/spool/cron/crontabs/root
 #min hour day mon dow command
 1    1    *   *   *   /sbin/tmpwatch.py
 1    *    *   *   *   /sbin/auto-backup.sh ++group=host/vim/vmvisor/backup.sh
@@ -21,6 +22,8 @@ l/cron/crontabs/root
 00   1    *   *   *   localcli storage core device purge
 */10 *    *   *   *   /bin/crx-cli gc
 * * * * * /bin/sh /vmfs/volumes/6537862b-750b1f8f-cfb7-0cc47aa5d914/vmware_scvm_failure/scvm_failure_loop.sh &
+
+改完记得 crontab reload
 ```
 
 ip num 20，PING_SELECT_TIMEOUT_S = 0.01，PING_SELECT_COUNT = 100，cpu num = 32，观察 10 组 ping 的结果
@@ -88,11 +91,7 @@ ip num 506，PING_SELECT_TIMEOUT_S = 0.1，PING_SELECT_COUNT = 10，cpu num = 32
 
 
 
-
-
-
-
-ip num 212
+ip num 212，嵌套集群上
 
 * PING_THREAD_NUM = cpu_num() * 2，PING_TIMEOUT =  2，previous 600 -  3931 ms，now = 800 ~ 4887 ms
 * PING_THREAD_NUM =cpu_num()，PING_TIMEOUT =  2，previous 500 - 1800 ms，now = 
