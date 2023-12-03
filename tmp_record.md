@@ -1,6 +1,3 @@
-
-售后问题 [ZBS-19469](http://jira.smartx.com/browse/ZBS-19469)
-
 先验证第一个 patch 在 3 个版本上的有效性，有无的区别，给出具体的数值对比
 
 验证第 2 个 patch 在不同版本上的区别，给出用原来的方式和新方式的数值对比
@@ -15,7 +12,7 @@ ESXi 6.7.0 build-14320388，Python 3.5.7
 
 ESXi 7.0.3 build-19482537，Python 3.8.8
 
-ESXi 8.0.1 build-21813344，Python Python 3.8.16
+ESXi 8.0.1 build-21813344，Python 3.8.16
 
 
 
@@ -571,6 +568,10 @@ CowPExtentTransaction，UpdateVolumeTransaction，ReserveVolumeSpaceTransaction
     可以对外做 2 个接口，一个是 pid 为粒度的，一个是 volume 为粒度的（MigrateForVolumeRemoving）
 
     需要支持 prior volume 吗？
+
+    可能需要把 std::list < RecoverCmd> 改成 hashmap
+
+    
 
 5. 低负载
 
