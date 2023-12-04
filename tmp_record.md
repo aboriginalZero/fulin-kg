@@ -1,3 +1,18 @@
+zbs4 stash@{0}: WIP on ZBS-26142: d91c3c281 ZBS-26504 meta: clarify the 3 states of recover/drain cmd
+保留了 reposition summary 的改动
+
+还需要考虑如果是 remove chunk，虽然 doscan 4s 一次，但如果集群中还有 recover，此时看是不显示到 pending_migrate 的，这个需要在 summary 中额外处理
+
+```
+if num_pending/ongoing_migrate 都为 0，且 context_->chunk_table->GetRemovingChunkId() != kInvalidChunkId)，那么需要把 chunk remove 的 allocated space 都算到 pending
+
+这么做成立的前提是 chunk remove 在 migrate 中的优先级是最高的，随意所以里面有数据，一定包含 chunk remove 的
+```
+
+
+
+
+
 先验证第一个 patch 在 3 个版本上的有效性，有无的区别，给出具体的数值对比
 
 验证第 2 个 patch 在不同版本上的区别，给出用原来的方式和新方式的数值对比
