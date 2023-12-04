@@ -12,7 +12,6 @@ if num_pending/ongoing_migrate 都为 0，且 context_->chunk_table->GetRemoving
 
 
 
-
 先验证第一个 patch 在 3 个版本上的有效性，有无的区别，给出具体的数值对比
 
 验证第 2 个 patch 在不同版本上的区别，给出用原来的方式和新方式的数值对比
@@ -63,7 +62,7 @@ ip num 506，PING_SELECT_TIMEOUT_S = 1，PING_SELECT_COUNT = 1，cpu num = 32，
 
 
 
-PING_THREAD_NUM =cpu_num() // 2，now，PING_THREAD_NUM = cpu_num() // 2
+PING_THREAD_NUM =cpu_num() // 2，now
 
 PING_SELECT_TIMEOUT_S/PING_SELECT_COUNT 用 1 1 的效果
 
