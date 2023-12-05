@@ -1,13 +1,8 @@
-zbs4 stash@{0}: WIP on ZBS-26142: d91c3c281 ZBS-26504 meta: clarify the 3 states of recover/drain cmd
-保留了 reposition summary 的改动
+chunk info 的 allocated_data_space = GetThickSpace() + GetThinSpace()，
 
-还需要考虑如果是 remove chunk，虽然 doscan 4s 一次，但如果集群中还有 recover，此时看是不显示到 pending_migrate 的，这个需要在 summary 中额外处理
+而 NumPids() 跟他的统计内容也不一样，理论上在 5.4.x 之后，应该用 thick_pids.Space + cap_new_thin_pids + thin_used_data_space() 替代原本的 pids.Space()，因为 thin pextent 的空间占用大小依赖于 chunk 的汇报
 
-```
-if num_pending/ongoing_migrate 都为 0，且 context_->chunk_table->GetRemovingChunkId() != kInvalidChunkId)，那么需要把 chunk remove 的 allocated space 都算到 pending
-
-这么做成立的前提是 chunk remove 在 migrate 中的优先级是最高的，随意所以里面有数据，一定包含 chunk remove 的
-```
+ 
 
 
 
