@@ -114,6 +114,8 @@ systemctl restart tuna-rest-server zbs-rest-server
 # 如果要批量测试，需要借助 postman 批量访问 restful api，记得填 zbs token 和 smartx token
 ```
 
+确认代码没问题，可以在commit message 里加入 `no-code-coverage-check` 绕过覆盖率检查。
+
 ### 测试集群调试
 
 可参考，https://docs.google.com/document/d/1ctc_g51UC_yBsHOkUM4iRzjlYrN8y6buDuxJ6oLg4lU/edit#heading=h.efb25l4u0lco
