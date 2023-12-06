@@ -2,7 +2,7 @@ chunk info 的 allocated_data_space = GetThickSpace() + GetThinSpace()，
 
 而 NumPids() 跟他的统计内容也不一样，理论上在 5.4.x 之后，应该用 thick_pids.Space + cap_new_thin_pids + thin_used_data_space() 替代原本的 pids.Space()，因为 thin pextent 的空间占用大小依赖于 chunk 的汇报
 
- 
+  thin used data space 对应的 pids 数量 = cap_thin_pids_with_origin + cap_thin_pids_without_origin - cap_new_thin_pids
 
 
 
