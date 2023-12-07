@@ -1,3 +1,7 @@
+对 availd cmd slots 的改进在 WIP on ZBS-26142: dac4a2768 ZBS-26142 meta: adjust reposition summary statistic in recover manager
+
+
+
 做一个显示所有 chunk 的更细粒度的空间显示，把各个 pids 和他们的 space 显示出来，包括有关 reposition cmd 空间大小，然后要看哪个 chunk 持有的 pid 可以到 zbs-chunk 
 
 zbs-meta chunk list_pids 和 zbs-meta chunk list_pid < cid>，让他支持给 cid 而不是 ip + port 了
