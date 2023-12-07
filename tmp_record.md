@@ -1,18 +1,44 @@
+做一个显示所有 chunk 的更细粒度的空间显示，把各个 pids 和他们的 space 显示出来，包括有关 reposition cmd 空间大小，然后要看哪个 chunk 持有的 pid 可以到 zbs-chunk 
+
+zbs-meta chunk list_pids 和 zbs-meta chunk list_pid < cid>，让他支持给 cid 而不是 ip + port 了
+
+
+
+支持手动 migrate 一个 volume / extent 的 rpc
+
+支持手动 recover 一个 volume / extent 的 rpc
+
+
+
 prioritized_rx_pids 是 perf_rx_pids 的子集，一定被包含在 perf_rx_pids
 
-由于不会有非 prior 的  thick extent，所以可以认为 prioritized_pids 就是 perf_thick_pids
+由于不会有非 prior 的 thick extent，所以可以认为 prioritized_pids 就是 perf_thick_pids
 
 perf_pids = prioritized_pids + perf_thin_pids_with_origin + perf_thin_pids_without_origin
 
 prioritized_pids，可以视为 perf 层的一部分特殊的 thick pids，
 
-为啥没有 tx/recover_src prioritized_rx_pids 
+为啥没有 prioritized_tx_pids 和 prioritized_recover_src_pids ？因为不需要，要有一个单独的 prioritized_rx_pids 是为了在算 allocated_prior_space 的时候能把为 reposition 预留的算进去，而 tx 不加是因为 allocated_data_space 就算多算了也没事，过一段时间完成 reposition 之后 perf_tx_pids 也就被 erase 了。
 
-不会有非 prior 的  thick extent，即只会有 perf 层只会有 perf thin 和 prior 两种类型的 extent
+这两个其实也被包含在 perf_tx_pids 和 perf_recover_src_pids，有单独把他们拎出来的必要吗？
+
+prioritized_rx_pids 不能直接去掉，因为算 allocated_prior_space 需要用到它。
+
+如果是对 priority 算 src
 
 
 
-cap_pids，除了 allocating / repositioning  的 cap 层 pids 都会被记入 cap_pids，
+算空间大小，不应该减去 cap_tx_pids，因为在这里的 pid 一定还在 cap_pids，并且当 reposition 成功，会有 RemovePextent 或者 ReplacePextent，到那时候会把 cap_pids 里面的相关 pid 去掉。
+
+
+
+不会有非 prior 的  thick extent，即 perf 层只会有 perf thin 和 prior 两种类型的 extent
+
+
+
+cap_pids，除了 allocating / repositioning  的 cap 层 pids 都会被记入 cap_pids，cap_pids 一定包含 cap_tx_pids 和 cap_recover_src_pids（但不是仅由他们两组成的），一定不包含 cap_rx_pids 和 cap_reserved_pids
+
+
 
 cap_thick_pids，在 cap 层的 thcik pids；
 
@@ -57,8 +83,6 @@ cap_reserved_pids，对应正在分配但还没分配成功的空间大小，先
 
 
 
-
-RETURN_ERROR_IF_NO_CHUNK 和 CHECK_HAS_CHUNK 是陈年 bug，下一个 patch fix
 
 
 
