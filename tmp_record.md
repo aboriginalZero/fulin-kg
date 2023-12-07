@@ -1,8 +1,64 @@
-chunk info 的 allocated_data_space = GetThickSpace() + GetThinSpace()，
+prioritized_rx_pids 是 perf_rx_pids 的子集，一定被包含在 perf_rx_pids
 
-而 NumPids() 跟他的统计内容也不一样，理论上在 5.4.x 之后，应该用 thick_pids.Space + cap_new_thin_pids + thin_used_data_space() 替代原本的 pids.Space()，因为 thin pextent 的空间占用大小依赖于 chunk 的汇报
+由于不会有非 prior 的  thick extent，所以可以认为 prioritized_pids 就是 perf_thick_pids
 
-  thin used data space 对应的 pids 数量 = cap_thin_pids_with_origin + cap_thin_pids_without_origin - cap_new_thin_pids
+perf_pids = prioritized_pids + perf_thin_pids_with_origin + perf_thin_pids_without_origin
+
+prioritized_pids，可以视为 perf 层的一部分特殊的 thick pids，
+
+为啥没有 tx/recover_src prioritized_rx_pids 
+
+不会有非 prior 的  thick extent，即只会有 perf 层只会有 perf thin 和 prior 两种类型的 extent
+
+
+
+cap_pids，除了 allocating / repositioning  的 cap 层 pids 都会被记入 cap_pids，
+
+cap_thick_pids，在 cap 层的 thcik pids；
+
+cap_thin_pids_with_origin，在 cap 层的经过 COW 而来的 thin pids；
+
+cap_thin_pids_without_origin，在 cap 层的没有 parent 的 thin pids；
+
+cap_new_thin_pids，在 cap 层的还没被 LSM 上报真正空间占用的 thin pids；
+
+
+
+有如下等价关系：
+
+* cap_pids = cap_thick_pids + cap_thin_pids_with_origin + cap_thin_pids_without_origin
+
+* thin_used_data_space 对应的 pids = cap_thin_pids_with_origin + cap_thin_pids_without_origin - cap_new_thin_pids
+
+* cap_thin_pids_with_origin + cap_thin_pids_without_origin = cap_new_thin_pids + thin_used_data_space 对应的 pids
+
+  > 这是因为 add thin pextent 的时候，要么放在 cap_thin_pids_with_origin，要么放在 cap_thin_pids_without_origin，必选其一。如果这个 thin 是刚创建的，还没有心跳上报真实空间，会被放在 cap_new_thin_pids 里面，如果空间上报了，thin_used_data_space 被更新，这个时间窗口内的 cap_new_thin_pids 被清空。具体看 ChunkTableEntry::UpdateThinUsedDataSpace()
+
+
+
+cap_rx_pids / cap_tx_pids / cap_recover_src_pids，这三个分别对应 reposition dst / replace / dst 的空间大小，当有正在下发但还未完成的 repositon cmds 时，他们的值不为 0。
+
+* add：下发 reposition cmd 时会调用 ReserveSpaceForRecover()，然后放入 pid_cmds_；
+* delete：在 DoScan 时会调用 CleanTimeoutAndFinishedCmd()，满足 cmd finished or timeout 的条件时就会删除，然后从 pid_cmds_ 中删除；
+
+这个空间大小也体现在 ongoing recover / migrate space，不过它的计算只计算了 src 的空间。
+
+
+
+cap_reserved_pids，对应正在分配但还没分配成功的空间大小，先预留，把这部分空间占住，由于分配副本空间在 transaction 中很快完成，所以可以认为大部分时间 cap_reserved_pids 都是空的。
+
+* add
+  1. transaction 里面 CreateVolumeTransaction::Prepare() 会先调用 ReserveSpaceForAllocation() ，预留空间；
+  2. 在 sync gen 时如果发现这是一个 parent 被迁移的 pextent，lease 上没有他的 location 等信息，会调用 MetaRpcServer::GetLeaseForRefreshLocation() 来从 parent pextent 中拷贝一份 location 信息出来，此时也会认为这个 pextent 没有 parent 了，那么他也要独立的占用空间，调用 ReserveSpaceForAllocation() 来预留空间，并马上通过 PhysicalExtentTable::SetPExtents() 把这部分预留空间删掉，即从 cap_reserved_pids 中删除，放入 cap_pids；
+* delete
+  1. add 里的两种情况会调用 FreeSpaceForAllocation()，对应 SpaceTransaction 的析构函数和 GetLeaseForRefreshLocation() 的 done 代码段的操作；
+  2. 调用  ChunkTable::AddPExtent() 也会将 pid 从 cap_reserved_pids 中删除，放入 cap_pids，对外的接口是 PhysicalExtentTable::SetPExtents()，而这除了上面那个特殊的 rpc 外，就是在 transaction 中的 Commit 阶段的 UpdateMetaContextWhenSuccess() 中会调用
+
+
+
+
+
+RETURN_ERROR_IF_NO_CHUNK 和 CHECK_HAS_CHUNK 是陈年 bug，下一个 patch fix
 
 
 
@@ -281,24 +337,7 @@ reposition io 与 app io 的并发处理
 
    比较纠结的是，目前 recover_manager 中 scan_extents_per_round_limit 这个参数只限制了 recover / migrate for localization / migrate for repair topo 一次扫描的 pextent 数量，而对其他类型的 migrate （如 migrate for even volume/ prior extent / rebalance）并没有做限制，这让他的语义并不完整。
 
-   根据 review 意见修改
-
-   http://gerrit.smartx.com/c/zbs/+/8495
-
-   http://gerrit.smartx.com/c/zbs/+/26377
-
-   http://gerrit.smartx.com/c/zbs/+/16123/3
-
-2. 区分 distribute_cmds_per_chunk_limit 和 generate_cmds_per_chunk_limit，目前把他两混用了，或者考虑下是否需要引入新的字段；在 recover / migrate 中的限制并不相同。
-
-   ```c++
-   // GenerateRecoverCmds() 中用法可能有问题
-   if (recover_cmd_nums >= generate_cmds_per_round_limit_) {
-               break;
-           }
-   ```
-
-4. 为啥没有 active_waiting_migrate_count_ 和 passive_waiting_migrate_count_，这是以 chunk 为粒度的，记录的 generated recover cmd，
+   需要在其他 migrate 中加上这个限制
 
 6. reposition params 支持分层
 
@@ -468,7 +507,7 @@ VIP 设计文档，https://docs.google.com/document/d/1M34zaIje2xkUSv9Q41waRH4GC
 
 
 
-重构 recover manager 的话，可以不用再考虑支持 Storage Pool 了吧？我看 CheckUpgradeThinProvision 里面都没有去遍历各个 StoragePool，需要保留。
+重构 recover manager 的话，可以不用再考虑支持 Storage Pool 了吧？我看 CheckUpgradeThinProvision 里面都没有去遍历各个 StoragePool。需要保留。
 
 rx_pids -> dst_pids，tx_pids -> replace_cids, recover_src_pids -> src_pids
 
@@ -625,7 +664,7 @@ CowPExtentTransaction，UpdateVolumeTransaction，ReserveVolumeSpaceTransaction
 
 
 1. zbs cli 中加上 reposition cli，并添加 rpc，跟手动触发 mgirate rpc 指令一起做
-    1. 能够观察 recover 真正 IO 的数据量，block 粒度的（比如如果有敏捷恢复，这个 pextent 就不会恢复 256 MB）
+    1. 能够观察 recover 真正 IO 的数据量，block 粒度的（比如如果有敏捷恢复，这个 pextent 就不会恢复 256 MB），这个信息如果只在 access 侧，如果靠心跳传给 meta 感觉没必要
     2. 能够查看 generate/pending_recover 的数量
     3. 能够查看 need_migrate 的数量
 2. 智能模式中，值变化的时候添加 log
@@ -655,16 +694,6 @@ LOG(INFO) << (all_in_same_zone ? "all_in_same_zone" : "not");
 LOG(INFO) << "all_zone_idx " << all_zone_idx;
 LOG(INFO) << "prefer_zone_idx " << prefer_zone_idx;
 ```
-
-
-
-实现命令行
-
-reposition 跟 recover migrate 分开、额外添加 rpc 用法
-
-1. 能够观察 recover 真正 IO 的数据量，block 粒度的（比如如果有敏捷恢复，这个 pextent 就不会恢复 256 MB）
-2. 能够查看 generate/pending_recover 的数量
-3. 能够查看 need_migrate 的数量
 
 
 
@@ -886,11 +915,9 @@ recover manager 中 recover 和 migrate 的不同之处：
 
 
 1. 后续可以改进容量均衡迁移中 replace chunk 和 dst chunk 1 1 配对，可以改成尽可能让多个 src_cid 参与进来，除非所有 under chunk 都不行，才退出循环。
-2. http://gerrit.smartx.com/c/zbs/+/54622 patch 7 要拆分成几个小 patch
 2. 现有代码在 EnqueueCmd 的时候会将 migrate src_cid 设置成 lease owner，但如果 src_cid 跟 dst_cid 跨 zone，或者是 failslow，（他可能没有 cmd quota 了，不过这个条件在生成时是硬性规定的，派发时倒不用）这么选还是好事吗？
-2. 目前 migrate 中的逻辑是每次获取一个 pid 的 entry 都要通过 GetPhysicalExtentTableEntry 调用一次锁，但在 p rior  extent 的迁移中，可以批量获取 diff_pids 中所有的 pentry，因此可以相应做优化。
+2. 目前 migrate 中的逻辑是每次获取一个 pid 的 entry 都要通过 GetPhysicalExtentTableEntry 调用一次锁，但在 prior  extent 的迁移中，可以批量获取 diff_pids 中所有的 pentry，因此可以相应做优化。
 2. 机架 A 有节点 1 2 3 4，机架 B 有节点 5 6 7 ，normal extent 容量均衡会去算一个 avg_load，B 上的节点负载都大于 avg_load，A 上的都小于 avg_load，5 容量不够了，只能往 1 2 3 4 迁，但是他们都在 A 上，由于 topo 降级所以都没法迁。改进使得 5 可以向 6/7 上迁。
-2. scan_extents_num 应该放在 ReGenerateMigrateForUnevenVolume 这个函数中去做统计，虽然实际上 all_pool 中就一个，且一次只会因为一种方式去 migrate(本地化/容量均衡)。
 2. GenerateRecoverCmds 里面的 src 也可以有选择策略的，目前的写法太乱了。
 
 
@@ -932,7 +959,7 @@ gtest系列之事件机制
 
 4. migrate 这段时间的跟 zhiwei 的聊天，smtxos 和 pin test 频道中的 case 整理
 
-   目前遇到的高负载下不迁移：要么 topo 降级了，要么 lease owner 没释放
+   目前遇到的高负载下不迁移：要么 topo 降级了，要么 lease owner 没释放，要么双活只能在单 zone 内迁移
 
 
 
