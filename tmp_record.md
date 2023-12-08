@@ -2,6 +2,14 @@
 
 
 
+AllocRecoverForAgile 中一定不会有 prior extent？
+
+在 HasSpaceForCow() 为什么用的是 total_data_capacity 而不是 valid_data_space
+
+因为有 GetLeaseForRefreshLocation 这个 rpc 的存在，不能严格保证 cap_pids 一定不包含 cap_reserved_pids，所以求的 allocated_data_space 可能是略大的，因为有可能某个 pid 既在 cap_pids 又在 cap_reserved_pids。
+
+
+
 做一个显示所有 chunk 的更细粒度的空间显示，把各个 pids 和他们的 space 显示出来，包括有关 reposition cmd 空间大小，然后要看哪个 chunk 持有的 pid 可以到 zbs-chunk 
 
 zbs-meta chunk list_pids 和 zbs-meta chunk list_pid < cid>，让他支持给 cid 而不是 ip + port 了
@@ -40,7 +48,7 @@ prioritized_rx_pids 不能直接去掉，因为算 allocated_prior_space 需要�
 
 
 
-cap_pids，除了 allocating / repositioning  的 cap 层 pids 都会被记入 cap_pids，cap_pids 一定包含 cap_tx_pids 和 cap_recover_src_pids（但不是仅由他们两组成的），一定不包含 cap_rx_pids 和 cap_reserved_pids
+cap_pids，除了 allocating / repositioning  的 cap 层 pids 都会被记入 cap_pids，cap_pids 一定包含 cap_tx_pids 和 cap_recover_src_pids（但不是仅由他们两组成的），一定不包含 cap_rx_pids ，与cap_reserved_pids 可能会有交集（取决于是否调用了 GetLeaseForRefreshLocation rpc）
 
 
 
