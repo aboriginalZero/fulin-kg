@@ -1,5 +1,190 @@
 > 待整理的 zbs 零碎知识
 
+chunk 视角的 PExtentStatus
+
+```cpp
+enum PExtentStatus {
+  PEXTENT_STATUS_INIT = 99,
+  PEXTENT_STATUS_INVALID = 0,
+  PEXTENT_STATUS_ALLOCATED = 1,
+  PEXTENT_STATUS_RECOVERING = 2,
+  PEXTENT_STATUS_OFFLINE = 3,
+  PEXTENT_STATUS_CORRUPT = 4,
+  PEXTENT_STATUS_IOERROR = 5,
+  PEXTENT_STATUS_UMOUNTING = 6
+};
+```
+
+meta 视角的 PExtentStatus
+
+```c++
+enum PExtentStatus {
+  PEXTENT_HEALTHY = 0,
+  
+  // 不是 staging/garbage 且写过真实数据且当前时刻活跃副本数为 0
+  PEXTENT_DEAD = 1,
+  
+  // 不是 staging/garbage 且写过真实数据且当前时刻副本数为 0
+  PEXTENT_BROKEN = 2,
+  
+  // 只看 garbage_ 字段是否为 true，不管其他的
+  PEXTENT_GARBAGE = 4,
+	
+  // 
+  PEXTENT_NEED_RECOVER = 3,
+  
+  PEXTENT_MAY_RECOVER = 5
+};
+```
+
+ChunkState，用以表示 Chunk 视角的是否能够正常运行
+
+```cpp
+enum ChunkState {
+  // 默认状态，当 Chunk 确定所属的 Storage Pool 后，就会进入 IN_USE 
+  // 而 Chunk 在新加入集群时一定从属于某个 Storage Pool，所以这个状态存在时间很短
+  CHUNK_STATE_UNKNOWN = 0;
+  
+  // 只有 Idle 状态的 Chunk 才允许加入新的 SP 或是从 ZBS 集群中退出，其不属于任何 SP
+  // Meta 仅仅定期探测 Chunk 状态，不会再向 Chunk 分配任何 Extent
+  CHUNK_STATE_IDLE = 1;
+  
+  // 只有这个阶段的 Chunk 可以被正常分配数据
+  CHUNK_STATE_IN_USE = 2;
+  
+  // 当操作 Chunk 从 Storage Pool 中退出时， Chunk 将从 Inuse 切换至 Removing 
+  // Meta 不会再向 Removing 状态的节点分配新的数据，其上的 extent 会被迁移到其他 Chunk
+  // 当 Removing 状态下的 Chunk 已经没有任何 Extent 时，将把 Chunk 置为 Idle 状态
+  CHUNK_STATE_REMOVING = 3;
+}
+```
+
+ChunkStatus，用以表示 meta 感知的每个 Chunk 的连接状态
+
+```cpp
+enum ChunkStatus {
+  // Chunk 加入集群/重新启动后的初始状态
+  // Meta Leader 刚刚启动，从未获取过任何的 Chunk 状态信息时展示的状态，
+  // 或者 Chunk 已经和 Meta 建立连接但是本地尚未完成初始化工作无法提供存储服务的状态
+  CHUNK_STATUS_INITIALIZING = 1,
+  
+  // Chunk 在本地完成所有功能初始化并正常之后，通过心跳上报，将由 Initializing 进入 Healthy 状态
+  // Chunk 正常与 Meta 建立连接，并处于可正常提供服务的状态
+  CHUNK_STATUS_CONNECTED_HEALTHY = 2,
+  
+  // Chunk 正常与 Meta 建立连接，但是本地 LSM 处于异常状态（通常原因是没有可用的 Journal 分区）
+  // 此时 Meta 不会向 Chunk 分配新的 Extent ，但也不会立即触发数据迁移动作；
+  CHUNK_STATUS_CONNECTED_ERROR = 3,
+  
+  // 这 2 个实际未使用
+  CHUNK_STATUS_CONNECTED_WARNING = 4, 	
+  CHUNK_STATUS_CONNECTING = 5,		
+  
+  // 当前的 Meta Leader 生命周期内曾经和 Chunk 建立过健康连接，但此时已经和 Chunk 失去连接
+  // Chunk 与 Meta 失去连接，其上的数据副本将因为长期未更新存活状态而触发 Meta 的数据恢复动作
+  CHUNK_STATUS_SESSION_EXPIRED = 6
+};
+```
+
+
+
+zbs app io trace
+
+1. --> ZbsClient::Write() --> ZbsClient::DoIO<>() --> ZbsClient::SplitIO() --> ZbsClient::SubmitIO() --> InternalIOClient::SubmitIO()
+2. --> 判断走网络还是本地，VExtent 粒度，路由到合适的 AccessIOHandler，此时有获取一次 lease，根据 lease owner uuid 跟本地 session uuid 判断是否相等
+3. --> AccessIOHandler::SubmitWriteVExtent() --> AccessIOHandler::WriteVExtent() 
+4. --> Meta::GetVExtentLease() -->Meta::CacheVExtentLease() --> Meta::CacheLease() ，此时也有一次获取 Lease，是根据 volume_id 和 vextent_no 拿到 pextent 的 location 等信息，对 location 上的每一个 cid 执行下面操作
+5. --> ECIOHandler / ReplicaIOHandler::Write() --> PextentIOHandler::Write() 
+6. --> 判断走网络还是本地，PExtent 粒度，本地的话直接在 PextentIOHandler 塞入队列，如果是走网络，是通过远程 Chunk 上的 LocalIOHandler 塞入队列
+7. --> LSMCmdQueue::Submit，队列中的元素会被 lsm 根据不同的 op code 执行不同的操作，比如 LSM_CMD_RECOVER_START 等；
+8. --> LSM::DoIO() --> LSM::RecoverWrite() --> LSM::DoRecoverWrite() --> ExtentInode::SetupRecoverWrite() ，此时会有 pblob 层面的操作。
+
+
+
+zbs reposition io trace
+
+1. --> RecoverManager::GenerateRecoverCmds() --> RecoverManager::AddRecoverCmdUnlock() --> AccessManager::EnqueueRecoverCmd()
+
+2. --> AccessManager::ComposeAccessResponse() --> 通过心跳下发给 access handler --> AccessHandler::HandleAccessResponse()
+
+3. --> RecoverHandler::NotifyRecover() --> RecoverHandler::TriggerMoreRecover() --> RecoverHandler::ScheduleRecover() --> RecoverHandler::DoScheduleRecover()
+
+4. 根据 resiliency_type，分别给到 ECRecoverHandler / ReplicaRecoverHandler
+
+5. --> ReplicaRecoverHandler::HandleRecoverNotification() --> ReplicaRecoverHandler::DoRecover() 
+
+6. --> ReplicaRecoverHandler::RecoverStart() 
+
+    1. --> PExtentIOHandler::SyncRecoverStart() --> PExtentIOHandler::RecoverStart()
+    2. --> ReplicaRecoverHandler::GetReplicaGeneration() ，向 dst_cid 获取 gen 并校验；
+
+7. --> 按 256 KiB 为粒度，做 1024 次 ReadFromSrc() + WriteToDst() 
+
+    1. --> ReplicaRecoverHandler::ReadFromSrc() --> PExtentIOHandler::RecoverRead() 
+
+    2. --> 判断走网络还是本地，PExtent 粒度，本地的话直接在 PextentIOHandler 塞入队列，如果是走网络，是通过远程 Chunk 上的 LocalIOHandler 塞入队列
+
+    3. 读是没法避免的，而写的话，如果读的时候 LSM 返回 ELSMNotAllocData 且支持敏捷恢复和 unmap 时，会通过 unmap 来完成这次 recover block write；如果走普通恢复并且 ELSMNotAllocData 或用 all_zero_buf 写 dst cap layer，那么直接完成本次 recover lock write，不会有真实的 IO 流量。
+
+        > lsm 会记录 perf 层有效数据 bitmap，所以如果用 all_zero_buf 写 dst perf layer 不能直接跳过
+
+    4. --> ReplicaRecoverHandler::WriteToDst() --> ReplicaRecoverHandler::DoRecoverWrite() --> PExtentIOHandler::SyncRecoverWrite() --> PExtentIOHandler::RecoverWrite()
+
+    5. --> 判断走网络还是本地，PExtent 粒度，本地的话直接在 PextentIOHandler 塞入队列，如果是走网络，是通过远程 Chunk 上的 LocalIOHandler 塞入队列
+
+8. -->ReplicaRecoverHandler::RecoverEnd() 
+
+9. --> ReplicaRecoverHandler::ReplacePExtentReplica()
+
+
+
+LSMCmdQueue 中的元素在哪被消费呢？
+
+1. EpollLSMIOContext 的 Flush() 把 LsmCmd SubmitIO 给 lsm；
+2. LSM::Init() ，将 cmd_event_poller_ 设为 LSM::HandleCmdAndEvents()，在这里会用 coroutine 执行 LSM::DoIO()；
+3. LSM::DoIO()，其中，根据不同的 op code 执行不同的操作，比如 LSM_CMD_RECOVER_START 等；
+4. LSM::RecoverWrite()，LSM::DoRecoverWrite()；
+5. ExtentInode::SetupRecoverWrite()，会有 pblob 层面的操作。
+
+
+
+reposition io 与 app io 的并发处理
+
+1. 若当前正在 recover block a，normal read block a 是会等待 recover 完成再写，因为 recover 通过 lease 中的 barrier 已经设置了屏障；
+2. 若当前正在 normal read / write block a，recover block a 不会等待 normal read / write 完成再读写，因为 generation 机制，如果 normal read / write 的 gen 是 1，recover 会是 gen + 1，这样来保证 normal read 的同时，recover 也可以进行。
+
+
+
+zbs 端口使用
+
+| 服务名            | 使用网络           | 使用端口         | 备注                       |
+| ----------------- | ------------------ | ---------------- | -------------------------- |
+| zookeeper         | 存储网络           | 2181、2888、3888 |                            |
+| prometheus        | 管理网络、存储网络 | 9090             | 用 http 而非 https 访问    |
+| zbs-deploy-server | 管理网络           | 10403            |                            |
+| zbs-rest-server   | 管理网络、存储网络 | 10402            |                            |
+| zbs-inspector     | 存储网络           | 10700、10701     | zbs-insight 也在同一进程   |
+| zbs-taskd         | 管理网络、存储网络 | 10600、10601     | task dispatcher and runner |
+|                   |                    |                  |                            |
+| zbs-metad         |                    | 10100            | meta rpc server            |
+| zbs-metad         |                    | 10101            | meta status server         |
+| zbs-metad         |                    | 10102            | meta sm server             |
+| zbs-metad         | meta leader        | 10103            | meta access manager        |
+| zbs-metad         |                    | 10104            | meta http server           |
+|                   |                    | 10105            | meta grpc server           |
+|                   |                    |                  |                            |
+| zbs-chunkd        |                    | 10200            | chunk rpc server           |
+| zbs-chunkd        |                    | 10201            | chunk data channel         |
+| zbs-chunkd        |                    | 10202            | chunk http server          |
+| zbs-chunkd        |                    | 10203            | chunk perf server          |
+| zbs-chunkd        |                    | 10206            | meta proxy rpc service     |
+| zbs-chunkd        |                    | 10207            | meta proxy status service  |
+| zbs-chunkd        |                    | 10208            | chunk grpc server          |
+
+
+
+
+
 疑惑
 
 1. FOREACH_SAFE 和 FOREACH 的区别？怎么体现 safe 了？迭代器失效问题。
