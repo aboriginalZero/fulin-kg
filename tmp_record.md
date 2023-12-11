@@ -1,122 +1,54 @@
-access 从 meta 拿到的 lease 中的 location 是 loc 而不是 alive loc，可参考 GenerateLayerLease()，在 sync gen  是对 loc 而不是 alive loc 上每个 cid 都 sync，实际上，让 access 做一下 sync 真正确定一下这个副本是否连通比 meta 给出的信息更靠谱，因为这个 chunk 有可能跟 meta 失联，但还跟其他 chunk 联通，此时的失联 chunk 还是可以被读写副本的。
+1. 为什么 AllocRecoverForAgile 中一定不会有 prior extent？
 
+2. 在 HasSpaceForCow() 为什么用的是 total_data_capacity 而不是 valid_data_space ？
 
+3. 为什么对节点进入超高负载的判断用的是 used_data_space 而不是 allocated_data_space？
 
-COW 之后，child alive loc 不一定等于 parent alive loc。实际上，COW 在 Transaction Prepare 的 CowPExtent 时只会只会复制 parent 的 loc，然后在 Commit -> PersistExtents -> UpdateMetaContextWhenSuccess -> SetPExtents 时会将 loc 上的每一个副本的 last_report_ms 设为当前时间，所以 child alive loc = child loc = parent loc，但是不一定等于 parent alive loc。
+    改进迁移策略，在节点上待回收数据较多时（已经使用的数据空间占比超过 95%），如果集群没有进入极高负载状态（整体空间分配比例达到 90%），不向该节点迁移数据以保证回收顺利进行。
 
+    lsm1 回收空间的速率非常慢，所以如果删除一个 extent，存在 chunk 的 provisioned space 会减少（分配数据空间比例在减小），但 used space 可能仍然很高的情况，如果这时集群上的其他节点向它迁移数据，会进一步降低回收速率。
 
+    在 Migrate 时进行检查，如果集群整体尚有可用空间时比如整体 provisioned 比例在 90% 以下，不向 Used Space 比例大于 95% 的节点迁移数据，即便 Provsioned 比较低。
 
-分配一个 thick pextent，会马上分配 pid 的 location（此时的第一副本会挑选为分配时集群空间比例最小的节点，其他副本位置再按照局部化原则选择），然后在 transaction 的 Commit 中会让 location 上每个 replica 的 last_report_ms = now_ms，所以此时也马上会有 alive_location = location。
 
-分配一个 thin pextent，直到初次写之前，他的 alive location 都是空的，所以 alive_location 也为空。
 
 
 
-AllocRecoverForAgile 中一定不会有 prior extent？
+1. zbs-meta chunk list_pids，显示所有 chunk 的更细粒度的空间显示，把各个 pids 和他们的 space 显示出来，包括有关 reposition cmd 空间大小；
 
-在 HasSpaceForCow() 为什么用的是 total_data_capacity 而不是 valid_data_space
+2. zbs-meta chunk list_pid < cid>，看指定 chunk 持有哪些不同种类的 pid，除了 ip + port 还要支持直接给定 cid；
 
-因为有 GetLeaseForRefreshLocation 这个 rpc 的存在，不能严格保证 cap_pids 一定不包含 cap_reserved_pids，所以求的 allocated_data_space 可能是略大的，因为有可能某个 pid 既在 cap_pids 又在 cap_reserved_pids。
+3. zbs-meta migrate < volume id> <replace_cid> <dst_cid>，尽量从 replace_cid 上移除，并尽量放到 dst_cid 上，不保证严格执行；
 
+    > 用于卸盘或其他临时移动卷到指定 dst，之后被 doscan 回去也没事
+    >
+    > 如果这个要迁移的卷很大，无法快速完成就被 doscan 回去，或者卡在超高负载的状态怎么处理？
 
+4. zbs-meta recover < volume_id> dst_cid，允许有 dst_cid 的偏好，但不保证严格执行，想让这个 volume 优先被 recover；
 
-做一个显示所有 chunk 的更细粒度的空间显示，把各个 pids 和他们的 space 显示出来，包括有关 reposition cmd 空间大小，然后要看哪个 chunk 持有的 pid 可以到 zbs-chunk 
+    > 当有多个 volume 需要 recover，耗时太久时，可以优先 recover 指定卷
 
-zbs-meta chunk list_pids 和 zbs-meta chunk list_pid < cid>，让他支持给 cid 而不是 ip + port 了
+5. 如果需要支持 extent 级别的话，把传入的 volume id 换成 pid
 
 
 
-支持手动 migrate 一个 volume / extent 的 rpc
+做一次冲突检查，合法且和当前恢复不冲突，prefer local 和 topo 相关的不管。
 
-支持手动 recover 一个 volume / extent 的 rpc
+ZBS-20993，允许 RPC 产生恢复/迁移命令，可以指定源和目的地，在运维场景或许会有用。
 
 
 
-prioritized_rx_pids 是 perf_rx_pids 的子集，一定被包含在 perf_rx_pids，除了在开启分层前的升级过程中产生  prior reposition 的话，prioritized_rx_pids 有部分 pid 是给到 cap_rx_pids 而不是 perf_rx_pids。
 
-由于不会有非 prior 的 thick extent，所以可以认为 prioritized_pids 就是 perf_thick_pids
 
-perf_pids = prioritized_pids + perf_thin_pids_with_origin + perf_thin_pids_without_origin
 
-prioritized_pids，可以视为 perf 层的一部分特殊的 thick pids，
 
-为啥没有 prioritized_tx_pids 和 prioritized_recover_src_pids ？因为不需要，要有一个单独的 prioritized_rx_pids 是为了在算 allocated_prior_space 的时候能把为 reposition 预留的算进去，而 tx 不加是因为 allocated_data_space 就算多算了也没事，过一段时间完成 reposition 之后 perf_tx_pids 也就被 erase 了。
 
-这两个其实也被包含在 perf_tx_pids 和 perf_recover_src_pids，有单独把他们拎出来的必要吗？
 
-prioritized_rx_pids 不能直接去掉，因为算 allocated_prior_space 需要用到它。
-
-如果是对 priority 算 src
-
-
-
-算空间大小，不应该减去 cap_tx_pids，因为在这里的 pid 一定还在 cap_pids，并且当 reposition 成功，会有 RemovePextent 或者 ReplacePextent，到那时候会把 cap_pids 里面的相关 pid 去掉。
-
-
-
-不会有非 prior 的  thick extent，即 perf 层只会有 perf thin 和 prior 两种类型的 extent
-
-
-
-cap_pids，除了 allocating / repositioning  的 cap 层 pids 都会被记入 cap_pids，cap_pids 一定包含 cap_tx_pids 和 cap_recover_src_pids（但不是仅由他们两组成的），一定不包含 cap_rx_pids ，与cap_reserved_pids 可能会有交集（取决于是否调用了 GetLeaseForRefreshLocation rpc，没调用的话是不会有交集的）
-
-
-
-cap_thick_pids，在 cap 层的 thcik pids；
-
-cap_thin_pids_with_origin，在 cap 层的经过 COW 而来的 thin pids；
-
-cap_thin_pids_without_origin，在 cap 层的没有 parent 的 thin pids；
-
-cap_new_thin_pids，在 cap 层的还没被 LSM 上报真正空间占用的 thin pids；
-
-
-
-有如下等价关系：
-
-* cap_pids = cap_thick_pids + cap_thin_pids_with_origin + cap_thin_pids_without_origin
-
-* thin_used_data_space 对应的 pids = cap_thin_pids_with_origin + cap_thin_pids_without_origin - cap_new_thin_pids
-
-* cap_thin_pids_with_origin + cap_thin_pids_without_origin = cap_new_thin_pids + thin_used_data_space 对应的 pids
-
-  > 这是因为 add thin pextent 的时候，要么放在 cap_thin_pids_with_origin，要么放在 cap_thin_pids_without_origin，必选其一。如果这个 thin 是刚创建的，还没有心跳上报真实空间，会被放在 cap_new_thin_pids 里面，如果空间上报了，thin_used_data_space 被更新，这个时间窗口内的 cap_new_thin_pids 被清空。具体看 ChunkTableEntry::UpdateThinUsedDataSpace()
-
-
-
-cap_rx_pids / cap_tx_pids / cap_recover_src_pids，这三个分别对应 reposition dst / replace / dst 的空间大小，当有正在下发但还未完成的 repositon cmds 时，他们的值不为 0。
-
-* add：下发 reposition cmd 时会调用 ReserveSpaceForRecover()，然后放入 pid_cmds_；
-* delete：在 DoScan 时会调用 CleanTimeoutAndFinishedCmd()，满足 cmd finished or timeout 的条件时就会删除，然后从 pid_cmds_ 中删除；
-
-这个空间大小也体现在 ongoing recover / migrate space，不过它的计算只计算了 src 的空间。
-
-
-
-cap_reserved_pids，对应正在分配但还没分配成功的空间大小，先预留，把这部分空间占住，由于分配副本空间在 transaction 中很快完成，所以可以认为大部分时间 cap_reserved_pids 都是空的。
-
-* add
-  1. transaction 里面 CreateVolumeTransaction::Prepare() 会先调用 ReserveSpaceForAllocation() ，预留空间；
-  2. 在 sync gen 时如果发现这是一个 parent 被迁移的 pextent，lease 上没有他的 location 等信息，会调用 MetaRpcServer::GetLeaseForRefreshLocation() 来从 parent pextent 中拷贝一份 location 信息出来，此时也会认为这个 pextent 没有 parent 了，那么他也要独立的占用空间，调用 ReserveSpaceForAllocation() 来预留空间，并马上通过 PhysicalExtentTable::SetPExtents() 把这部分预留空间删掉，即从 cap_reserved_pids 中删除，放入 cap_pids；
-* delete
-  1. add 里的两种情况会调用 FreeSpaceForAllocation()，对应 SpaceTransaction 的析构函数和 GetLeaseForRefreshLocation() 的 done 代码段的操作；
-  2. 调用  ChunkTable::AddPExtent() 也会将 pid 从 cap_reserved_pids 中删除，放入 cap_pids，对外的接口是 PhysicalExtentTable::SetPExtents()，而这除了上面那个特殊的 rpc 外，就是在 transaction 中的 Commit 阶段的 UpdateMetaContextWhenSuccess() 中会调用
-
-
-
-
-1. 忽略 ever exist = false 的，在 zbs2
-
-2. 把 avail cmd slots 提前算好放 exclude_cids 
-
-3. 让 cli 可以看到 avail cmd slots
-
-4. 把 distributeRecoverCmds 中的生成部分函数抽出来
-
-
-
+1. 把 avail cmd slots 提前算好放 exclude_cids 
+2. 让 cli 可以看到 avail cmd slots
+3. 把 distributeRecoverCmds 中的生成部分函数抽出来
 1. concurrency params 用起来
-2. 自动调节 recover / migrate 变速
+2. 自动调节 recover / migrate 变速，智能模式中，值变化的时候添加 log
 3. summary recover perf 
 6. io metrics 调整
     1. LocalIOHandler 中的 ctx->sw.Start() 应该放在所有会执行 LocalIODone 前？
@@ -133,8 +65,6 @@ cap_reserved_pids，对应正在分配但还没分配成功的空间大小，先
 
 recover 自动限速调整
 
-
-
 ```c++
 // 并发数提升条件：
 
@@ -150,8 +80,6 @@ migrate_speed_limit * kRepositionIOPercentThrottle
 
 
 
-
-
 recover > sink > migrate
 
 分层之后，io 分成 app io, recover io 和 sink io 共 3 种。其中，app io 优先级最高，sink io 保其它副本的性能，recover io 保副本安全，在不同场景下的优先级应该不一样
@@ -163,7 +91,7 @@ recover > sink > migrate
 
 [ZBS-26042](http://jira.smartx.com/browse/ZBS-26042) 还缺一个 even volume 的 ut 验证 [ZBS-25847](http://jira.smartx.com/browse/ZBS-25847)
 
-针对 ec 的 best topo distance 的计算，斯坦纳树问题，对应的 DP 做法 Dreyfus-Wagner 算法。yutian 说最新做法是从拓扑学的角度出发的
+针对 ec 的 best topo distance 的计算，斯坦纳树问题，对应的 DP 做法 Dreyfus-Wagner 算法。yutian 说最新做法是从拓扑学的角度出发的，现有代码已经是最优解而非近似计算了
 
 
 
@@ -185,9 +113,7 @@ recover > sink > migrate
 
     变量  to_submit_iocbs_ 看起来不是线程安全的，还是说他不需要保证线程安全，access_handler 和 local_io_handler 和 temporary_replica_io_handler 等都是在一个线程？
 
-7. 重构 recover manager 时，需要考虑 prior extent 不需要在低负载下支持局部化，master 分支上目前还是支持，但 5.5.x 已经不支持了
-
-8. 一个 extent 只要写过 1 次真实数据，EverExist 就是 true，如果从没有写过并且不是来自 COW ，那它就没有任何有效数据。在副本迁移或者恢复的时候可以有一些简化的特殊处理。zhaoguo 建议，ever_exist = false 的 recover cmd 应该提高限制命令数，或许 meta 侧的命令数限制应该只限制 ever exist = true 的，false 的直接放行。
+3. 重构 recover manager 时，需要考虑 prior extent 不需要在低负载下支持局部化，master 分支上目前还是支持，但 5.5.x 已经不支持了
 
 
 
@@ -205,8 +131,6 @@ RecoverManager recover_manager(&(GetMetaContext()));
 
 
 
-
-
 存储分层模式，可以选择混闪配置或者全闪配置，其中全闪配置至少需要 1 块低速 SSD 作为数据盘，混闪配置至少需要 1 块 HDD 作为数据盘。
 
 存储不分层模式，不设置缓存盘，除了含有系统分区的物理盘，剩余的所有物理盘都作为数据盘使用，只能使用全闪配置。
@@ -215,11 +139,7 @@ smtx os 5.1.1 中不论存储是否分层，都要求 2 块容量至少 130 GiB 
 
 
 
-在恢复或者迁移任务结束时，新加入副本的状态被设置为未知，需要等待下一次心跳周期 LSM 上报副本后才可以确认副本为健康。
-
-在心跳开始之前，如果执行 find need recover extent 命令，将会把这样的 extent 返回，这会导致升级过程中，如果有数据迁移发生，则会被判定会产生了恢复，导致升级过程退出。
-
-
+在恢复或者迁移任务结束时，新加入副本的状态被设置为未知，需要等待下一次心跳周期 LSM 上报副本后才可以确认副本为健康？allocation 的逻辑是马上会被设置为活跃副本，参考 Commit -> PersistExtents -> UpdateMetaContextWhenSuccess -> SetPExtents。
 
 
 
@@ -229,81 +149,12 @@ VIP 设计文档，https://docs.google.com/document/d/1M34zaIje2xkUSv9Q41waRH4GC
 
 
 
-重构 recover manager 的话，可以不用再考虑支持 Storage Pool 了吧？我看 CheckUpgradeThinProvision 里面都没有去遍历各个 StoragePool。需要保留。
-
 rx_pids -> dst_pids，tx_pids -> replace_cids, recover_src_pids -> src_pids
 
 那这里还有两个问题：
 
 1. 卸载 partition 盘的时候，chunk 和 meta 分别会做哪些校验，分别用的哪个字段；
 2. 卸载盘（或者拔盘）之后，可能会出现 allocated space > data capacity，进而导致数据迁移受到影响。meta 能否在集群数据恢复完成之后，保证 allocated space <= data capacity 呢？
-
-
-
-如果允许出现 allocated_data_space 大于 valid_data_space，感觉空间计算部分都会有负数的情况
-
-
-
-
-
-thick_pids insert 的位置是 ChunkTable::ReplacePExtent 和 ChunkTable::AddPExtent
-
-PhysicalExtentTable::SetPExtentUnlocked() 和 PhysicalExtentTable::AddReplicaUnlocked() 忽略
-
-PhysicalExtentTable::SetPExtents()
-
-SpaceTransaction::PersistPExtents() 和 ReserveVolumeSpaceTransaction::Commit() 和 UpdateVolumeTransaction::CommitInternal()
-
-感觉是没有触发迁移。
-
-CowPExtentTransaction::Commit()
-
-CowPExtentTransaction，UpdateVolumeTransaction，ReserveVolumeSpaceTransaction
-
-
-
-
-
-1. zbs-deploy-manage storage_pool_remove_node < storage ip> 
-   1. 这个命令会调用 zbs 侧的 RemoveChunkFromStoragePool rpc，只做剩余空间检查，检查通过后，chunk 状态改成 REMOVING，日志里出现 REMOVE CHUNK FROM STORAGEPOOL；
-   2. recover manager 有个 4s 定时器会为状态为 REMOVING 的 chunk 生成迁移命令并下发，而对 migrate dst 的选取，如果是在集群 normal low/medium load，会按本地化 + 局部化 + topo 安全策略选，如果是 normal high load，优先考虑 topo 安全，然后才是剩余容量；
-   3. 等待这个 chunk  pextent 全被 remove（命令行看 provisioned_data_space 为 0），chunk manager 有个 4s 的定时器会将状态为 REMOVING 且它上面的 pextent 全被 remove 的 chunk 改成 IDLE；
-2. zbs-deploy-manage meta_remove_node < storage ip>
-   1. 这个命令会调用 zbs 侧的 RemoveChunk rpc，此时要求 chunk 处于 IDLE；
-   2. 把 chunk 的各种持久化信息从 metaDB 中删除；
-   3. 清空 meta 内存里各种表（chunk_table, chunk_id_map,  topo_objs_map, ）中的记录；
-   4. 清空 meta 侧这个 chunk 相关 session，在 iscsi_table/nvmf_table 中把这个 chunk 标记为 inactive（避免新的数据接入），通过心跳异步告知其他 chunk 这个 chunk session 失效；
-   5. 日志里出现 REMOVE CHUNK；
-
-
-
-[ZBS-25686](http://jira.smartx.com/browse/ZBS-25686) 前，只在 recover 里用上了 maintenance cid， 代码是 RecoverManager::NeedRecover 中的 IsChunkInMaintenanceMode，[ZBS-25686](http://jira.smartx.com/browse/ZBS-25686) 后，在 migrate 中也用上了 maintenance cid，是借助 isolated 来实现的，isolated 包括 maintenance 和 failslow。
-
-维护模式的 chunk 上的副本存在以下 2 种情况：
-
-- 被修改的数据，一定需要恢复。离线节点上的数据已经不再是有效的最新数据，这种类型的数据恢复如果希望减少会是一个比较大的结构性改动，暂时不会考虑；
-
-  > 如果在维护期间 Extent 上**没有发生写请求**，则 Meta 在检测副本状态时，可以识别到当前节点正处于存储维护模式中，属于预期内的离线，不会因为副本失联而触发数据恢复，在 Chunk 退出存储维护模式后直接恢复到预期副本数，也不会触发相关数据恢复
-
-- 未被修改的数据，默认触发恢复的逻辑是超时（默认 10 分钟）没有上报数据健康就会认为数据需要恢复。在节点进入维护模式后，如果一个数据的损失的所有副本都是维护节点上的失联副本，则不会触发恢复；
-
-  - 如果数据的当前总副本数小于期望（发生 IO 剔除），会触发恢复；
-  - 如果数据的所有失联副本中有部分不在维护模式的节点上，会触发恢复；
-
-  > 如果在维护期间 Extent 上**发生写请求**，由于当前副本不是最新的，因此需要进行数据恢复，但 ZBS 将通过使用更小恢复单元的方式，将恢复粒度从 Extent 变为 Block，从而减少数据恢复量（敏捷恢复）。
-  >
-  > ZBS 发现此副本处于存储维护模式中，会进行如下操作：
-  >
-  > 1. 先将此副本从有效副本中剔除，将相关的写请求内容暂时记录在 Access 的内存中，并正常完成写操作，过程中不会触发数据恢复；
-  > 2. 当 Chunk 退出存储维护模式后，Meta 会再次检测到此副本信息，此时会触发数据恢复，将维护期间在内存中记录的写操作数据恢复到原始副本中。
-
-维护模式和目前的节点状态可叠加，处于维护模式的节点可能是健康的，也可能是失去连接的。
-
-维护模式会在集群中持久化，即维护模式过程中即便集群重启，也不会改变节点的维护模式状态。并且维护模式只能由用户动作触发变化，不会超时自动退出维护模式。
-
-集群中最多仅能有一个节点进入维护模式，进入维护模式后，所有失联的数据依然会展示在待恢复数据中，只是不会真的触发恢复。在节点状态恢复正常后，将自动的从待恢复数据中清理。
-
-敏捷恢复设计文档，https://docs.google.com/document/d/1JZ6trjE_D1ewfWbaSuewPoFzUksbfno8AyS1wj2Lkio/edit
 
 
 
@@ -385,14 +236,7 @@ CowPExtentTransaction，UpdateVolumeTransaction，ReserveVolumeSpaceTransaction
 
 
 
-1. zbs cli 中加上 reposition cli，并添加 rpc，跟手动触发 mgirate rpc 指令一起做
-    1. 能够观察 recover 真正 IO 的数据量，block 粒度的（比如如果有敏捷恢复，这个 pextent 就不会恢复 256 MB），这个信息如果只在 access 侧，如果靠心跳传给 meta 感觉没必要
-    2. 能够查看 generate/pending_recover 的数量
-    3. 能够查看 need_migrate 的数量
-2. 智能模式中，值变化的时候添加 log
-3. 改 Prefer Local / TopoAware / Localized 三个比较器名字，[ZBS-25802](http://jira.smartx.com/browse/ZBS-25802)
-
-
+改 Prefer Local / TopoAware / Localized 三个比较器名字，[ZBS-25802](
 
 如果都给了 topology 且两个副本的 zone distance, topo distance 都相同的情况下，LocalizedComparator 和 TopoAwareComparator 区别在于：
 
@@ -489,139 +333,6 @@ chunk recover 执行的慢可能原因：慢盘、缓存击穿、normal instead 
 
 缓存击穿后，大量的恢复任务争抢 IO，恢复任务容易超时被取消，导致实际恢复速率不足 10MB/s。副本恢复的并发度默认是固定值 32，应该作为一个自适应缓存命中率的值
 
-改进迁移策略，在节点上待回收数据较多时（已经使用的数据空间占比超过 95%），如果集群没有进入极高负载状态（整体空间分配比例达到 90%），不向该节点迁移数据以保证回收顺利进行。
-
-lsm1 回收空间的速率非常慢，所以如果删除一个 extent，存在 chunk 的 provisioned space 会减少（分配数据空间比例在减小），但 used space 可能仍然很高的情况，如果这时集群上的其他节点向它迁移数据，会进一步降低回收速率。
-
-在 Migrate 时进行检查，如果集群整体尚有可用空间时比如整体 provisioned 比例在 90% 以下，不向 Used Space 比例大于 95% 的节点迁移数据，即便 Provsioned 比较低。
-
-
-
-ZBS-20993
-
-允许 RPC 产生 recover cmd，考虑到如果 need recover 的 volume 很多，那么可以优先恢复某些卷的
-
-所以先知考虑允许 RPC 产生 migrate cmd，然后做 volume 级别的，允许有 replace 和 dst 的偏好，但不保证严格执行。
-
-
-
-那还得允许查询哪些还在执行中
-
-
-
-允许 RPC 产生恢复/迁移命令，可以指定源和目的地，在运维场景或许会有用。
-
-支持手动添加 recover/migrate 命令是用于卸盘或啥时候想挪一下副本到指定文件时临时用一下，之后被 doscan 回去也没事。
-
-输入 pid, src, dst, replace
-
-输出 pid, current loc, active loc, dst, owner, mode
-
-搜索 AddRecoverCmdUnlock
-
-1. AddMigrateCmd rpc 参考 RecoverManager::MakeMigrateCmd() 和 AddSpecialRecoverCmd() 的就行，再加些判断条件；
-
-   RecoverManager::AddMigrateCmd() zbs-reader
-
-2. AddRecoverCmd 参考 AddToWaitingRecover() 和 AddSpecialRecoverCmd() 写法。
-
-人工指定后，后续还是有可能会被系统后台程序再次迁移回去，如何应对？如果这个要迁移的卷很大，无法快速完成就被定时线程扫描到，或者卡在超高负载的状态。
-
-```shell
-zbs-meta migrate create pid <pid> src_chunk <cid> dst_chunk <cid> replaced_chunk <cid>
-```
-
-外部 rpc 触发的 recover/migrate 优先级应该要更高，插到队列第一条（应该不需要）
-
-recover/migrate 要分开讨论，migrate 要额外指定 replace chunk
-
-做一次冲突检查，合法且和当前恢复不冲突，prefer local 和 topo 相关的不管
-
-```c++
-
-Status RecoverManager::AddMigrateCmd(pid_t pid, cid_t src, cid_t dst, cid_t replace) {
-    // 手动 rpc 下发的 migrate cmd 会不会被 doscan 又平衡回来？
-    // 不确定是否需要加锁
-    // 是否需要先把其他 recover/migrate 撤掉呢？因为如果这个 migrate cmd
-    if (PExtentHasCmdUnLock(pid)) {
-        return Status(EDuplicate) << "pid: " << pid << " already has migrate cmd";
-    }
-
-    // 因此此时存在并未执行 doscan，access_manager_ 还没初始化的可能
-    if (UNLIKELY(!access_manager_)) access_manager_ = context_->access_manager;
-    PExtentTableEntry pentry = context_->pextent_table->GetPExtentTableEntry(pid, nullptr);
-    auto now_ms = GetMetaTimeMS();
-    if (pentry.IsDead(now_ms)) {
-        return Status(EBadRequest) << "pid: " << pid << " is dead, maybe can try recover from temporary replica.";
-    }
-    if (pentry.NeedRecover(now_ms)) {
-        return Status(EBadRequest) << "pid: " << pid << " is recovering.";
-    }
-    if (context_->pextent_table->IsTemporaryReplica(it->pid())) {
-        return Status(EBadRequest) << "pid: " << pid << " is temporary replica, does not trigger migration."
-    }
-    // 检查 cmd_slots，避免下发过量的 migrate cmd，因为可能同时运行多条命令行
-    std::unordered_map<cid_t, int> avail_cmd_slots;
-    context_->chunk_table->GetRecoverInfo(&avail_cmd_slots);
-    FOREACH_SAFE(avail_cmd_slots, it) {
-        if ((it->second) >= FLAGS_max_recover_cmds_per_chunk) {
-            avail_cmd_slots.erase(it);
-        } else {
-            it->second = FLAGS_max_recover_cmds_per_chunk - it->second;
-        }
-    }
-    if (avail_cmd_slots.find(src) == avail_cmd_slots.end() || avail_cmd_slots.find(dst) == avail_cmd_slots.end()) {
-        return Status(EBadRequest) << "src chunk " << src << " or dst chunk " << dst << " does not have enough cmd slots.";
-    }
-
-    PExtent extent;
-    context_->pextent_table->GetPExtent(pid, &extent);
-    if (!location_contains(extent.location(), src) || !location_contains(extent.location(), replace)) {
-        return Status(EBadRequest) << "given src/replace chunk does not have the replica of pid: " << pid;
-    }
-    if (location_contains(extent.location(), dst)) {
-        return Status(EBadRequest) << "given dst chunk already has the replica of pid: " << pid;
-    }
-    if (!context_->chunk_table->ReserveSpaceForRecover(pid, src, replace, dst, context_->enable_thick_extent)) {
-        return Status(EBadRequest) << "do not have enough space for this migration.";
-    }
-
-    RecoverCmdPtr cmd_ptr = std::make_shared<RecoverCmd>();
-    cmd_ptr->set_pid(pid);
-    cmd_ptr->set_epoch(pentry.Epoch());
-    cmd_ptr->set_src_chunk(src);
-    cmd_ptr->set_dst_chunk(dst);
-    cmd_ptr->set_replace_chunk(replace);
-    cmd_ptr->set_is_migrate(true);
-    cmd_ptr->set_active_location(pentry.GetAliveLocation(now_ms));
-    cmd_ptr->set_start_ms(0ULL);
-
-    SessionInfo owner;
-    if (!access_manager_->AllocOwnerForRecover(cmd_ptr->pid(), cmd_ptr->src_chunk(), cmd_ptr->dst_chunk(), extent.alive_location(), &owner)) {
-        return Status(EBadRequest) << "fail to alloc migrate owner for recover cmd: " << cmd_ptr->ShortDebugString();
-    }
-
-    access_manager_->EnqueueRecoverCmd(cmd_ptr, owner);
-    pid_cmds_[cmd.pid()] = cmd_ptr;
-
-    LOG(INFO) << "add recover cmd by rpc for pid: " << cmd_ptr->pid() << " src: " << cmd_ptr->src_chunk()
-              << " dst: " << cmd_ptr->dst_chunk() << " replace: " << cmd_ptr->replace_chunk()
-              << " owner: " << cmd_ptr->lease().owner().cid();
-
-    avail_cmd_slots[src_replica]--;
-    avail_cmd_slots[dst_replica]--;
-    if (avail_cmd_slots[src_replica] <= 0) {
-        avail_cmd_slots.erase(src_replica);
-    }
-    if (avail_cmd_slots[dst_replica] <= 0) {
-        avail_cmd_slots.erase(dst_replica);
-    }
-    return Status::OK();
-}
-```
-
-
-
 现有负载的计算是只算 partition 的已用比例。
 
 
@@ -681,15 +392,46 @@ gtest系列之事件机制
 
 4. migrate 这段时间的跟 zhiwei 的聊天，smtxos 和 pin test 频道中的 case 整理
 
-   目前遇到的高负载下不迁移：要么 topo 降级了，要么 lease owner 没释放，要么双活只能在单 zone 内迁移
+   目前遇到的高负载下不迁移：要么 topo 降级了，要么 lease owner 没释放，要么是双活只能在单 zone 内迁移
 
 
+
+
+
+待整理
+
+unmap 是针对精简配置的存储阵列做空间回收，提高存储空间使用效率，应用于删除虚拟机文件的场景。VMware 向存储阵列发送 UNMAP 的 SCSI 指令，存储释放相应空间。
+
+https://blog.51cto.com/xmwang/1678350
+
+TRIM 是一种由操作系统发出的命令，用于告知 SSD 哪些闪存单元包含已删除文件的数据，可以被标记为空闲状态
+
+SSD 从不像 HDD 那样直接将新数据覆盖写入旧数据。在所有存储单元都被擦干净之前，无法用新数据对存储单元进行写入，且擦除必须在块级别进行，而写入则在页级别（更小的粒度）进行，这意味着对 SSD 进行写入比擦除要快得多。
+
+- `discard` 是一个由操作系统在删除文件时自动发送给 SSD 的命令，它是实时执行的。
+- `fstrim` 是一个由用户手动调用的命令，用于释放整个文件系统中的未使用空间，也可以被自动调度为定期任务执行。
+
+
+
+C++ 中为减少内存/读多写少的情况，可以用 absl::flat_hash_map 代替 std::unordered_map，https://zhuanlan.zhihu.com/p/614105687
+
+C++ 中 map 嵌套使用，vector 添加一个 vector 中所有元素 https://zhuanlan.zhihu.com/p/121071760
+
+stl 容器迭代器失效问题，https://stackoverflow.com/questions/6438086/iterator-invalidation-rules-for-c-containers
+
+linux主分区、扩展分区、逻辑分区的区别、磁盘分区、挂载，https://blog.csdn.net/qq_24406903/article/details/118763610
+
+git submodule ，https://git-scm.com/book/zh/v2/Git-%E5%B7%A5%E5%85%B7-%E5%AD%90%E6%A8%A1%E5%9D%97，https://zhuanlan.zhihu.com/p/87053283
+
+
+
+### access point
 
 zbs 当前行为：
 
-zbs chunk 将每小时 io 大于 3600（iops > 1）的 zbs volume 视为 active volume。
-zbs chunk 每隔 1h 上报一次 active zbs volume 的信息给 zbs meta，不会上报 inactive volume。
-对于一个 zbs volume，zbs meta 收到 6 次 volume 信息上报后（即 6h 后），会更新其 prefer cid 字段，同时更新其所有 pextent 的 prefer local 字段。
+1. zbs chunk 将每小时 io 大于 3600（iops > 1）的 zbs volume 视为 active volume。
+2. zbs chunk 每隔 1h 上报一次 active zbs volume 的信息给 zbs meta，不会上报 inactive volume。
+3. 对于一个 zbs volume，zbs meta 收到 6 次 volume 信息上报后（即 6h 后），会更新其 prefer cid 字段，同时更新其所有 pextent 的 prefer local 字段。
 
 
 
@@ -722,34 +464,119 @@ iscsi access point 3 部分策略：iscsi 建立连接、异常重定向、动�
 
 https://docs.google.com/document/d/1t14uKF6YCaijgXAq-bS-WR_I1SaLhYxbOnKXhspBtlQ/edit#heading=h.iidguj2la1
 
+### sync gen
+
+access 从 meta 拿到的 lease 中的 location 是 loc 而不是 alive loc，可参考 GenerateLayerLease()，在 sync gen  是对 loc 而不是 alive loc 上每个 cid 都 sync，实际上，让 access 做一下 sync 真正确定一下这个副本是否连通比 meta 给出的信息更靠谱，因为这个 chunk 有可能跟 meta 失联，但还跟其他 chunk 联通，此时的失联 chunk 还是可以被读写副本的。
+
+### remove chunk
+
+1. zbs-deploy-manage storage_pool_remove_node < storage ip> 
+    1. 这个命令会调用 zbs 侧的 RemoveChunkFromStoragePool rpc，只做剩余空间检查，检查通过后，chunk 状态改成 REMOVING，日志里出现 REMOVE CHUNK FROM STORAGEPOOL；
+    2. recover manager 有个 4s 定时器会为状态为 REMOVING 的 chunk 生成迁移命令并下发，而对 migrate dst 的选取，如果是在集群 normal low/medium load，会按本地化 + 局部化 + topo 安全策略选，如果是 normal high load，优先考虑 topo 安全，然后才是剩余容量；
+    3. 等待这个 chunk  pextent 全被 remove（命令行看 provisioned_data_space 为 0），chunk manager 有个 4s 的定时器会将状态为 REMOVING 且它上面的 pextent 全被 remove 的 chunk 改成 IDLE；
+2. zbs-deploy-manage meta_remove_node < storage ip>
+    1. 这个命令会调用 zbs 侧的 RemoveChunk rpc，此时要求 chunk 处于 IDLE；
+    2. 把 chunk 的各种持久化信息从 metaDB 中删除；
+    3. 清空 meta 内存里各种表（chunk_table, chunk_id_map,  topo_objs_map, ）中的记录；
+    4. 清空 meta 侧这个 chunk 相关 session，在 iscsi_table/nvmf_table 中把这个 chunk 标记为 inactive（避免新的数据接入），通过心跳异步告知其他 chunk 这个 chunk session 失效；
+    5. 日志里出现 REMOVE CHUNK；
+
+### 维护模式
+
+[ZBS-25686](http://jira.smartx.com/browse/ZBS-25686) 前，只在 recover 里用上了 maintenance cid， 代码是 RecoverManager::NeedRecover 中的 IsChunkInMaintenanceMode，[ZBS-25686](http://jira.smartx.com/browse/ZBS-25686) 后，在 migrate 中也用上了 maintenance cid，是借助 isolated 来实现的，isolated 包括 maintenance 和 failslow。
+
+维护模式的 chunk 上的副本存在以下 2 种情况：
+
+- 被修改的数据，一定需要恢复。离线节点上的数据已经不再是有效的最新数据，这种类型的数据恢复如果希望减少会是一个比较大的结构性改动，暂时不会考虑；
+
+    > 如果在维护期间 Extent 上**没有发生写请求**，则 Meta 在检测副本状态时，可以识别到当前节点正处于存储维护模式中，属于预期内的离线，不会因为副本失联而触发数据恢复，在 Chunk 退出存储维护模式后直接恢复到预期副本数，也不会触发相关数据恢复
+
+- 未被修改的数据，默认触发恢复的逻辑是超时（默认 10 分钟）没有上报数据健康就会认为数据需要恢复。在节点进入维护模式后，如果一个数据的损失的所有副本都是维护节点上的失联副本，则不会触发恢复；
+
+    - 如果数据的当前总副本数小于期望（发生 IO 剔除），会触发恢复；
+    - 如果数据的所有失联副本中有部分不在维护模式的节点上，会触发恢复；
+
+    > 如果在维护期间 Extent 上**发生写请求**，由于当前副本不是最新的，因此需要进行数据恢复，但 ZBS 将通过使用更小恢复单元的方式，将恢复粒度从 Extent 变为 Block，从而减少数据恢复量（敏捷恢复）。
+    >
+    > ZBS 发现此副本处于存储维护模式中，会进行如下操作：
+    >
+    > 1. 先将此副本从有效副本中剔除，将相关的写请求内容暂时记录在 Access 的内存中，并正常完成写操作，过程中不会触发数据恢复；
+    > 2. 当 Chunk 退出存储维护模式后，Meta 会再次检测到此副本信息，此时会触发数据恢复，将维护期间在内存中记录的写操作数据恢复到原始副本中。
+
+维护模式和目前的节点状态可叠加，处于维护模式的节点可能是健康的，也可能是失去连接的。
+
+维护模式会在集群中持久化，即维护模式过程中即便集群重启，也不会改变节点的维护模式状态。并且维护模式只能由用户动作触发变化，不会超时自动退出维护模式。
+
+集群中最多仅能有一个节点进入维护模式，进入维护模式后，所有失联的数据依然会展示在待恢复数据中，只是不会真的触发恢复。在节点状态恢复正常后，将自动的从待恢复数据中清理。
+
+敏捷恢复设计文档，https://docs.google.com/document/d/1JZ6trjE_D1ewfWbaSuewPoFzUksbfno8AyS1wj2Lkio/edit
+
+### thin/thick 分配
+
+分配一个 thick pextent，会马上分配 pid 的 location（此时的第一副本会挑选为分配时集群空间比例最小的节点，其他副本位置再按照局部化原则选择），然后在 transaction 的 Commit 中会让 location 上每个 replica 的 last_report_ms = now_ms，所以此时也马上会有 alive_location = location。
+
+分配一个 thin pextent，直到初次写之前，他的 alive location 都是空的，所以 alive_location 也为空。
+
+### COW 内容
+
+COW 之后，child alive loc 不一定等于 parent alive loc。实际上，COW 在 Transaction Prepare 的 CowPExtent 时只会只会复制 parent 的 loc，然后在 Commit -> PersistExtents -> UpdateMetaContextWhenSuccess -> SetPExtents 时会将 loc 上的每一个副本的 last_report_ms 设为当前时间，所以 child alive loc = child loc = parent loc，但是不一定等于 parent alive loc。
+
+### 560 空间计算
+
+prioritized_pids 就是 perf_thick_pids，因为 perf 层只会有 perf thin 和 prior 两种类型的 extent，不会有非 prior 的 thick extent
+
+prioritized_rx_pids 是 perf_rx_pids 的子集，一定被包含在 perf_rx_pids，除了在开启分层前的升级过程中产生  prior reposition 的话，prioritized_rx_pids 有部分 pid 是给到 cap_rx_pids 而不是 perf_rx_pids
+
+有如下等价关系：
+
+* allocated_prior_space = prioritized_pids + prioritized_rx_pids
+* perf_pids = prioritized_pids + perf_thin_pids_with_origin + perf_thin_pids_without_origin
+
+为啥没有 prioritized_tx_pids 和 prioritized_recover_src_pids ？因为不需要，要有一个单独的 prioritized_rx_pids 是为了在算 allocated_prior_space 的时候能把为 reposition 预留的算进去，而 tx 不加是因为 allocated_data_space 就算多算了也没事，过一段时间完成 reposition 之后 perf_tx_pids 也就被 erase 了。
 
 
-待整理
+
+cap_pids，除了 allocating / repositioning  的 cap 层 pids 都会被记入 cap_pids，cap_pids 一定包含 cap_tx_pids 和 cap_recover_src_pids（但不是仅由他们两组成的），一定不包含 cap_rx_pids ，与cap_reserved_pids 可能会有交集（取决于是否调用了 GetLeaseForRefreshLocation rpc，没调用的话是不会有交集的），也因此，求的 allocated_data_space 可能是略大的，因为有可能某个 pid 既在 cap_pids 又在 cap_reserved_pids。
+
+cap_thick_pids，在 cap 层的 thcik pids；
+
+cap_thin_pids_with_origin，在 cap 层的经过 COW 而来的 thin pids；
+
+cap_thin_pids_without_origin，在 cap 层的没有 parent 的 thin pids；
+
+cap_new_thin_pids，在 cap 层的还没被 LSM 上报真正空间占用的 thin pids；
 
 
 
-unmap 是针对精简配置的存储阵列做空间回收，提高存储空间使用效率，应用于删除虚拟机文件的场景。VMware 向存储阵列发送 UNMAP 的 SCSI 指令，存储释放相应空间。
+有如下等价关系：
 
-https://blog.51cto.com/xmwang/1678350
+* cap_pids = cap_thick_pids + cap_thin_pids_with_origin + cap_thin_pids_without_origin
 
-TRIM 是一种由操作系统发出的命令，用于告知 SSD 哪些闪存单元包含已删除文件的数据，可以被标记为空闲状态
+* thin_used_data_space 对应的 pids = cap_thin_pids_with_origin + cap_thin_pids_without_origin - cap_new_thin_pids
 
-SSD 从不像 HDD 那样直接将新数据覆盖写入旧数据。在所有存储单元都被擦干净之前，无法用新数据对存储单元进行写入，且擦除必须在块级别进行，而写入则在页级别（更小的粒度）进行，这意味着对 SSD 进行写入比擦除要快得多。
+* cap_thin_pids_with_origin + cap_thin_pids_without_origin = cap_new_thin_pids + thin_used_data_space 对应的 pids
 
-- `discard` 是一个由操作系统在删除文件时自动发送给 SSD 的命令，它是实时执行的。
-- `fstrim` 是一个由用户手动调用的命令，用于释放整个文件系统中的未使用空间，也可以被自动调度为定期任务执行。
-
+    > 这是因为 add thin pextent 的时候，要么放在 cap_thin_pids_with_origin，要么放在 cap_thin_pids_without_origin，必选其一。如果这个 thin 是刚创建的，还没有心跳上报真实空间，会被放在 cap_new_thin_pids 里面，如果空间上报了，thin_used_data_space 被更新，这个时间窗口内的 cap_new_thin_pids 被清空。具体看 ChunkTableEntry::UpdateThinUsedDataSpace()
 
 
-C++ 中为减少内存/读多写少的情况，可以用 absl::flat_hash_map 代替 std::unordered_map，https://zhuanlan.zhihu.com/p/614105687
 
-C++ 中 map 嵌套使用，vector 添加一个 vector 中所有元素 https://zhuanlan.zhihu.com/p/121071760
+cap_rx_pids / cap_tx_pids / cap_recover_src_pids，这三个分别对应 reposition dst / replace / dst 的空间大小，当有正在下发但还未完成的 repositon cmds 时，他们的值不为 0。
 
-stl 容器迭代器失效问题，https://stackoverflow.com/questions/6438086/iterator-invalidation-rules-for-c-containers
+* add：下发 reposition cmd 时会调用 ReserveSpaceForRecover()，然后放入 pid_cmds_；
+* delete：在 DoScan 时会调用 CleanTimeoutAndFinishedCmd()，满足 cmd finished or timeout 的条件时就会删除，然后从 pid_cmds_ 中删除；
 
-linux主分区、扩展分区、逻辑分区的区别、磁盘分区、挂载，https://blog.csdn.net/qq_24406903/article/details/118763610
+这个空间大小也体现在 ongoing recover / migrate space，不过它的计算只计算了 src 的空间。算空间大小，不应该减去 cap_tx_pids，因为在这里的 pid 一定还在 cap_pids，并且当 reposition 成功，会有 RemovePextent 或者 ReplacePextent，到那时候会把 cap_pids 里面的相关 pid 去掉。
 
-git submodule ，https://git-scm.com/book/zh/v2/Git-%E5%B7%A5%E5%85%B7-%E5%AD%90%E6%A8%A1%E5%9D%97，https://zhuanlan.zhihu.com/p/87053283
+
+
+cap_reserved_pids，对应正在分配但还没分配成功的空间大小，先预留，把这部分空间占住，由于分配副本空间在 transaction 中很快完成，所以可以认为大部分时间 cap_reserved_pids 都是空的。
+
+* add
+    1. transaction 里面 CreateVolumeTransaction::Prepare() 会先调用 ReserveSpaceForAllocation() ，预留空间；
+    2. 在 sync gen 时如果发现这是一个 parent 被迁移的 pextent，lease 上没有他的 location 等信息，会调用 MetaRpcServer::GetLeaseForRefreshLocation() 来从 parent pextent 中拷贝一份 location 信息出来，此时也会认为这个 pextent 没有 parent 了，那么他也要独立的占用空间，调用 ReserveSpaceForAllocation() 来预留空间，并马上通过 PhysicalExtentTable::SetPExtents() 把这部分预留空间删掉，即从 cap_reserved_pids 中删除，放入 cap_pids；
+* delete
+    1. add 里的两种情况会调用 FreeSpaceForAllocation()，对应 SpaceTransaction 的析构函数和 GetLeaseForRefreshLocation() 的 done 代码段的操作；
+    2. 调用  ChunkTable::AddPExtent() 也会将 pid 从 cap_reserved_pids 中删除，放入 cap_pids，对外的接口是 PhysicalExtentTable::SetPExtents()，而这除了上面那个特殊的 rpc 外，就是在 transaction 中的 Commit 阶段的 UpdateMetaContextWhenSuccess() 中会调用
 
 
 
