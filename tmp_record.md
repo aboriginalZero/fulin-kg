@@ -1,3 +1,17 @@
+access 从 meta 拿到的 lease 中的 location 是 loc 而不是 alive loc，可参考 GenerateLayerLease()，在 sync gen  是对 loc 而不是 alive loc 上每个 cid 都 sync，实际上，让 access 做一下 sync 真正确定一下这个副本是否连通比 meta 给出的信息更靠谱，因为这个 chunk 有可能跟 meta 失联，但还跟其他 chunk 联通，此时的失联 chunk 还是可以被读写副本的。
+
+
+
+COW 之后，child alive loc 不一定等于 parent alive loc。实际上，COW 在 Transaction Prepare 的 CowPExtent 时只会只会复制 parent 的 loc，然后在 Commit -> PersistExtents -> UpdateMetaContextWhenSuccess -> SetPExtents 时会将 loc 上的每一个副本的 last_report_ms 设为当前时间，所以 child alive loc = child loc = parent loc，但是不一定等于 parent alive loc。
+
+
+
+分配一个 thick pextent，会马上分配 pid 的 location（此时的第一副本会挑选为分配时集群空间比例最小的节点，其他副本位置再按照局部化原则选择），然后在 transaction 的 Commit 中会让 location 上每个 replica 的 last_report_ms = now_ms，所以此时也马上会有 alive_location = location。
+
+分配一个 thin pextent，直到初次写之前，他的 alive location 都是空的，所以 alive_location 也为空。
+
+
+
 AllocRecoverForAgile 中一定不会有 prior extent？
 
 在 HasSpaceForCow() 为什么用的是 total_data_capacity 而不是 valid_data_space
@@ -18,7 +32,7 @@ zbs-meta chunk list_pids 和 zbs-meta chunk list_pid < cid>，让他支持给 ci
 
 
 
-prioritized_rx_pids 是 perf_rx_pids 的子集，一定被包含在 perf_rx_pids
+prioritized_rx_pids 是 perf_rx_pids 的子集，一定被包含在 perf_rx_pids，除了在开启分层前的升级过程中产生  prior reposition 的话，prioritized_rx_pids 有部分 pid 是给到 cap_rx_pids 而不是 perf_rx_pids。
 
 由于不会有非 prior 的 thick extent，所以可以认为 prioritized_pids 就是 perf_thick_pids
 
