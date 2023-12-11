@@ -12,11 +12,19 @@
 
 
 
-
-
 1. zbs-meta chunk list_pids，显示所有 chunk 的更细粒度的空间显示，把各个 pids 和他们的 space 显示出来，包括有关 reposition cmd 空间大小；
 
+    zbs-meta chunk list 基本上把信息显示出来了，或者后续需要添加的，也应该放在那里。
+
+    我应该针对 reposition 去设计一个 rpc 去显示详细的信息，放在 zbs-meta reposition 里
+
+    zbs-meta reposition list_pids < cid>，如果传入了 cid，那么显示详细的他有哪些 pid，否则只显示一个 pid num，这样也就把第二个功能做了。
+
+    只显示 src / replace / dst / prior_rx 的 pids 以及他们的 space，然后 cap / perf 都展示
+
 2. zbs-meta chunk list_pid < cid>，看指定 chunk 持有哪些不同种类的 pid，除了 ip + port 还要支持直接给定 cid；
+
+    对应 rpc ListPid，这个可以考虑补充下显示 thin/thick 个数，以及 reserve_pids 这样的
 
 3. zbs-meta migrate < volume id> <replace_cid> <dst_cid>，尽量从 replace_cid 上移除，并尽量放到 dst_cid 上，不保证严格执行；
 
