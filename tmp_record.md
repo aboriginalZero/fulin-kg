@@ -22,21 +22,23 @@
 
     只显示 src / replace / dst / prior_rx 的 pids 以及他们的 space，然后 cap / perf 都展示
 
+    zbs-client-py 侧等待统一添加
+
 2. zbs-meta chunk list_pid < cid>，看指定 chunk 持有哪些不同种类的 pid，除了 ip + port 还要支持直接给定 cid；
 
-    对应 rpc ListPid，这个可以考虑补充下显示 thin/thick 个数，以及 reserve_pids 这样的
+    对应 rpc ListPid，这个可以考虑补充下显示 thin/thick 个数，以及 reserve_pids 这样的，涉及到跟以往的兼容，这边先不修改
 
 3. zbs-meta migrate < volume id> <replace_cid> <dst_cid>，尽量从 replace_cid 上移除，并尽量放到 dst_cid 上，不保证严格执行；
 
-    > 用于卸盘或其他临时移动卷到指定 dst，之后被 doscan 回去也没事
-    >
-    > 如果这个要迁移的卷很大，无法快速完成就被 doscan 回去，或者卡在超高负载的状态怎么处理？
+    用于卸盘或其他临时移动卷到指定 dst，之后被 doscan 回去也没事，但如果这个要迁移的卷很大，无法快速完成就被 doscan 回去呢？
+    
+    配合关闭迁移扫描再执行这个指令，可以达到临时移动 volume 的效果，迁移想要迁移的部分，不过这样或许得在入口处把人工触发迁移和周期性系统自动触发迁移做一下简单的区分。
 
-4. zbs-meta recover < volume_id> dst_cid，允许有 dst_cid 的偏好，但不保证严格执行，想让这个 volume 优先被 recover；
+4. zbs-meta recover < volume_id> 想让这个 volume 优先被 recover；
 
-    > 当有多个 volume 需要 recover，耗时太久时，可以优先 recover 指定卷
+    当有多个 volume 需要 recover，耗时太久时，可以优先 recover 指定卷上的 pextent
 
-5. 如果需要支持 extent 级别的话，把传入的 volume id 换成 pid
+5. 如果需要支持 extent 级别的话，把传入的 volume id 换成 pid；
 
 
 
