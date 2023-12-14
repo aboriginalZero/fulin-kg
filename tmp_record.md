@@ -1,3 +1,45 @@
+把 migrate for repair topo 和 rebalance 替换之后再做 generate_cmd_per_chunk_limit 的统一修改
+
+做 migrate for repair topo 和 rebalance 是，需要考虑
+
+1. 待做 [ZBS-13401](http://jira.smartx.com/browse/ZBS-13401)，让中高负载的容量均衡策略都要保证 prefer local 本地的副本不会被迁移，且如果 prefer local 变了，那么也要让他所在的 chunk 有一个本地副本（有个上限是保留归保留，但如果超过 95%，超过的 部分不考虑 prefero local 一定有对应的副本）
+2. rebalance 时能 recover jiewei 发现的问题，机架 A 有节点 1 2 3 4，机架 B 有节点 5 6 7 ，normal extent 容量均衡会去算一个 avg_load，B 上的节点负载都大于 avg_load，A 上的都小于 avg_load，5 容量不够了，只能往 1 2 3 4 迁，但是他们都在 A 上，由于 topo 降级所以都没法迁。改进使得 5 可以向 6/7 上迁。
+3. 后续可以改进容量均衡迁移中 replace chunk 和 dst chunk 1 1 配对，可以改成尽可能让多个 src_cid 参与进来，除非所有 under chunk 都不行，才退出循环。（其实下一轮就会用上的）
+
+
+
+
+
+避免某些 pid / volume migrate 迟迟不完成造成集群整体的 migrate 阻塞
+
+1. migrate for chunk removing，没必要添加，因为只要有 chunk removing，就会一直执行这种 migrate，其他 mgirate 没有机会执行，直到他的数据迁移完了，他的 state / status 状态变更后，才会跳过这个 migrate；
+
+   > 这个情况，不对 replace cid 做限制，但对 src 和 dst 做限制
+
+2. migrate for even volume，需要添加，如果一个 even volume 占用了所有的 quota 且一直没法完成，其他 even volume 没有机会做 migrate 的情况，甚至下面的几种 migrate 也一直没有机会；
+
+   需要有一个 chunk 的上限，避免一个 chunk 一直无法完成，一直产生给他的 migrate cmd 把 quota 占满；
+
+   1. migrate for even volume repair topo，不需要有，但调用了 GetSrcCidForReplicaMigration() 默认就会有，看起来还是需要在 GetSrcCidForReplicaMigration() 里加个是否启用的 flag，因为后续 for localization 也会用到；
+   2. migrate for even volume rebalance，需要有 chunk 上限的限制；
+
+3. migrate for over load prior extent，需要添加，因为如果一个节点负载比较高的节点消耗了所有 quota，且一直难以完成，那么其他节点都没有机会做 migrate；
+
+4. migrate for localization，不需要添加，因为按 pid 为粒度扫描，当前几个无法完成不会影响到其他 pid migrate cmd 下发；
+
+5. migrate for repair topo，不需要添加，因为按 pid 为粒度扫描，当前几个无法完成不会影响到其他 pid migrate cmd 下发；
+
+6. migrate for rebalance，需要添加，因为如果一个负载比较高的节点消耗了所有 quota，且一直难以完成，那么其他节点都没有机会做 migrate；
+
+结论：给所有 migrate 都添加 generate_cmds_per_chunk_limit_ ，但他的值不支持自调节，只是 generate_cmds_per_round_limit_ / 2，引入 generate_cmds_per_chunk_limit_ 的目的是避免一个节点用完所有的 generate quota 而其他节点 / migrate 没有机会生成。
+
+* 以 pid 为粒度扫描的，用 next_xxx_scan_pid_map 来避免让某些 pid migrate 影响到整体，next_xxx_scan_pid_map 保留现状，他其实不需要 generate_cmds_per_chunk_limit_，但为了便于理解，还是加上吧；
+* 以 chunk + pid 为粒度扫描的，用 randint + generate_cmds_per_chunk_limit_ 来避免某些 pid 阻塞导致其他 chunk / pid 没机会 migrate；
+
+
+
+
+
 1. 为什么 AllocRecoverForAgile 中一定不会有 prior extent？
 
 2. 在 HasSpaceForCow() 为什么用的是 total_data_capacity 而不是 valid_data_space ？
@@ -45,10 +87,6 @@
 做一次冲突检查，合法且和当前恢复不冲突，prefer local 和 topo 相关的不管。
 
 ZBS-20993，允许 RPC 产生恢复/迁移命令，可以指定源和目的地，在运维场景或许会有用。
-
-
-
-
 
 
 
@@ -201,8 +239,6 @@ rx_pids -> dst_pids，tx_pids -> replace_cids, recover_src_pids -> src_pids
     需要支持 prior volume 吗？
 
     可能需要把 std::list < RecoverCmd> 改成 hashmap
-
-    
 
 5. 低负载
 
@@ -357,11 +393,9 @@ recover manager 中 recover 和 migrate 的不同之处：
 
 
 
-1. 后续可以改进容量均衡迁移中 replace chunk 和 dst chunk 1 1 配对，可以改成尽可能让多个 src_cid 参与进来，除非所有 under chunk 都不行，才退出循环。
-2. 现有代码在 EnqueueCmd 的时候会将 migrate src_cid 设置成 lease owner，但如果 src_cid 跟 dst_cid 跨 zone，或者是 failslow，（他可能没有 cmd quota 了，不过这个条件在生成时是硬性规定的，派发时倒不用）这么选还是好事吗？
+1. 现有代码在 EnqueueCmd 的时候会将 migrate src_cid 设置成 lease owner，但如果 src_cid 跟 dst_cid 跨 zone，或者是 failslow，（他可能没有 cmd quota 了，不过这个条件在生成时是硬性规定的，派发时倒不用）这么选还是好事吗？
 2. 目前 migrate 中的逻辑是每次获取一个 pid 的 entry 都要通过 GetPhysicalExtentTableEntry 调用一次锁，但在 prior  extent 的迁移中，可以批量获取 diff_pids 中所有的 pentry，因此可以相应做优化。
-2. 机架 A 有节点 1 2 3 4，机架 B 有节点 5 6 7 ，normal extent 容量均衡会去算一个 avg_load，B 上的节点负载都大于 avg_load，A 上的都小于 avg_load，5 容量不够了，只能往 1 2 3 4 迁，但是他们都在 A 上，由于 topo 降级所以都没法迁。改进使得 5 可以向 6/7 上迁。
-2. GenerateRecoverCmds 里面的 src 也可以有选择策略的，目前的写法太乱了。
+3. GenerateRecoverCmds 里面的 src 也可以有选择策略的，目前的写法太乱了。
 
 
 
