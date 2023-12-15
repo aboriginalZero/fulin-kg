@@ -559,7 +559,7 @@ access 从 meta 拿到的 lease 中的 location 是 loc 而不是 alive loc，�
 
 分配一个 thick pextent，会马上分配 pid 的 location（此时的第一副本会挑选为分配时集群空间比例最小的节点，其他副本位置再按照局部化原则选择），然后在 transaction 的 Commit 中会让 location 上每个 replica 的 last_report_ms = now_ms，所以此时也马上会有 alive_location = location。
 
-分配一个 thin pextent，直到初次写之前，他的 alive location 都是空的，所以 alive_location 也为空。
+分配一个 thin pextent，直到初次写之前，他的 location 都是空的，所以 alive_location 也为空。
 
 ### COW 内容
 
