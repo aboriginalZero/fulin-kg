@@ -1,9 +1,23 @@
+1. 单测还需要补上 perf，prior，cap，空间不均，
+
+    这些只用写一个单测，而不需要一组 case
+
+    要模拟有 lease owner 可以参考 RepairTopoWithOwner
+
+
+
 把 migrate for repair topo 和 rebalance 替换之后再做 generate_cmd_per_chunk_limit 的统一修改
 
 做 migrate for repair topo 和 rebalance 是，需要考虑
 
-1. 待做 [ZBS-13401](http://jira.smartx.com/browse/ZBS-13401)，让中高负载的容量均衡策略都要保证 prefer local 本地的副本不会被迁移，且如果 prefer local 变了，那么也要让他所在的 chunk 有一个本地副本（有个上限是保留归保留，但如果超过 95%，超过的 部分不考虑 prefero local 一定有对应的副本）
+1. 待做 [ZBS-13401](http://jira.smartx.com/browse/ZBS-13401)，让中高负载的容量均衡策略都要保证 prefer local 本地的副本不会被迁移，且如果 prefer local 变了，那么也要让他所在的 chunk 有一个本地副本（有个上限是保留归保留，但如果超过 95%，超过的 部分不考虑 prefer local 一定有对应的副本）
+
+    怎么判断是否会超过 95% 呢？
+
 2. rebalance 时能 recover jiewei 发现的问题，机架 A 有节点 1 2 3 4，机架 B 有节点 5 6 7 ，normal extent 容量均衡会去算一个 avg_load，B 上的节点负载都大于 avg_load，A 上的都小于 avg_load，5 容量不够了，只能往 1 2 3 4 迁，但是他们都在 A 上，由于 topo 降级所以都没法迁。改进使得 5 可以向 6/7 上迁。
+
+     even volume 中的做法应该能实现这个效果，参考即可。
+
 3. 后续可以改进容量均衡迁移中 replace chunk 和 dst chunk 1 1 配对，可以改成尽可能让多个 src_cid 参与进来，除非所有 under chunk 都不行，才退出循环。（其实下一轮就会用上的）
 
 
