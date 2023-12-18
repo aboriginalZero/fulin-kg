@@ -140,6 +140,20 @@
 
     256 GiB，前一些是 lease owner，走的是 Write
 
+    但不论是哪种情况，ever exist = false，
+
+    14b03eb7-4e79-4043-8cbf-c2a8f1672c6d
+
+    69a5e412-95b9-414a-995a-163323dab337
+
+    5e27fa23-39e2-4db7-9c79-5406f104d925
+
+    23869133-291b-45c8-832e-d633f364eaab
+
+    7194d43c-d46d-401e-bf57-6f6f4976bdd5
+
+    6d8d4150-cfa3-4237-9f7f-42ab80e7ef08
+
 1. 主动设置卷的 prefer local 后，卷的属性上的 prefer local 为啥没更新？
 
 1. 单测还需要补上 perf，prior，cap，空间不均，
