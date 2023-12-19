@@ -1,3 +1,7 @@
+access recover read 是 extent 粒度，write 是 block 粒度？
+
+
+
 1. 卷 08e2d668-098d-4e30-b411-c55d1866353a，dd if=/dev/zero of=c.txt bs=1G seek=100 count=0
 
     刚创建时 alive location = location，过一会儿就变成 0（确认一下是不是 10 分钟，13:51:35）， ever exist 全程等于 false，
@@ -24,9 +28,7 @@
 
     只是由读引入的 sync generation，gen 还是 0，所以 ever exist = false
 
-    替换 133.243 cid 2 的 chunk 才能观察到一个完整的 IO 链路，vcenter 172.20.130.87，再给 test-vm03 加一个磁盘观察一下 IO 的整个过程。
-    
-    meta 会下发 （n = disk_size / 10 GiB）条 SETATTR
+    meta 会下发大概 （n = disk_size / 10 GiB）条 SETATTR，逐步扩大 size，并非一次直接申请那么大的。
     
     ```
     nfs_server.cc:1107] [SETATTR]: [REQUEST]: id: "7e7dcddf-bc3b-4492" sattr3 { size: 10737418240 atime_how: DONT_CHANGE atime { seconds: 0 nseconds: 0 } mtime_how: DONT_CHANGE mtime { seconds: 0 nseconds: 0 } }, [RESPONSE]: ST:OK, name: "zyx1-test-vm03_4-flat.vmdk" pool_id: "057ac9c5-9c26-41ec-a5ad-643034ea7c3f" id: "7e7dcddf-bc3b-4492" parent_id: "60ca9357-9c5f-4818" attr { type: FILE mode: 384 uid: 0 gid: 0 size: 10737418240 ctime { seconds: 1702910928 nseconds: 671267092 } mtime { seconds: 1702910928 nseconds: 671267092 } atime { seconds: 1702910928 nseconds: 608061606 } } volume_id: "7e7dcddf-bc3b-4492-90b6-60686fd569b1" xid: 1668525677, [TIME]: 39678 us.
@@ -142,17 +144,17 @@
 
     但不论是哪种情况，ever exist = false，
 
-    14b03eb7-4e79-4043-8cbf-c2a8f1672c6d
+    14b03eb7-4e79-4043-8cbf-c2a8f1672c6d，90 GiB，都有 alive replica
 
-    69a5e412-95b9-414a-995a-163323dab337
+    69a5e412-95b9-414a-995a-163323dab337，128 GiB，只有 5 个有，
 
-    5e27fa23-39e2-4db7-9c79-5406f104d925
+    5e27fa23-39e2-4db7-9c79-5406f104d925，16 GiB，都有 alive replica
 
-    23869133-291b-45c8-832e-d633f364eaab
+    23869133-291b-45c8-832e-d633f364eaab，32 GiB，都有 alive replica
 
-    7194d43c-d46d-401e-bf57-6f6f4976bdd5
+    7194d43c-d46d-401e-bf57-6f6f4976bdd5，64 GiB，都有 alive replica
 
-    6d8d4150-cfa3-4237-9f7f-42ab80e7ef08
+    6d8d4150-cfa3-4237-9f7f-42ab80e7ef08，256 GiB，都有 alive replica
 
 1. 主动设置卷的 prefer local 后，卷的属性上的 prefer local 为啥没更新？
 
