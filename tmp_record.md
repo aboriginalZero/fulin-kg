@@ -166,24 +166,6 @@ access recover read 是 extent 粒度，write 是 block 粒度？
 
 
 
-把 migrate for repair topo 和 rebalance 替换之后再做 generate_cmd_per_chunk_limit 的统一修改
-
-做 migrate for repair topo 和 rebalance 是，需要考虑
-
-1. 待做 [ZBS-13401](http://jira.smartx.com/browse/ZBS-13401)，让中高负载的容量均衡策略都要保证 prefer local 本地的副本不会被迁移，且如果 prefer local 变了，那么也要让他所在的 chunk 有一个本地副本（有个上限是保留归保留，但如果超过 95%，超过的 部分不考虑 prefer local 一定有对应的副本）
-
-    怎么判断是否会超过 95% 呢？
-
-2. rebalance 时能 recover jiewei 发现的问题，机架 A 有节点 1 2 3 4，机架 B 有节点 5 6 7 ，normal extent 容量均衡会去算一个 avg_load，B 上的节点负载都大于 avg_load，A 上的都小于 avg_load，5 容量不够了，只能往 1 2 3 4 迁，但是他们都在 A 上，由于 topo 降级所以都没法迁。改进使得 5 可以向 6/7 上迁。
-
-     even volume 中的做法应该能实现这个效果，参考即可。
-
-3. 后续可以改进容量均衡迁移中 replace chunk 和 dst chunk 1 1 配对，可以改成尽可能让多个 src_cid 参与进来，除非所有 under chunk 都不行，才退出循环。（其实下一轮就会用上的）
-
-
-
-
-
 避免某些 pid / volume migrate 迟迟不完成造成集群整体的 migrate 阻塞
 
 1. migrate for chunk removing，没必要添加，因为只要有 chunk removing，就会一直执行这种 migrate，其他 mgirate 没有机会执行，直到他的数据迁移完了，他的 state / status 状态变更后，才会跳过这个 migrate；
@@ -212,8 +194,6 @@ access recover read 是 extent 粒度，write 是 block 粒度？
 
 
 
-
-
 1. 为什么 AllocRecoverForAgile 中一定不会有 prior extent？
 
 2. 在 HasSpaceForCow() 为什么用的是 total_data_capacity 而不是 valid_data_space ？
@@ -227,6 +207,30 @@ access recover read 是 extent 粒度，write 是 block 粒度？
     在 Migrate 时进行检查，如果集群整体尚有可用空间时比如整体 provisioned 比例在 90% 以下，不向 Used Space 比例大于 95% 的节点迁移数据，即便 Provsioned 比较低。
 
 
+
+做 migrate for repair topo 和 rebalance 是，需要考虑
+
+xx 1. 不开分层的 replica ，2. 开分层后的 cap replica，3. 开分层后的 perf replica，4. 开分层后的 cap ec，他们的单测不适合合起来，因为如果之后 cap / perf 策略不同的话，还是得拆出来。
+
+
+
+1. 待做 [ZBS-13401](http://jira.smartx.com/browse/ZBS-13401)，让中高负载的容量均衡策略都要保证 prefer local 本地的副本不会被迁移，且如果 prefer local 变了，那么也要让他所在的 chunk 有一个本地副本（有个上限是保留归保留，但如果超过 95%，超过的 部分不考虑 prefer local 一定有对应的副本）
+
+   怎么判断是否会超过 95% 呢？
+
+2. rebalance 时能 recover jiewei 发现的问题，机架 A 有节点 1 2 3 4，机架 B 有节点 5 6 7 ，normal extent 容量均衡会去算一个 avg_load，B 上的节点负载都大于 avg_load，A 上的都小于 avg_load，5 容量不够了，只能往 1 2 3 4 迁，但是他们都在 A 上，由于 topo 降级所以都没法迁。改进使得 5 可以向 6/7 上迁。
+
+   even volume 中的做法应该能实现这个效果，参考即可。
+
+3. 后续可以改进容量均衡迁移中 replace chunk 和 dst chunk 1 1 配对，可以改成尽可能让多个 src_cid 参与进来，除非所有 under chunk 都不行，才退出循环。（其实下一轮就会用上的）
+
+
+
+1. 把 migrate for repair topo 和 rebalance 替换之后再做 generate_cmd_per_chunk_limit 的统一修改
+
+2. ever exist = false 且 origin_pid = 0 的 pextent 在下发 reposition cmd 时才可以不用受 avail cmd slots 限制
+
+3. ec migrate 目前的做法是 src_cid 一定等于 replace_cid，所以需要避免 ec migrate 的 replace cid 选 not healthy status/state 和 isolated 的 cid，等 ec access 支持用恢复的方式来做迁移，这个条件或许才能放开；
 
 1. zbs-meta chunk list_pids，显示所有 chunk 的更细粒度的空间显示，把各个 pids 和他们的 space 显示出来，包括有关 reposition cmd 空间大小；
 
@@ -254,8 +258,6 @@ access recover read 是 extent 粒度，write 是 block 粒度？
 
     当有多个 volume 需要 recover，耗时太久时，可以优先 recover 指定卷上的 pextent
 
-5. 如果需要支持 extent 级别的话，把传入的 volume id 换成 pid；
-
 
 
 做一次冲突检查，合法且和当前恢复不冲突，prefer local 和 topo 相关的不管。
@@ -266,7 +268,7 @@ ZBS-20993，允许 RPC 产生恢复/迁移命令，可以指定源和目的地�
 
 
 
-1. 把 avail cmd slots 提前算好放 exclude_cids 
+1. 把 avail cmd slots 提前算好放 exclude_cids
 2. 让 cli 可以看到 avail cmd slots
 3. 把 distributeRecoverCmds 中的生成部分函数抽出来
 1. concurrency params 用起来
