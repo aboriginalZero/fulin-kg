@@ -26,7 +26,7 @@ access recover read 是 extent 粒度，write 是 block 粒度？
 
 1. 为什么 ever exist 不是 true？
 
-    只是由读引入的 sync generation，gen 还是 0，所以 ever exist = false
+    只是由首次读引入的 sync generation，虽然会让 loc 上的各个 chunk 去真实分配 extent，但 gen 还是 0，所以 ever exist = false
 
     meta 会下发大概 （n = disk_size / 10 GiB）条 SETATTR，逐步扩大 size，并非一次直接申请那么大的。
     
@@ -47,10 +47,6 @@ access recover read 是 extent 粒度，write 是 block 粒度？
     /var/log/zbs/zbs-chunkd.INFO:24626:I1218 22:48:50.720468 18732 generation_syncor.cc:237] [SYNC GENERATION SUCCESS]  pid: 35609 loc: [3 1 6 ] gen: 0 io_hard: 0
     /var/log/zbs/zbs-chunkd.INFO:24627:I1218 22:48:50.721127 18732 access_io_handler.cc:459] yiwu AccessIOHandler::ReadVExtentInternal pid 35609
     ```
-    
-    
-    
-    
     
 1. 为什么那 5 个 pid 10 分钟过后 alive loc 还在？
 
