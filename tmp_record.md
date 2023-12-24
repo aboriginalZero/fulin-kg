@@ -1,216 +1,18 @@
-access recover read 是 extent 粒度，write 是 block 粒度？
-
-
-
-1. 卷 08e2d668-098d-4e30-b411-c55d1866353a，dd if=/dev/zero of=c.txt bs=1G seek=100 count=0
-
-    刚创建时 alive location = location，过一会儿就变成 0（确认一下是不是 10 分钟，13:51:35）， ever exist 全程等于 false，
-
-1. 从 esxi 上为虚拟机添加一个磁盘，对应的卷是 90abb21d-4a68-4cdc-be67-671517810896（14:41创建的），一开始都有 alive replica，其中头 2 个和最后 3 个 pextent 有 lease owner（创建 32 GB 就没有这个现象）
-
-    没到 10 min，没有 lease owner 的 pextent 的 alive loc 都清空了，只有这 5 个 pextent lease owner 和 alive loc 还在，并且整体的 ever exist 都等于 false
-
-    32 GiB 95a36f74-e904-468c-9ee2-e59ff9240e9b
-    
-    96 GiB 5f24a298-7d3a-4970-987d-0b2702d8aa73，Creation Time   2023-12-18 16:28:21.182458105
-    
-    pid 33642 在 chunk 上都有对应日志了，gen 为 0，所以 ever exist 还是 false？
-    
-    ```
-    /var/log/zbs/zbs-chunkd.INFO:187212:I1218 16:28:21.604626 12869 lsm.cc:5134] [ALLOC EXTENT] status: EXTENT_STATUS_ALLOCATED pid: 33642 epoch: 35468 generation: 0 bucket_id: 874 einode_id: 4213113 thick_provision: true prior: false
-    ```
-    
-    pid 33639 在 chunk 就没有写入的日志
-    
-1. 通过  zbs-meta volume report_access 90abb21d-4a68-4cdc-be67-671517810896 5 设置 volume 的 prefer local 之后，用 volume show_by_id 查看 volume 的 prefer local 没有变化，extent 有变化，但 extent 的 
-
-1. 为什么 ever exist 不是 true？
-
-    只是由首次读引入的 sync generation，虽然会让 loc 上的各个 chunk 去真实分配 extent，但 gen 还是 0，所以 ever exist = false
-
-    meta 会下发大概 （n = disk_size / 10 GiB）条 SETATTR，逐步扩大 size，并非一次直接申请那么大的。
-    
-    ```
-    nfs_server.cc:1107] [SETATTR]: [REQUEST]: id: "7e7dcddf-bc3b-4492" sattr3 { size: 10737418240 atime_how: DONT_CHANGE atime { seconds: 0 nseconds: 0 } mtime_how: DONT_CHANGE mtime { seconds: 0 nseconds: 0 } }, [RESPONSE]: ST:OK, name: "zyx1-test-vm03_4-flat.vmdk" pool_id: "057ac9c5-9c26-41ec-a5ad-643034ea7c3f" id: "7e7dcddf-bc3b-4492" parent_id: "60ca9357-9c5f-4818" attr { type: FILE mode: 384 uid: 0 gid: 0 size: 10737418240 ctime { seconds: 1702910928 nseconds: 671267092 } mtime { seconds: 1702910928 nseconds: 671267092 } atime { seconds: 1702910928 nseconds: 608061606 } } volume_id: "7e7dcddf-bc3b-4492-90b6-60686fd569b1" xid: 1668525677, [TIME]: 39678 us.
-    ```
-    
-    相应的，access 执行 n 次 AccessIOHandler::ReadVExtentInternal，其中，第 1 次会去申请 lease 并执行向各副本所在 chunk sync gen，后面 n - 1 次无需 sync gen，
-    
-    ```
-    /var/log/zbs/zbs-chunkd.INFO:24617:I1218 22:48:50.713533 18732 meta.cc:570] yiwu Meta::GetVExtentLease pid 35609 my_chunk_id_ 2
-    /var/log/zbs/zbs-chunkd.INFO:24618:I1218 22:48:50.713559 18732 access_io_handler.cc:459] yiwu AccessIOHandler::ReadVExtentInternal pid 35609
-    /var/log/zbs/zbs-chunkd.INFO:24619:I1218 22:48:50.713564 18732 access_io_handler.cc:986] yiwu AccessIOHandler::DoSyncGeneration pid 35609
-    /var/log/zbs/zbs-chunkd.INFO:24620:I1218 22:48:50.713573 18732 generation_syncor.cc:138] [SYNC GENERATION START] pid: 35609 loc: [3 1 6 ]
-    /var/log/zbs/zbs-chunkd.INFO:24621:I1218 22:48:50.713586 18732 generation_syncor.cc:312] yiwu trigger GetGeneration pid 35609 cid
-    /var/log/zbs/zbs-chunkd.INFO:24622:I1218 22:48:50.713605 18732 generation_syncor.cc:312] yiwu trigger GetGeneration pid 35609 cid
-    /var/log/zbs/zbs-chunkd.INFO:24623:I1218 22:48:50.713627 18732 generation_syncor.cc:312] yiwu trigger GetGeneration pid 35609 cid
-    /var/log/zbs/zbs-chunkd.INFO:24626:I1218 22:48:50.720468 18732 generation_syncor.cc:237] [SYNC GENERATION SUCCESS]  pid: 35609 loc: [3 1 6 ] gen: 0 io_hard: 0
-    /var/log/zbs/zbs-chunkd.INFO:24627:I1218 22:48:50.721127 18732 access_io_handler.cc:459] yiwu AccessIOHandler::ReadVExtentInternal pid 35609
-    ```
-    
-1. 为什么那 5 个 pid 10 分钟过后 alive loc 还在？
-
-    因为 lsm 侧真的给这 5 个 pextent 分配空间了，经由心跳上报给 meta
-
-1. 那 5 个 pid 的 lease owner 为什么 1 小时之后还在？1 个小时后释放了。
-
-    先下发的 volume 级别的 revoke lease，5 个 access handler 主动清了自己本地的 lease 缓存，然后 meta 为那 5 个要被读的 pid 分配 read lease，
-
-    观察发现他释放了 .....
-    
-    133.243，cid = 2
-    
-    ```c++
-    210296:I1218 17:57:32.751230  3507 access_handler.cc:885] [REVOKE LEASE]: vtable: 453d9c62-16da-4649-bdef-18edd4d6c8c4
-    210297:I1218 17:57:32.782191  3507 nfs3_server.cc:1745] [VAAI RESVSPACE]: inode: [HANDLE]: type: 1, inode_id: 5280147402817027397, volume_id: "453d9c62-16da-4649-bdef-18edd4d6c8c4"
-    
-    // 连续相同的 5 条
-    210354:I1218 17:57:33.023092  3507 nfs3_server.cc:1811] [VAAI STATX]: inode: [HANDLE]: type: 1, inode_id: 5280147402817027397, volume_id: "453d9c62-16da-4649-bdef-18edd4d6c8c4"
-    
-    // 有一个 Update volume config
-    I1218 17:57:33.740621  3507 zbs_client.cc:1569] Update volume config : name: "453d9c62-16da-4649"
-    
-    // 跟了 5 条 pid sync 成功的日志
-    I1218 17:57:33.745319  3507 generation_syncor.cc:138] [SYNC GENERATION START] pid: 33772 loc: [3 1 6 ]
-    I1218 17:57:33.746989  3507 generation_syncor.cc:237] [SYNC GENERATION SUCCESS]  pid: 33772 loc: [3 1 6 ] gen: 0 io_hard: 0
-    
-    // 连续相同的 4 条
-    210533:I1218 17:57:33.854576  3507 nfs3_server.cc:1811] [VAAI STATX]: inode: [HANDLE]: type: 1, inode_id: 5280147402817027397, volume_id: "453d9c62-16da-4649-bdef-18edd4d6c8c4"
-    
-    ```
-    
-    133.241，cid = 1
-    
-    revoke lease 
-    
-    ```c++
-    366674:I1218 17:57:32.754055  6522 access_handler.cc:885] [REVOKE LEASE]: vtable: 453d9c62-16da-4649-bdef-18edd4d6c8c4
-    ```
-    
-    133.242，cid = 3
-    
-    pextent 级别的日志
-    
-    ```c++
-    [root@node2 18:07:48 ~]$ grep -wn "34155" /var/log/zbs/zbs-metad.INFO
-    
-    I1218 17:57:33.755331 20588 meta_rpc_server.cc:754] yiwu MetaRpcServer::GetVExtentLease
-    /var/log/zbs/zbs-metad.INFO:7143:I1218 17:57:33.755450 20588 meta_rpc_server.cc:952] yiwu MetaRpcServer::GetLeaseForRead pid 34155
-    /var/log/zbs/zbs-metad.INFO:7144:I1218 17:57:33.755466 20588 meta_rpc_server.cc:1204] yiwu MetaRpcServer::DoGetLease pid 34155 preferred session 56a6cdef-de32-4646-bd37-6b722db5635d local_cid 2
-    /var/log/zbs/zbs-metad.INFO:7145:I1218 17:57:33.755486 20588 access_manager.cc:586] yiwu AccessManager::AllocOwner pid 34155 cid 2 cid 0
-    /var/log/zbs/zbs-metad.INFO:7146:I1218 17:57:33.755506 20588 access_manager.cc:1857] yiwu GenerateLease pid 34155
-    /var/log/zbs/zbs-metad.INFO:8052:I1218 18:58:46.704962 20588 access_manager.cc:1935] Release owner : pid: 34155 session: 56a6cdef-de32-4646-bd37-6b722db5635d
-      
-    [root@node2 18:40:49 sbin]$  grep -wn "34155" /var/log/zbs/zbs-chunkd.*
-    /var/log/zbs/zbs-chunkd.log.20231218-175700.21577:26068:I1218 17:57:33.756036 21584 local_io_handler.cc:272] yiwu HandleGetGeneration pid 34155
-    /var/log/zbs/zbs-chunkd.log.20231218-175700.21577:26069:I1218 17:57:33.756196 21585 lsm.cc:1501] yiwu VerifyAndGetGeneration pid 34155
-    /var/log/zbs/zbs-chunkd.log.20231218-175700.21577:26070:I1218 17:57:33.756245 21585 lsm.cc:5135] [ALLOC EXTENT] status: EXTENT_STATUS_ALLOCATED pid: 34155 epoch: 35993 generation: 0 bucket_id: 1387 einode_id: 4213157 thick_provision: true prior: false
-    ```
-    
-    volume 级别的日志
-    
-    ```c++
-    [root@node2 18:41:03 sbin]$  grep -n "453d9c62-16da-4649" /var/log/zbs/zbs-chunkd.*
-    /var/log/zbs/zbs-chunkd.log.20231218-175700.21577:24815:I1218 17:57:32.751410 21584 access_handler.cc:885] [REVOKE LEASE]: vtable: 453d9c62-16da-4649-bdef-18edd4d6c8c4
-    
-    // CREATE INODE 之后，会有连续 10 条的 SETATTR 的日志，每 10G 发一条，他是一步一步扩大 file size 的吗？
-    7030:I1218 17:57:32.526930 20588 nfs_server.cc:337] [CREATE INODE]: [REQUEST]: parent_id: "60ca9357-9c5f-4818" name: "zyx1-test-vm03_2-flat.vmdk" type: FILE how: UNCHECKED sattr3 { mode: 384 atime_how: DONT_CHANGE atime { seconds: 0 nseconds: 0 } mtime_how: DONT_CHANGE mtime { seconds: 0 nseconds: 0 } } xid: 1668431687, [RESPONSE]: ST:OK, name: "zyx1-test-vm03_2-flat.vmdk" pool_id: "057ac9c5-9c26-41ec-a5ad-643034ea7c3f" id: "453d9c62-16da-4649" parent_id: "60ca9357-9c5f-4818" attr { type: FILE mode: 384 uid: 0 gid: 0 size: 0 ctime { seconds: 1702893452 nseconds: 519286486 } mtime { seconds: 1702893452 nseconds: 519286486 } atime { seconds: 1702893452 nseconds: 519286486 } } volume_id: "453d9c62-16da-4649-bdef-18edd4d6c8c4" xid: 1668431687, [TIME]: 7804 us.
-    7031:I1218 17:57:32.550280 20588 nfs_server.cc:1107] [SETATTR]: [REQUEST]: id: "453d9c62-16da-4649" sattr3 { mode: 384 atime_how: DONT_CHANGE atime { seconds: 0 nseconds: 0 } mtime_how: DONT_CHANGE mtime { seconds: 0 nseconds: 0 } }, [RESPONSE]: ST:OK, name: "zyx1-test-vm03_2-flat.vmdk" pool_id: "057ac9c5-9c26-41ec-a5ad-643034ea7c3f" id: "453d9c62-16da-4649" parent_id: "60ca9357-9c5f-4818" attr { type: FILE mode: 384 uid: 0 gid: 0 size: 0 ctime { seconds: 1702893452 nseconds: 546426318 } mtime { seconds: 1702893452 nseconds: 519286486 } atime { seconds: 1702893452 nseconds: 519286486 } } volume_id: "453d9c62-16da-4649-bdef-18edd4d6c8c4" xid: 1668431687, [TIME]: 3918 us.
-    
-    // 紧接着会有 revoke cmd，共有 5 条，应该是对应 5 个 chunk，3 + 3 的双活，但是有一个节点没起来
-    7044:I1218 17:57:32.750852 20610 session.cc:246] Notify in PROCESS_KEEPALIVE state.[zbs.meta.AccessKeepAliveResponse.response] { revoke_cmd { vtable_id: "453d9c62-16da-4649-bdef-18edd4d6c8c4" } }
-    
-    // 创建 thick volume 一定会调用这个？
-    7049:I1218 17:57:32.780071 20588 meta_rpc_server.cc:4154] [RESERVE VOLUME SPACE]: [REQUEST]: volume_id: "453d9c62-16da-4649-bdef-18edd4d6c8c4", [RESPONSE]: ST:OK, name: "453d9c62-16da-4649" size: 103079215104 created_time { seconds: 1702893452 nseconds: 519286486 } id: "453d9c62-16da-4649-bdef-18edd4d6c8c4" parent_id: "057ac9c5-9c26-41ec-a5ad-643034ea7c3f" replica_num: 3 thin_provision: false iops_burst: 0 bps_burst: 0 throttling { } stripe_num: 4 stripe_size: 262144, [TIME]: 29332 us.
-    ```
-    
-    loc = 3 1 6，lease owner = 2
-    
-    Notify 这 5 条的时候，SessionState 是 PROCESS_KEEPALIVE，所以会立即下发，5 个 chunk 的 access handler 都收到了，他们会清空自己本地缓存的 lease
-    
-1. 创建不同大小的虚拟磁盘中有 lease owner 的 pextent 不同？
-
-    创建小一点的，会调用 GetLeaseForWrite，96, 100, 128 G 会调用 GetLeaseForRead
-
-    64, 90 GiB 会调用 GetLeaseForWrite，按 256 KiB 大小写，前一半的 pextent 有 lease owner，后一半没有，稳定复现
-
-    16，32 GiB，所有都会有 lease owner，没有他的读或写日志
-
-    256 GiB，前一些是 lease owner，走的是 Write
-
-    但不论是哪种情况，ever exist = false，
-
-    14b03eb7-4e79-4043-8cbf-c2a8f1672c6d，90 GiB，都有 alive replica
-
-    69a5e412-95b9-414a-995a-163323dab337，128 GiB，只有 5 个有，
-
-    5e27fa23-39e2-4db7-9c79-5406f104d925，16 GiB，都有 alive replica
-
-    23869133-291b-45c8-832e-d633f364eaab，32 GiB，都有 alive replica
-
-    7194d43c-d46d-401e-bf57-6f6f4976bdd5，64 GiB，都有 alive replica
-
-    6d8d4150-cfa3-4237-9f7f-42ab80e7ef08，256 GiB，都有 alive replica
-
-1. 主动设置卷的 prefer local 后，卷的属性上的 prefer local 为啥没更新？
-
-1. 单测还需要补上 perf，prior，cap，空间不均，
-
-    这些只用写一个单测，而不需要一组 case
-
-    要模拟有 lease owner 可以参考 RepairTopoWithOwner
-
-
-
-避免某些 pid / volume migrate 迟迟不完成造成集群整体的 migrate 阻塞
-
-1. migrate for chunk removing，没必要添加，因为只要有 chunk removing，就会一直执行这种 migrate，其他 mgirate 没有机会执行，直到他的数据迁移完了，他的 state / status 状态变更后，才会跳过这个 migrate；
-
-   > 这个情况，不对 replace cid 做限制，但对 src 和 dst 做限制
-
-2. migrate for even volume，需要添加，如果一个 even volume 占用了所有的 quota 且一直没法完成，其他 even volume 没有机会做 migrate 的情况，甚至下面的几种 migrate 也一直没有机会；
-
-   需要有一个 chunk 的上限，避免一个 chunk 一直无法完成，一直产生给他的 migrate cmd 把 quota 占满；
-
-   1. migrate for even volume repair topo，不需要有，但调用了 GetSrcCidForReplicaMigration() 默认就会有，看起来还是需要在 GetSrcCidForReplicaMigration() 里加个是否启用的 flag，因为后续 for localization 也会用到；
-   2. migrate for even volume rebalance，需要有 chunk 上限的限制；
-
-3. migrate for over load prior extent，需要添加，因为如果一个节点负载比较高的节点消耗了所有 quota，且一直难以完成，那么其他节点都没有机会做 migrate；
-
-4. migrate for localization，不需要添加，因为按 pid 为粒度扫描，当前几个无法完成不会影响到其他 pid migrate cmd 下发；
-
-5. migrate for repair topo，不需要添加，因为按 pid 为粒度扫描，当前几个无法完成不会影响到其他 pid migrate cmd 下发；
-
-6. migrate for rebalance，需要添加，因为如果一个负载比较高的节点消耗了所有 quota，且一直难以完成，那么其他节点都没有机会做 migrate；
-
-结论：给所有 migrate 都添加 generate_cmds_per_chunk_limit_ ，但他的值不支持自调节，只是 generate_cmds_per_round_limit_ / 2，引入 generate_cmds_per_chunk_limit_ 的目的是避免一个节点用完所有的 generate quota 而其他节点 / migrate 没有机会生成。
-
-* 以 pid 为粒度扫描的，用 next_xxx_scan_pid_map 来避免让某些 pid migrate 影响到整体，next_xxx_scan_pid_map 保留现状，他其实不需要 generate_cmds_per_chunk_limit_，但为了便于理解，还是加上吧；
-* 以 chunk + pid 为粒度扫描的，用 randint + generate_cmds_per_chunk_limit_ 来避免某些 pid 阻塞导致其他 chunk / pid 没机会 migrate；
-
-
-
-1. 为什么 AllocRecoverForAgile 中一定不会有 prior extent？
-
-2. 在 HasSpaceForCow() 为什么用的是 total_data_capacity 而不是 valid_data_space ？
-
-3. 为什么对节点进入超高负载的判断用的是 used_data_space 而不是 allocated_data_space？
-
-    改进迁移策略，在节点上待回收数据较多时（已经使用的数据空间占比超过 95%），如果集群没有进入极高负载状态（整体空间分配比例达到 90%），不向该节点迁移数据以保证回收顺利进行。
-
-    lsm1 回收空间的速率非常慢，所以如果删除一个 extent，存在 chunk 的 provisioned space 会减少（分配数据空间比例在减小），但 used space 可能仍然很高的情况，如果这时集群上的其他节点向它迁移数据，会进一步降低回收速率。
-
-    在 Migrate 时进行检查，如果集群整体尚有可用空间时比如整体 provisioned 比例在 90% 以下，不向 Used Space 比例大于 95% 的节点迁移数据，即便 Provsioned 比较低。
-
-
-
-做 migrate for repair topo 和 rebalance 是，需要考虑
+做 migrate for repair topo 和 rebalance 时，需要考虑以 chunk 为粒度的遍历
 
 xx 1. 不开分层的 replica ，2. 开分层后的 cap replica，3. 开分层后的 perf replica，4. 开分层后的 cap ec，他们的单测不适合合起来，因为如果之后 cap / perf 策略不同的话，还是得拆出来。
+
+涉及到容量均衡的才要区分是否双活，比如 even / prior / normal rebalance
 
 
 
 一步一步来，最终可以考虑重写个 reposition manager，里面有把 cap replica， cap ec shard, perf replica 做成 3 个类。 但在此之前，需要先把 3 个 migrate 弄成统一的接口，这样才能一步步演进。
+
+1. rename pid_cmds_ to active_distributed_cmds_map，然后用一个 passive_distributed_cmds_map_
+2. 引入被 generate_cmd_limit 限制的 xxx_waiting_migrate_cmd_num_，migrate 的 src / dst 都会用到它，在每一轮 scan migrate 中都会被清空；
+3. 用于计算剩余空间的 xxx_waiting_migrate_cmd_space，只有 migrate 的 dst 会更新它，在每一轮 scan migrate 中也会被清空；
+4. 先把 migrate for repair topo 拆出来给 review，另外是 migrate for rebalance，然后才是 migrate for localization；
+5. 让所有的 migrate 能共用一个 GetSrcCidForReplicaMigration
 
 
 
@@ -303,6 +105,50 @@ migrate_speed_limit * kRepositionIOPercentThrottle
 ```
 
 
+
+避免某些 pid / volume migrate 迟迟不完成造成集群整体的 migrate 阻塞
+
+1. migrate for chunk removing，没必要添加，因为只要有 chunk removing，就会一直执行这种 migrate，其他 mgirate 没有机会执行，直到他的数据迁移完了，他的 state / status 状态变更后，才会跳过这个 migrate；
+
+    > 这个情况，不对 replace cid 做限制，但对 src 和 dst 做限制
+
+2. migrate for even volume，需要添加，如果一个 even volume 占用了所有的 quota 且一直没法完成，其他 even volume 没有机会做 migrate 的情况，甚至下面的几种 migrate 也一直没有机会；
+
+    需要有一个 chunk 的上限，避免一个 chunk 一直无法完成，一直产生给他的 migrate cmd 把 quota 占满；
+
+    1. migrate for even volume repair topo，不需要有，但调用了 GetSrcCidForReplicaMigration() 默认就会有，看起来还是需要在 GetSrcCidForReplicaMigration() 里加个是否启用的 flag，因为后续 for localization 也会用到；
+    2. migrate for even volume rebalance，需要有 chunk 上限的限制；
+
+3. migrate for over load prior extent，需要添加，因为如果一个节点负载比较高的节点消耗了所有 quota，且一直难以完成，那么其他节点都没有机会做 migrate；
+
+4. migrate for localization，不需要添加，因为按 pid 为粒度扫描，当前几个无法完成不会影响到其他 pid migrate cmd 下发；
+
+5. migrate for repair topo，不需要添加，因为按 pid 为粒度扫描，当前几个无法完成不会影响到其他 pid migrate cmd 下发；
+
+6. migrate for rebalance，需要添加，因为如果一个负载比较高的节点消耗了所有 quota，且一直难以完成，那么其他节点都没有机会做 migrate；
+
+结论：给所有 migrate 都添加 generate_cmds_per_chunk_limit_ ，但他的值不支持自调节，只是 generate_cmds_per_round_limit_ / 2，引入 generate_cmds_per_chunk_limit_ 的目的是避免一个节点用完所有的 generate quota 而其他节点 / migrate 没有机会生成。
+
+* 以 pid 为粒度扫描的，用 next_xxx_scan_pid_map 来避免让某些 pid migrate 影响到整体，next_xxx_scan_pid_map 保留现状，他其实不需要 generate_cmds_per_chunk_limit_，但为了便于理解，还是加上吧；
+* 以 chunk + pid 为粒度扫描的，用 randint + generate_cmds_per_chunk_limit_ 来避免某些 pid 阻塞导致其他 chunk / pid 没机会 migrate；
+
+
+
+1. access recover read 是 extent 粒度，write 是 block 粒度？
+
+2. 为什么 AllocRecoverForAgile 中一定不会有 prior extent？
+
+3. 在 HasSpaceForCow() 为什么用的是 total_data_capacity 而不是 valid_data_space ？
+
+4. 为什么对节点进入超高负载的判断用的是 used_data_space 而不是 allocated_data_space？
+
+    改进迁移策略，在节点上待回收数据较多时（已经使用的数据空间占比超过 95%），如果集群没有进入极高负载状态（整体空间分配比例达到 90%），不向该节点迁移数据以保证回收顺利进行。
+
+    lsm1 回收空间的速率非常慢，所以如果删除一个 extent，存在 chunk 的 provisioned space 会减少（分配数据空间比例在减小），但 used space 可能仍然很高的情况，如果这时集群上的其他节点向它迁移数据，会进一步降低回收速率。
+
+    在 Migrate 时进行检查，如果集群整体尚有可用空间时比如整体 provisioned 比例在 90% 以下，不向 Used Space 比例大于 95% 的节点迁移数据，即便 Provsioned 比较低。
+
+    
 
 recover > sink > migrate
 
@@ -400,9 +246,11 @@ rx_pids -> dst_pids，tx_pids -> replace_cids, recover_src_pids -> src_pids
 
     因为节点移除时，他上面的副本需要尽快迁移完，否则不会执行下一条命令（zbs-deploy-manage meta_remove_node < storage ip>）。从存储池中移除节点的时候，仅考虑 migrate dst cid 在不迁出副本的情况下是否可以容纳待迁移的数据，但这样可能导致 dst cid 超高负载或满载后，副本还没迁移完。
 
-    例如节点 a b c d ，存在大量 extent 的 3 副本分布在 b c d，此时如果移除 c 上的 2 副本，那么只能向 a 迁移，a 如果容量较小，可能会被 c 来的数据填满。
+    例如节点 a b c d ，存在大量 extent 的 3 副本分布在 b c d，此时移除 c，只能向 a 迁移，a 如果容量较小，可能会被 c 来的数据填满，此时可以将 a 上的 2 副本 pextent 移到 b 或 d，以腾出空间给的 c 迁移过来的 3 副本 pextent。
 
-    这个过程中，当 a 进入高负载，可以考虑将部分副本移出，以腾出空间给 c 要移动过来的副本。需要确认一下 a 在作为 migrate dst 且进入高负载时，是否有机会把自己可迁移的数据迁移出去。
+    可以问题可以泛化成，有节点 a - e，如果有 100w 个 pextent  副本分布在 a b c，此时移除 a，只能往 d e 上迁移，而如果 d e 的容量远比 a b c 小，a 上的 pextent 容量远超过 d + e，而一个出现 removing chunk 直到他迁移结束，容量均衡并没有机会被执行，所以这个 removing chunk 可能一直不会完成。引入 ec 之后，这个问题触发的概率会更高。
+
+    需要确认一下 a 在作为 migrate dst 且进入超高负载时，是否有机会把自己可迁移的数据迁移出去。
 
     要在这个逻辑里加上，到了超高负载时，允许在 removing chunk 的过程中先执行 replace_cid 为 a 的 ReGenerateMigrateForBalanceInStoragePool
 

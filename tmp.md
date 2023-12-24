@@ -1,3 +1,163 @@
+1. 卷 08e2d668-098d-4e30-b411-c55d1866353a，dd if=/dev/zero of=c.txt bs=1G seek=100 count=0
+
+    刚创建时 alive location = location，过一会儿就变成 0（确认一下是不是 10 分钟，13:51:35）， ever exist 全程等于 false，
+
+1. 从 esxi 上为虚拟机添加一个磁盘，对应的卷是 90abb21d-4a68-4cdc-be67-671517810896（14:41创建的），一开始都有 alive replica，其中头 2 个和最后 3 个 pextent 有 lease owner（创建 32 GB 就没有这个现象）
+
+    没到 10 min，没有 lease owner 的 pextent 的 alive loc 都清空了，只有这 5 个 pextent lease owner 和 alive loc 还在，并且整体的 ever exist 都等于 false
+
+    32 GiB 95a36f74-e904-468c-9ee2-e59ff9240e9b
+
+    96 GiB 5f24a298-7d3a-4970-987d-0b2702d8aa73，Creation Time   2023-12-18 16:28:21.182458105
+
+    pid 33642 在 chunk 上都有对应日志了，gen 为 0，所以 ever exist 还是 false？
+
+    ```
+    /var/log/zbs/zbs-chunkd.INFO:187212:I1218 16:28:21.604626 12869 lsm.cc:5134] [ALLOC EXTENT] status: EXTENT_STATUS_ALLOCATED pid: 33642 epoch: 35468 generation: 0 bucket_id: 874 einode_id: 4213113 thick_provision: true prior: false
+    ```
+
+    pid 33639 在 chunk 就没有写入的日志
+
+1. 通过  zbs-meta volume report_access 90abb21d-4a68-4cdc-be67-671517810896 5 设置 volume 的 prefer local 之后，用 volume show_by_id 查看 volume 的 prefer local 没有变化，extent 有变化，但 extent 的 
+
+1. 为什么 ever exist 不是 true？
+
+    只是由首次读引入的 sync generation，虽然会让 loc 上的各个 chunk 去真实分配 extent，但 gen 还是 0，所以 ever exist = false
+
+    meta 会下发大概 （n = disk_size / 10 GiB）条 SETATTR，逐步扩大 size，并非一次直接申请那么大的。
+
+    ```
+    nfs_server.cc:1107] [SETATTR]: [REQUEST]: id: "7e7dcddf-bc3b-4492" sattr3 { size: 10737418240 atime_how: DONT_CHANGE atime { seconds: 0 nseconds: 0 } mtime_how: DONT_CHANGE mtime { seconds: 0 nseconds: 0 } }, [RESPONSE]: ST:OK, name: "zyx1-test-vm03_4-flat.vmdk" pool_id: "057ac9c5-9c26-41ec-a5ad-643034ea7c3f" id: "7e7dcddf-bc3b-4492" parent_id: "60ca9357-9c5f-4818" attr { type: FILE mode: 384 uid: 0 gid: 0 size: 10737418240 ctime { seconds: 1702910928 nseconds: 671267092 } mtime { seconds: 1702910928 nseconds: 671267092 } atime { seconds: 1702910928 nseconds: 608061606 } } volume_id: "7e7dcddf-bc3b-4492-90b6-60686fd569b1" xid: 1668525677, [TIME]: 39678 us.
+    ```
+
+    相应的，access 执行 n 次 AccessIOHandler::ReadVExtentInternal，其中，第 1 次会去申请 lease 并执行向各副本所在 chunk sync gen，后面 n - 1 次无需 sync gen，
+
+    ```
+    /var/log/zbs/zbs-chunkd.INFO:24617:I1218 22:48:50.713533 18732 meta.cc:570] yiwu Meta::GetVExtentLease pid 35609 my_chunk_id_ 2
+    /var/log/zbs/zbs-chunkd.INFO:24618:I1218 22:48:50.713559 18732 access_io_handler.cc:459] yiwu AccessIOHandler::ReadVExtentInternal pid 35609
+    /var/log/zbs/zbs-chunkd.INFO:24619:I1218 22:48:50.713564 18732 access_io_handler.cc:986] yiwu AccessIOHandler::DoSyncGeneration pid 35609
+    /var/log/zbs/zbs-chunkd.INFO:24620:I1218 22:48:50.713573 18732 generation_syncor.cc:138] [SYNC GENERATION START] pid: 35609 loc: [3 1 6 ]
+    /var/log/zbs/zbs-chunkd.INFO:24621:I1218 22:48:50.713586 18732 generation_syncor.cc:312] yiwu trigger GetGeneration pid 35609 cid
+    /var/log/zbs/zbs-chunkd.INFO:24622:I1218 22:48:50.713605 18732 generation_syncor.cc:312] yiwu trigger GetGeneration pid 35609 cid
+    /var/log/zbs/zbs-chunkd.INFO:24623:I1218 22:48:50.713627 18732 generation_syncor.cc:312] yiwu trigger GetGeneration pid 35609 cid
+    /var/log/zbs/zbs-chunkd.INFO:24626:I1218 22:48:50.720468 18732 generation_syncor.cc:237] [SYNC GENERATION SUCCESS]  pid: 35609 loc: [3 1 6 ] gen: 0 io_hard: 0
+    /var/log/zbs/zbs-chunkd.INFO:24627:I1218 22:48:50.721127 18732 access_io_handler.cc:459] yiwu AccessIOHandler::ReadVExtentInternal pid 35609
+    ```
+
+1. 为什么那 5 个 pid 10 分钟过后 alive loc 还在？
+
+    因为 lsm 侧真的给这 5 个 pextent 分配空间了，经由心跳上报给 meta
+
+1. 那 5 个 pid 的 lease owner 为什么 1 小时之后还在？1 个小时后释放了。
+
+    先下发的 volume 级别的 revoke lease，5 个 access handler 主动清了自己本地的 lease 缓存，然后 meta 为那 5 个要被读的 pid 分配 read lease，
+
+    观察发现他释放了 .....
+
+    133.243，cid = 2
+
+    ```c++
+    210296:I1218 17:57:32.751230  3507 access_handler.cc:885] [REVOKE LEASE]: vtable: 453d9c62-16da-4649-bdef-18edd4d6c8c4
+    210297:I1218 17:57:32.782191  3507 nfs3_server.cc:1745] [VAAI RESVSPACE]: inode: [HANDLE]: type: 1, inode_id: 5280147402817027397, volume_id: "453d9c62-16da-4649-bdef-18edd4d6c8c4"
+    
+    // 连续相同的 5 条
+    210354:I1218 17:57:33.023092  3507 nfs3_server.cc:1811] [VAAI STATX]: inode: [HANDLE]: type: 1, inode_id: 5280147402817027397, volume_id: "453d9c62-16da-4649-bdef-18edd4d6c8c4"
+    
+    // 有一个 Update volume config
+    I1218 17:57:33.740621  3507 zbs_client.cc:1569] Update volume config : name: "453d9c62-16da-4649"
+    
+    // 跟了 5 条 pid sync 成功的日志
+    I1218 17:57:33.745319  3507 generation_syncor.cc:138] [SYNC GENERATION START] pid: 33772 loc: [3 1 6 ]
+    I1218 17:57:33.746989  3507 generation_syncor.cc:237] [SYNC GENERATION SUCCESS]  pid: 33772 loc: [3 1 6 ] gen: 0 io_hard: 0
+    
+    // 连续相同的 4 条
+    210533:I1218 17:57:33.854576  3507 nfs3_server.cc:1811] [VAAI STATX]: inode: [HANDLE]: type: 1, inode_id: 5280147402817027397, volume_id: "453d9c62-16da-4649-bdef-18edd4d6c8c4"
+    
+    ```
+
+    133.241，cid = 1
+
+    revoke lease 
+
+    ```c++
+    366674:I1218 17:57:32.754055  6522 access_handler.cc:885] [REVOKE LEASE]: vtable: 453d9c62-16da-4649-bdef-18edd4d6c8c4
+    ```
+
+    133.242，cid = 3
+
+    pextent 级别的日志
+
+    ```c++
+    [root@node2 18:07:48 ~]$ grep -wn "34155" /var/log/zbs/zbs-metad.INFO
+    
+    I1218 17:57:33.755331 20588 meta_rpc_server.cc:754] yiwu MetaRpcServer::GetVExtentLease
+    /var/log/zbs/zbs-metad.INFO:7143:I1218 17:57:33.755450 20588 meta_rpc_server.cc:952] yiwu MetaRpcServer::GetLeaseForRead pid 34155
+    /var/log/zbs/zbs-metad.INFO:7144:I1218 17:57:33.755466 20588 meta_rpc_server.cc:1204] yiwu MetaRpcServer::DoGetLease pid 34155 preferred session 56a6cdef-de32-4646-bd37-6b722db5635d local_cid 2
+    /var/log/zbs/zbs-metad.INFO:7145:I1218 17:57:33.755486 20588 access_manager.cc:586] yiwu AccessManager::AllocOwner pid 34155 cid 2 cid 0
+    /var/log/zbs/zbs-metad.INFO:7146:I1218 17:57:33.755506 20588 access_manager.cc:1857] yiwu GenerateLease pid 34155
+    /var/log/zbs/zbs-metad.INFO:8052:I1218 18:58:46.704962 20588 access_manager.cc:1935] Release owner : pid: 34155 session: 56a6cdef-de32-4646-bd37-6b722db5635d
+      
+    [root@node2 18:40:49 sbin]$  grep -wn "34155" /var/log/zbs/zbs-chunkd.*
+    /var/log/zbs/zbs-chunkd.log.20231218-175700.21577:26068:I1218 17:57:33.756036 21584 local_io_handler.cc:272] yiwu HandleGetGeneration pid 34155
+    /var/log/zbs/zbs-chunkd.log.20231218-175700.21577:26069:I1218 17:57:33.756196 21585 lsm.cc:1501] yiwu VerifyAndGetGeneration pid 34155
+    /var/log/zbs/zbs-chunkd.log.20231218-175700.21577:26070:I1218 17:57:33.756245 21585 lsm.cc:5135] [ALLOC EXTENT] status: EXTENT_STATUS_ALLOCATED pid: 34155 epoch: 35993 generation: 0 bucket_id: 1387 einode_id: 4213157 thick_provision: true prior: false
+    ```
+
+    volume 级别的日志
+
+    ```c++
+    [root@node2 18:41:03 sbin]$  grep -n "453d9c62-16da-4649" /var/log/zbs/zbs-chunkd.*
+    /var/log/zbs/zbs-chunkd.log.20231218-175700.21577:24815:I1218 17:57:32.751410 21584 access_handler.cc:885] [REVOKE LEASE]: vtable: 453d9c62-16da-4649-bdef-18edd4d6c8c4
+    
+    // CREATE INODE 之后，会有连续 10 条的 SETATTR 的日志，每 10G 发一条，他是一步一步扩大 file size 的吗？
+    7030:I1218 17:57:32.526930 20588 nfs_server.cc:337] [CREATE INODE]: [REQUEST]: parent_id: "60ca9357-9c5f-4818" name: "zyx1-test-vm03_2-flat.vmdk" type: FILE how: UNCHECKED sattr3 { mode: 384 atime_how: DONT_CHANGE atime { seconds: 0 nseconds: 0 } mtime_how: DONT_CHANGE mtime { seconds: 0 nseconds: 0 } } xid: 1668431687, [RESPONSE]: ST:OK, name: "zyx1-test-vm03_2-flat.vmdk" pool_id: "057ac9c5-9c26-41ec-a5ad-643034ea7c3f" id: "453d9c62-16da-4649" parent_id: "60ca9357-9c5f-4818" attr { type: FILE mode: 384 uid: 0 gid: 0 size: 0 ctime { seconds: 1702893452 nseconds: 519286486 } mtime { seconds: 1702893452 nseconds: 519286486 } atime { seconds: 1702893452 nseconds: 519286486 } } volume_id: "453d9c62-16da-4649-bdef-18edd4d6c8c4" xid: 1668431687, [TIME]: 7804 us.
+    7031:I1218 17:57:32.550280 20588 nfs_server.cc:1107] [SETATTR]: [REQUEST]: id: "453d9c62-16da-4649" sattr3 { mode: 384 atime_how: DONT_CHANGE atime { seconds: 0 nseconds: 0 } mtime_how: DONT_CHANGE mtime { seconds: 0 nseconds: 0 } }, [RESPONSE]: ST:OK, name: "zyx1-test-vm03_2-flat.vmdk" pool_id: "057ac9c5-9c26-41ec-a5ad-643034ea7c3f" id: "453d9c62-16da-4649" parent_id: "60ca9357-9c5f-4818" attr { type: FILE mode: 384 uid: 0 gid: 0 size: 0 ctime { seconds: 1702893452 nseconds: 546426318 } mtime { seconds: 1702893452 nseconds: 519286486 } atime { seconds: 1702893452 nseconds: 519286486 } } volume_id: "453d9c62-16da-4649-bdef-18edd4d6c8c4" xid: 1668431687, [TIME]: 3918 us.
+    
+    // 紧接着会有 revoke cmd，共有 5 条，应该是对应 5 个 chunk，3 + 3 的双活，但是有一个节点没起来
+    7044:I1218 17:57:32.750852 20610 session.cc:246] Notify in PROCESS_KEEPALIVE state.[zbs.meta.AccessKeepAliveResponse.response] { revoke_cmd { vtable_id: "453d9c62-16da-4649-bdef-18edd4d6c8c4" } }
+    
+    // 创建 thick volume 一定会调用这个？
+    7049:I1218 17:57:32.780071 20588 meta_rpc_server.cc:4154] [RESERVE VOLUME SPACE]: [REQUEST]: volume_id: "453d9c62-16da-4649-bdef-18edd4d6c8c4", [RESPONSE]: ST:OK, name: "453d9c62-16da-4649" size: 103079215104 created_time { seconds: 1702893452 nseconds: 519286486 } id: "453d9c62-16da-4649-bdef-18edd4d6c8c4" parent_id: "057ac9c5-9c26-41ec-a5ad-643034ea7c3f" replica_num: 3 thin_provision: false iops_burst: 0 bps_burst: 0 throttling { } stripe_num: 4 stripe_size: 262144, [TIME]: 29332 us.
+    ```
+
+    loc = 3 1 6，lease owner = 2
+
+    Notify 这 5 条的时候，SessionState 是 PROCESS_KEEPALIVE，所以会立即下发，5 个 chunk 的 access handler 都收到了，他们会清空自己本地缓存的 lease
+
+1. 创建不同大小的虚拟磁盘中有 lease owner 的 pextent 不同？
+
+    创建小一点的，会调用 GetLeaseForWrite，96, 100, 128 G 会调用 GetLeaseForRead
+
+    64, 90 GiB 会调用 GetLeaseForWrite，按 256 KiB 大小写，前一半的 pextent 有 lease owner，后一半没有，稳定复现
+
+    16，32 GiB，所有都会有 lease owner，没有他的读或写日志
+
+    256 GiB，前一些是 lease owner，走的是 Write
+
+    但不论是哪种情况，ever exist = false，
+
+    14b03eb7-4e79-4043-8cbf-c2a8f1672c6d，90 GiB，都有 alive replica
+
+    69a5e412-95b9-414a-995a-163323dab337，128 GiB，只有 5 个有，
+
+    5e27fa23-39e2-4db7-9c79-5406f104d925，16 GiB，都有 alive replica
+
+    23869133-291b-45c8-832e-d633f364eaab，32 GiB，都有 alive replica
+
+    7194d43c-d46d-401e-bf57-6f6f4976bdd5，64 GiB，都有 alive replica
+
+    6d8d4150-cfa3-4237-9f7f-42ab80e7ef08，256 GiB，都有 alive replica
+
+1. 主动设置卷的 prefer local 后，卷的属性上的 prefer local 为啥没更新？
+
+1. 单测还需要补上 perf，prior，cap，空间不均，
+
+    这些只用写一个单测，而不需要一组 case
+
+    要模拟有 lease owner 可以参考 RepairTopoWithOwner
+
+
+
 [root@ESXI02:~] vmware -v
 VMware ESXi 7.0.3 build-20328353
 
