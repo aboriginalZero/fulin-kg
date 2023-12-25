@@ -8,7 +8,11 @@ xx 1. 不开分层的 replica ，2. 开分层后的 cap replica，3. 开分层�
 
 一步一步来，最终可以考虑重写个 reposition manager，里面有把 cap replica， cap ec shard, perf replica 做成 3 个类。 但在此之前，需要先把 3 个 migrate 弄成统一的接口，这样才能一步步演进。
 
-1. 把 get storage load 的相关函数换一下
+1. 刚改到 migrate for prior extent，需要把 UnableMigrateByPentry 中的 pextent_type 改成 std::optional
+1. isolated_chunks_.count(cid) > 0; 这个能不能直接写成 != 0 呢？
+1. 在 migrate 入口外面做一次 GetStoragePoolHealthyChunks，然后各个子 migrate 去用他；
+1. 调整 CalculateRemainSpace，另外，如果所有的 migrate 都会被 remain_space_map 限制，那就可以放到 UnableMigrateByCid() 中
+1. recover / migrate for removing chunk 用到的函数，是否可以拿回 recover_manager.cc 中？
 1. rename pid_cmds_ to active_distributed_cmds_map，然后用一个 passive_distributed_cmds_map_
 2. 引入被 generate_cmd_limit 限制的 xxx_waiting_migrate_cmd_num_，migrate 的 src / dst 都会用到它，在每一轮 scan migrate 中都会被清空；
 3. 用于计算剩余空间的 xxx_waiting_migrate_cmd_space，只有 migrate 的 dst 会更新它，在每一轮 scan migrate 中也会被清空；
