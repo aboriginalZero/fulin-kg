@@ -8,11 +8,16 @@ xx 1. 不开分层的 replica ，2. 开分层后的 cap replica，3. 开分层�
 
 一步一步来，最终可以考虑重写个 reposition manager，里面有把 cap replica， cap ec shard, perf replica 做成 3 个类。 但在此之前，需要先把 3 个 migrate 弄成统一的接口，这样才能一步步演进。
 
+1. 把 get storage load 的相关函数换一下
 1. rename pid_cmds_ to active_distributed_cmds_map，然后用一个 passive_distributed_cmds_map_
 2. 引入被 generate_cmd_limit 限制的 xxx_waiting_migrate_cmd_num_，migrate 的 src / dst 都会用到它，在每一轮 scan migrate 中都会被清空；
 3. 用于计算剩余空间的 xxx_waiting_migrate_cmd_space，只有 migrate 的 dst 会更新它，在每一轮 scan migrate 中也会被清空；
 4. 先把 migrate for repair topo 拆出来给 review，另外是 migrate for rebalance，然后才是 migrate for localization；
 5. 让所有的 migrate 能共用一个 GetSrcCidForReplicaMigration
+5. 让 migrate for removing chunk 时，还能调用 migrate for normal extent
+5. 因为后续的操作不会去操作 even pextent，所以 migrate for even volume 执行完，后续可以接着执行后续 migrate ，但开了分层后的 migrate for over load prior extent，假设分层之后的状态稳定，那 prior extent 作为 perf thick extent，也会参与后续的 migrate for rebalance 平衡，那好像就支持双活了
+5. 在分层升级过程中，prior extent 还属于 cap，所以可能还是得保留，即使是升级之后，他属于 perf，也得让 perf thick extent 的优先级在所有 perf extent 里最高，所以还是得保留一个独立的 migrate 策略，因为算他的负载跟算 perf extent 整体的负载并不一致，如果他两在一次里触发的话，可能会有冲突；
+5. 
 
 
 
@@ -248,7 +253,7 @@ rx_pids -> dst_pids，tx_pids -> replace_cids, recover_src_pids -> src_pids
 
     例如节点 a b c d ，存在大量 extent 的 3 副本分布在 b c d，此时移除 c，只能向 a 迁移，a 如果容量较小，可能会被 c 来的数据填满，此时可以将 a 上的 2 副本 pextent 移到 b 或 d，以腾出空间给的 c 迁移过来的 3 副本 pextent。
 
-    可以问题可以泛化成，有节点 a - e，如果有 100w 个 pextent  副本分布在 a b c，此时移除 a，只能往 d e 上迁移，而如果 d e 的容量远比 a b c 小，a 上的 pextent 容量远超过 d + e，而一个出现 removing chunk 直到他迁移结束，容量均衡并没有机会被执行，所以这个 removing chunk 可能一直不会完成。引入 ec 之后，这个问题触发的概率会更高。
+    这个问题可以泛化成，有节点 a - e，如果有 100w 个 pextent  副本分布在 a b c，此时移除 a，只能往 d e 上迁移，而如果 d e 的容量远比 a b c 小，a 上的 pextent 容量远超过 d + e，而一个出现 removing chunk 直到他迁移结束，容量均衡并没有机会被执行，所以这个 removing chunk 可能一直不会完成。引入 ec 之后，这个问题触发的概率会更高。
 
     需要确认一下 a 在作为 migrate dst 且进入超高负载时，是否有机会把自己可迁移的数据迁移出去。
 
