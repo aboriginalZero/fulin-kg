@@ -8,7 +8,7 @@ xx 1. 不开分层的 replica ，2. 开分层后的 cap replica，3. 开分层�
 
 一步一步来，最终可以考虑重写个 reposition manager，里面有把 cap replica， cap ec shard, perf replica 做成 3 个类。 但在此之前，需要先把 3 个 migrate 弄成统一的接口，这样才能一步步演进。
 
-1. 参考  MigrateForRebalanceEvenVolumeInsideZone 改造 ReGenerateMigrateForBalanceInStoragePool，然后还要在 recover 中做适配，然后才算做成了引入 migrate_reserve_space_map 和 migrate_generate_used_cmd_slots
+1. 参考  MigrateForRebalanceEvenVolumeInsideZone 改造 ReGenerateMigrateForBalanceInStoragePool，然后才算做成了引入 migrate_reserve_space_map 和 migrate_generate_used_cmd_slots，补上会有多种 migrate 在一次 migrate scan 中生成 migrate cmd 的单测。
 2. 在 migrate for prior extent 中引入 remain space map 来正确计算；
 1. 在 migrate 入口外面做一次 GetStoragePoolHealthyChunks，然后各个子 migrate 去用他；
 1. 为什么在 migrate for pair topo 和 rebalance 中不用考虑 prior remain space？后者是不会迁移 prior extent，前者会迁移，所以可能会导致 repair topo 后 dst chunk 进入 prior 高负载；
