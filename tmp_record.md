@@ -8,20 +8,17 @@ xx 1. 不开分层的 replica ，2. 开分层后的 cap replica，3. 开分层�
 
 一步一步来，最终可以考虑重写个 reposition manager，里面有把 cap replica， cap ec shard, perf replica 做成 3 个类。 但在此之前，需要先把 3 个 migrate 弄成统一的接口，这样才能一步步演进。
 
-1. 刚改到 migrate for prior extent，需要把 UnableMigrateByPentry 中的 pextent_type 改成 std::optional
-1. isolated_chunks_.count(cid) > 0; 这个能不能直接写成 != 0 呢？
+1. 参考  MigrateForRebalanceEvenVolumeInsideZone 改造 ReGenerateMigrateForBalanceInStoragePool，然后还要在 recover 中做适配，然后才算做成了引入 migrate_reserve_space_map 和 migrate_generate_used_cmd_slots
+2. 在 migrate for prior extent 中引入 remain space map 来正确计算；
 1. 在 migrate 入口外面做一次 GetStoragePoolHealthyChunks，然后各个子 migrate 去用他；
+1. 为什么在 migrate for pair topo 和 rebalance 中不用考虑 prior remain space？后者是不会迁移 prior extent，前者会迁移，所以可能会导致 repair topo 后 dst chunk 进入 prior 高负载；
 1. 调整 CalculateRemainSpace，另外，如果所有的 migrate 都会被 remain_space_map 限制，那就可以放到 UnableMigrateByCid() 中
 1. recover / migrate for removing chunk 用到的函数，是否可以拿回 recover_manager.cc 中？
-1. rename pid_cmds_ to active_distributed_cmds_map，然后用一个 passive_distributed_cmds_map_
-2. 引入被 generate_cmd_limit 限制的 xxx_waiting_migrate_cmd_num_，migrate 的 src / dst 都会用到它，在每一轮 scan migrate 中都会被清空；
-3. 用于计算剩余空间的 xxx_waiting_migrate_cmd_space，只有 migrate 的 dst 会更新它，在每一轮 scan migrate 中也会被清空；
 4. 先把 migrate for repair topo 拆出来给 review，另外是 migrate for rebalance，然后才是 migrate for localization；
 5. 让所有的 migrate 能共用一个 GetSrcCidForReplicaMigration
-5. 让 migrate for removing chunk 时，还能调用 migrate for normal extent
 5. 因为后续的操作不会去操作 even pextent，所以 migrate for even volume 执行完，后续可以接着执行后续 migrate ，但开了分层后的 migrate for over load prior extent，假设分层之后的状态稳定，那 prior extent 作为 perf thick extent，也会参与后续的 migrate for rebalance 平衡，那好像就支持双活了
 5. 在分层升级过程中，prior extent 还属于 cap，所以可能还是得保留，即使是升级之后，他属于 perf，也得让 perf thick extent 的优先级在所有 perf extent 里最高，所以还是得保留一个独立的 migrate 策略，因为算他的负载跟算 perf extent 整体的负载并不一致，如果他两在一次里触发的话，可能会有冲突；
-5. 
+5. migrate 策略复杂的地方在于代码写的太面向过程了，已经要做面向对象抽象的
 
 
 
