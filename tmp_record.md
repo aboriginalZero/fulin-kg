@@ -8,16 +8,38 @@ xx 1. 不开分层的 replica ，2. 开分层后的 cap replica，3. 开分层�
 
 一步一步来，最终可以考虑重写个 reposition manager，里面有把 cap replica， cap ec shard, perf replica 做成 3 个类。 但在此之前，需要先把 3 个 migrate 弄成统一的接口，这样才能一步步演进。
 
-1. 参考  MigrateForRebalanceEvenVolumeInsideZone 改造 ReGenerateMigrateForBalanceInStoragePool，然后才算做成了引入 migrate_reserve_space_map 和 migrate_generate_used_cmd_slots，补上会有多种 migrate 在一次 migrate scan 中生成 migrate cmd 的单测。
-2. 在 migrate for prior extent 中引入 remain space map 来正确计算；
-1. 在 migrate 入口外面做一次 GetStoragePoolHealthyChunks，然后各个子 migrate 去用他；
-1. 为什么在 migrate for pair topo 和 rebalance 中不用考虑 prior remain space？后者是不会迁移 prior extent，前者会迁移，所以可能会导致 repair topo 后 dst chunk 进入 prior 高负载；
-1. 调整 CalculateRemainSpace，另外，如果所有的 migrate 都会被 remain_space_map 限制，那就可以放到 UnableMigrateByCid() 中
-1. recover / migrate for removing chunk 用到的函数，是否可以拿回 recover_manager.cc 中？
-4. 先把 migrate for repair topo 拆出来给 review，另外是 migrate for rebalance，然后才是 migrate for localization；
-5. 让所有的 migrate 能共用一个 GetSrcCidForReplicaMigration
-5. 因为后续的操作不会去操作 even pextent，所以 migrate for even volume 执行完，后续可以接着执行后续 migrate ，但开了分层后的 migrate for over load prior extent，假设分层之后的状态稳定，那 prior extent 作为 perf thick extent，也会参与后续的 migrate for rebalance 平衡，那好像就支持双活了
-5. 在分层升级过程中，prior extent 还属于 cap，所以可能还是得保留，即使是升级之后，他属于 perf，也得让 perf thick extent 的优先级在所有 perf extent 里最高，所以还是得保留一个独立的 migrate 策略，因为算他的负载跟算 perf extent 整体的负载并不一致，如果他两在一次里触发的话，可能会有冲突；
+1. 引入 migrate_reserve_space_map 和 migrate_generate_used_cmd_slots，
+
+   migrate_generate_used_cmd_slots 的作用，限制每个 chunk 的命令生成上限 ，比如在容量均衡迁移中，一个 chunk 由于负载低一直被分配 migrate cmd，但由于某种原因迁移老失败，那么会一直生成并下发这部分 migrate cmd，而集群中其他待迁移 pextent 没有机会被迁移；
+
+   > 这个单测可以用 migrate summary 来体现，不需要额外补充
+
+   一次扫描中，多个迁移策略会同时执行，均匀卷，优先卷，普通卷有可能会同时迁移，前一个策略生成的 migrate cmd 会影响到后一个策略的剩余可恢复空间的额度，需要正确预估剩余空间，否则可能出现迁移之后 chunk 进入更高负载的情况；
+
+   因为 migrate for rebalance 中不会迁移 prior 和 even extent，所以不需要在这计算 prior_remain_space
+
+   > 补上会有多种 migrate 在一次 migrate scan 中生成 migrate cmd 的单测， 和 repair topo 之间，做个单测验证先 migrate for prior extent 再 migrate for repair topo 会导致 prior 又进入 prior over load 的情况
+
+2. 为什么在 migrate for pair topo 和 rebalance 中不用考虑 prior remain space？后者是不会迁移 prior extent，前者会迁移，所以可能会导致 repair topo 后 dst chunk 进入 prior 高负载；
+
+3. ever exist = false 且 origin_pid = 0 的 pextent 在下发 reposition cmd 时才可以不用受 avail cmd slots 限制
+
+4. 在 migrate for prior extent 中引入 remain space map 来正确计算；
+
+5. 在 migrate 入口外面做一次 GetStoragePoolHealthyChunks，然后各个子 migrate 去用他；
+
+6. 调整 CalculateRemainSpace，另外，如果所有的 migrate 都会被 remain_space_map 限制，那就可以放到 UnableMigrateByCid() 中（这个就不用了，因为不同策略里的 remain 上限并不同）
+
+7. recover / migrate for removing chunk 用到的函数，是否可以拿回 recover_manager.cc 中？
+
+8. 先把 migrate for repair topo 拆出来给 review，另外是 migrate for rebalance，然后才是 migrate for localization；
+
+9. 让所有的 migrate 能共用一个 GetSrcCidForReplicaMigration
+
+10. 因为后续的操作不会去操作 even pextent，所以 migrate for even volume 执行完，后续可以接着执行后续 migrate ，但开了分层后的 migrate for over load prior extent，假设分层之后的状态稳定，那 prior extent 作为 perf thick extent，也会参与后续的 migrate for rebalance 平衡，那好像就支持双活了
+
+11. 在分层升级过程中，prior extent 还属于 cap，所以可能还是得保留，即使是升级之后，他属于 perf，也得让 perf thick extent 的优先级在所有 perf extent 里最高，所以还是得保留一个独立的 migrate 策略，因为算他的负载跟算 perf extent 整体的负载并不一致，如果他两在一次里触发的话，可能会有冲突；
+
 5. migrate 策略复杂的地方在于代码写的太面向过程了，已经要做面向对象抽象的
 
 
@@ -34,13 +56,11 @@ xx 1. 不开分层的 replica ，2. 开分层后的 cap replica，3. 开分层�
 
 
 
-1. 把 migrate for repair topo 和 rebalance 替换之后再做 generate_cmd_per_chunk_limit 的统一修改
 
-2. ever exist = false 且 origin_pid = 0 的 pextent 在下发 reposition cmd 时才可以不用受 avail cmd slots 限制
 
-3. ec migrate 目前的做法是 src_cid 一定等于 replace_cid，所以需要避免 ec migrate 的 replace cid 选 not healthy status/state 和 isolated 的 cid，等 ec access 支持用恢复的方式来做迁移，这个条件或许才能放开；
+1. ec migrate 目前的做法是 src_cid 一定等于 replace_cid，所以需要避免 ec migrate 的 replace cid 选 not healthy status/state 和 isolated 的 cid，等 ec access 支持用恢复的方式来做迁移，这个条件或许才能放开；
 
-1. zbs-meta chunk list_pids，显示所有 chunk 的更细粒度的空间显示，把各个 pids 和他们的 space 显示出来，包括有关 reposition cmd 空间大小；
+2. zbs-meta chunk list_pids，显示所有 chunk 的更细粒度的空间显示，把各个 pids 和他们的 space 显示出来，包括有关 reposition cmd 空间大小；
 
     zbs-meta chunk list 基本上把信息显示出来了，或者后续需要添加的，也应该放在那里。
 
@@ -52,17 +72,17 @@ xx 1. 不开分层的 replica ，2. 开分层后的 cap replica，3. 开分层�
 
     zbs-client-py 侧等待统一添加
 
-2. zbs-meta chunk list_pid < cid>，看指定 chunk 持有哪些不同种类的 pid，除了 ip + port 还要支持直接给定 cid；
+3. zbs-meta chunk list_pid < cid>，看指定 chunk 持有哪些不同种类的 pid，除了 ip + port 还要支持直接给定 cid；
 
     对应 rpc ListPid，这个可以考虑补充下显示 thin/thick 个数，以及 reserve_pids 这样的，涉及到跟以往的兼容，这边先不修改
 
-3. zbs-meta migrate < volume id> <replace_cid> <dst_cid>，尽量从 replace_cid 上移除，并尽量放到 dst_cid 上，不保证严格执行；
+4. zbs-meta migrate < volume id> <replace_cid> <dst_cid>，尽量从 replace_cid 上移除，并尽量放到 dst_cid 上，不保证严格执行；
 
     用于卸盘或其他临时移动卷到指定 dst，之后被 doscan 回去也没事，但如果这个要迁移的卷很大，无法快速完成就被 doscan 回去呢？
-    
+
     配合关闭迁移扫描再执行这个指令，可以达到临时移动 volume 的效果，迁移想要迁移的部分，不过这样或许得在入口处把人工触发迁移和周期性系统自动触发迁移做一下简单的区分。
 
-4. zbs-meta recover < volume_id> 想让这个 volume 优先被 recover；
+5. zbs-meta recover < volume_id> 想让这个 volume 优先被 recover；
 
     当有多个 volume 需要 recover，耗时太久时，可以优先 recover 指定卷上的 pextent
 
