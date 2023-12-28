@@ -19,6 +19,8 @@ xx 1. 不开分层的 replica ，2. 开分层后的 cap replica，3. 开分层�
    因为 migrate for rebalance 中不会迁移 prior 和 even extent，所以不需要在这计算 prior_remain_space
 
    > 补上会有多种 migrate 在一次 migrate scan 中生成 migrate cmd 的单测， 和 repair topo 之间，做个单测验证先 migrate for prior extent 再 migrate for repair topo 会导致 prior 又进入 prior over load 的情况
+   >
+   > migrate for prior extent 中有加避免 topo 降级的条件，migrate for rebalance 中直接把 prior extent 忽略了，所以 prior 只会在 migrate for prior over load extent 和 migrate for localization 中被迁移
 
 2. 为什么在 migrate for pair topo 和 rebalance 中不用考虑 prior remain space？后者是不会迁移 prior extent，前者会迁移，所以可能会导致 repair topo 后 dst chunk 进入 prior 高负载；
 
