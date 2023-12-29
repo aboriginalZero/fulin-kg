@@ -1,3 +1,12 @@
+剔副本的几种情况：
+
+1. sync gen 失败的副本；
+2. recover handler 在 SetupRecover 时遇到 lease 提供的 loc 中已经包含 dst cid 且 src cid 的 gen 是安全的；
+3. access io handler 在 write replica done 时会剔除写失败的副本；
+4. 临时副本重放完会被剔除。
+
+
+
 做 migrate for repair topo 和 rebalance 时，需要考虑以 chunk 为粒度的遍历
 
 xx 1. 不开分层的 replica ，2. 开分层后的 cap replica，3. 开分层后的 perf replica，4. 开分层后的 cap ec，他们的单测不适合合起来，因为如果之后 cap / perf 策略不同的话，还是得拆出来。
