@@ -31,13 +31,15 @@ xx 1. 不开分层的 replica ，2. 开分层后的 cap replica，3. 开分层�
    >
    > migrate for prior extent 中有加避免 topo 降级的条件，migrate for rebalance 中直接把 prior extent 忽略了，所以 prior 只会在 migrate for prior over load extent 和 migrate for localization 中被迁移
 
-2. 为什么在 migrate for pair topo 和 rebalance 中不用考虑 prior remain space？后者是不会迁移 prior extent，前者会迁移，所以可能会导致 repair topo 后 dst chunk 进入 prior 高负载；
+   现在打算把 get estimate chunk 做好，然后 calculate remain space 中就不用在把 reserve 那部分累加进来，为此需要改一下 migrate 入口
 
-3. ever exist = false 且 origin_pid = 0 的 pextent 在下发 reposition cmd 时才可以不用受 avail cmd slots 限制
+2. 用 MigrateCmdContext 改造 migrate for localization；
 
-4. 在 migrate for prior extent 中引入 remain space map 来正确计算；
+3. 为什么在 migrate for pair topo 和 rebalance 中不用考虑 prior remain space？后者是不会迁移 prior extent，前者会迁移，所以可能会导致 repair topo 后 dst chunk 进入 prior 高负载；
 
-5. 在 migrate 入口外面做一次 GetStoragePoolHealthyChunks，然后各个子 migrate 去用他；
+    在去掉 GetDstCandidates 时要注意在 migrate for repair topo 中也算上 remain prior space，用它做约束；
+
+4. 在 migrate for prior extent 中引入 remain space map 来正确计算（不一定需要，目前看他好像没啥问题）；
 
 6. 调整 CalculateRemainSpace，另外，如果所有的 migrate 都会被 remain_space_map 限制，那就可以放到 UnableMigrateByCid() 中（这个就不用了，因为不同策略里的 remain 上限并不同）
 
@@ -46,6 +48,8 @@ xx 1. 不开分层的 replica ，2. 开分层后的 cap replica，3. 开分层�
 8. 先把 migrate for repair topo 拆出来给 review，另外是 migrate for rebalance，然后才是 migrate for localization；
 
 9. 让所有的 migrate 能共用一个 GetSrcCidForReplicaMigration
+
+9. migrate for localization 中有 loose_medium_load_ratio 弹性边界的概念，其他 migrate 中不需要吗？
 
 10. 因为后续的操作不会去操作 even pextent，所以 migrate for even volume 执行完，后续可以接着执行后续 migrate ，但开了分层后的 migrate for over load prior extent，假设分层之后的状态稳定，那 prior extent 作为 perf thick extent，也会参与后续的 migrate for rebalance 平衡，那好像就支持双活了
 
@@ -92,6 +96,8 @@ xx 1. 不开分层的 replica ，2. 开分层后的 cap replica，3. 开分层�
     用于卸盘或其他临时移动卷到指定 dst，之后被 doscan 回去也没事，但如果这个要迁移的卷很大，无法快速完成就被 doscan 回去呢？
 
     配合关闭迁移扫描再执行这个指令，可以达到临时移动 volume 的效果，迁移想要迁移的部分，不过这样或许得在入口处把人工触发迁移和周期性系统自动触发迁移做一下简单的区分。
+
+    这是要让 pid 进入每个判断逻辑吗？因为没法像 recover list 那样可以直接放到 waiting list 然后生成 recover cmd，还是需要按照负载把这个 pid 放到各个子策略中。
 
 5. zbs-meta recover < volume_id> 想让这个 volume 优先被 recover；
 
