@@ -31,11 +31,13 @@ xx 1. 不开分层的 replica ，2. 开分层后的 cap replica，3. 开分层�
    >
    > migrate for prior extent 中有加避免 topo 降级的条件，migrate for rebalance 中直接把 prior extent 忽略了，所以 prior 只会在 migrate for prior over load extent 和 migrate for localization 中被迁移
 
-   现在打算把 get estimate chunk 做好，然后 calculate remain space 中就不用在把 reserve 那部分累加进来，为此需要改一下 migrate 入口
+   现在打算把 get estimate chunk 做好，然后 calculate remain space 中就不用在把 reserve 那部分累加进来，为此需要改一下 migrate 入口；
 
 2. refactor migrate for repair topo，从 GenerateMigrateCmdsForRepairTopo 开始改；
 
 2. ec migrate 目前的做法是 src_cid 一定等于 replace_cid，所以需要避免 ec migrate 的 replace cid 选 not healthy status/state 和 isolated 的 cid，等 ec access 支持用恢复的方式来做迁移，这个条件或许才能放开；
+
+2. 让各个 replica migrate 中的 replace cid should meet not healthy status/state，要除开 ec migrate；
 
 2. 改一下 migrate for even volume 的写法；
 
