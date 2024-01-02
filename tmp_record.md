@@ -33,7 +33,7 @@ xx 1. 不开分层的 replica ，2. 开分层后的 cap replica，3. 开分层�
 
    现在打算把 get estimate chunk 做好，然后 calculate remain space 中就不用在把 reserve 那部分累加进来，为此需要改一下 migrate 入口
 
-2. 用 MigrateCmdContext 改造 migrate for localization；
+2. refactor migrate for repair topo
 
 3. 为什么在 migrate for pair topo 和 rebalance 中不用考虑 prior remain space？后者是不会迁移 prior extent，前者会迁移，所以可能会导致 repair topo 后 dst chunk 进入 prior 高负载；
 
