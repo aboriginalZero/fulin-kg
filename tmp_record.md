@@ -31,9 +31,15 @@ xx 1. 不开分层的 replica ，2. 开分层后的 cap replica，3. 开分层�
    >
    > migrate for prior extent 中有加避免 topo 降级的条件，migrate for rebalance 中直接把 prior extent 忽略了，所以 prior 只会在 migrate for prior over load extent 和 migrate for localization 中被迁移
 
-   现在打算把 get estimate chunk 做好，然后 calculate remain space 中就不用在把 reserve 那部分累加进来，为此需要改一下 migrate 入口
+   现在打算把 get estimate chunk 做好，然后 calculate remain space 中就不用在把 reserve 那部分累加进来，为此需要改一下 migrate 入口；
 
-2. refactor migrate for repair topo
+2. refactor migrate for repair topo，从 GenerateMigrateCmdsForRepairTopo 开始改；
+
+2. ec migrate 目前的做法是 src_cid 一定等于 replace_cid，所以需要避免 ec migrate 的 replace cid 选 not healthy status/state 和 isolated 的 cid，等 ec access 支持用恢复的方式来做迁移，这个条件或许才能放开；
+
+2. 让各个 replica migrate 中的 replace cid should meet not healthy status/state，要除开 ec migrate；
+
+2. 改一下 migrate for even volume 的写法；
 
 3. 为什么在 migrate for pair topo 和 rebalance 中不用考虑 prior remain space？后者是不会迁移 prior extent，前者会迁移，所以可能会导致 repair topo 后 dst chunk 进入 prior 高负载；
 
@@ -73,9 +79,7 @@ xx 1. 不开分层的 replica ，2. 开分层后的 cap replica，3. 开分层�
 
 
 
-1. ec migrate 目前的做法是 src_cid 一定等于 replace_cid，所以需要避免 ec migrate 的 replace cid 选 not healthy status/state 和 isolated 的 cid，等 ec access 支持用恢复的方式来做迁移，这个条件或许才能放开；
-
-2. zbs-meta chunk list_pids，显示所有 chunk 的更细粒度的空间显示，把各个 pids 和他们的 space 显示出来，包括有关 reposition cmd 空间大小；
+1. zbs-meta chunk list_pids，显示所有 chunk 的更细粒度的空间显示，把各个 pids 和他们的 space 显示出来，包括有关 reposition cmd 空间大小；
 
     zbs-meta chunk list 基本上把信息显示出来了，或者后续需要添加的，也应该放在那里。
 
@@ -87,11 +91,11 @@ xx 1. 不开分层的 replica ，2. 开分层后的 cap replica，3. 开分层�
 
     zbs-client-py 侧等待统一添加
 
-3. zbs-meta chunk list_pid < cid>，看指定 chunk 持有哪些不同种类的 pid，除了 ip + port 还要支持直接给定 cid；
+2. zbs-meta chunk list_pid < cid>，看指定 chunk 持有哪些不同种类的 pid，除了 ip + port 还要支持直接给定 cid；
 
     对应 rpc ListPid，这个可以考虑补充下显示 thin/thick 个数，以及 reserve_pids 这样的，涉及到跟以往的兼容，这边先不修改
 
-4. zbs-meta migrate < volume id> <replace_cid> <dst_cid>，尽量从 replace_cid 上移除，并尽量放到 dst_cid 上，不保证严格执行；
+3. zbs-meta migrate < volume id> <replace_cid> <dst_cid>，尽量从 replace_cid 上移除，并尽量放到 dst_cid 上，不保证严格执行；
 
     用于卸盘或其他临时移动卷到指定 dst，之后被 doscan 回去也没事，但如果这个要迁移的卷很大，无法快速完成就被 doscan 回去呢？
 
@@ -99,7 +103,7 @@ xx 1. 不开分层的 replica ，2. 开分层后的 cap replica，3. 开分层�
 
     这是要让 pid 进入每个判断逻辑吗？因为没法像 recover list 那样可以直接放到 waiting list 然后生成 recover cmd，还是需要按照负载把这个 pid 放到各个子策略中。
 
-5. zbs-meta recover < volume_id> 想让这个 volume 优先被 recover；
+4. zbs-meta recover < volume_id> 想让这个 volume 优先被 recover；
 
     当有多个 volume 需要 recover，耗时太久时，可以优先 recover 指定卷上的 pextent
 
