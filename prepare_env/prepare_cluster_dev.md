@@ -239,15 +239,29 @@ promethus prometheus HC!r0cks ，http://meta_leader_mgt_ip:9090
 
 8. 若部署失败，清空重新部署
 
-    zbs-deploy-manage clear_deploy_tag
+    zbs-deploy-manage clear_deploy_tag，有开 nvmf 需要执行
 
-    rm -y /etc/zbs/uuid
+    rm -y /etc/zbs/uuid，嵌套集群，有虚拟机克隆的情况需要执行
 
-    systemctl restart zbs-deploy-server nginx
+    systemctl restart zbs-deploy-server nginx，有开 nvmf 需要执行
 
 9. 若部署成功，在所有机器上关机、打完快照再开始后续操作，便于操作失败回滚
 
 详细安装见[安装部署指南](http://docs.fev.smartx.com/smtxzbs/5.4.1/zbs_installation_guide/zbs_installation_guide_27)
+
+
+
+搭 xen 7.0 + scvm smtx 4.0.14 solution v2 的坑
+
+1. xen server 只安装在 SATA dom 上，一般是 sda，因为他的磁盘控制器跟其他磁盘并不一样，方便后续磁盘透传；
+2. 一定要把除 xen server 系统盘以外的所有的磁盘透传给 SCVM，通过 ls -lh /sys/block/* | grep pci 可以看到各个磁盘对应的磁盘控制器；
+3. 通过虚拟键盘按 F11 进入 BIOS，在引导界面通过 tab 或者 e 把 quiet 去掉，就可以看到安装流程了；
+4. NTP 可以从外部获取，选网关那台服务器就行，网关上一般会配 NTP；
+5. 第二套集群只有 2 个物理网口，所以不需要严格做 active-backup bonding（3 个及其上或许可以）；
+6. 网络掩码给定 255.255.240.0 后，10.1.1.2 和 10.1.1.3 不需要指定网关理论上也能互相 ping 通，而管理网需要给定网关，这样方便从集群外部通过 ssh 登陆上去；
+7. iSCSI/NFS 网络在 xen 环境下绑定的虚拟网卡必须是 disconnected，33.1 的下一跳如果是 33.2 不希望他从物理网卡发包出去；
+8. 要通过 mac 地址，而不是 ip 来验证网络配置是否正确；
+9. 在引导部署分布式系统前，要保证所有的 scvm 之间、所有 scvm 和 esxi 之间的 data ip 在同一网段且能互 ping，mgt ip 同理，否则部署一定会出错。mgt ip 的掩码可能是 255.255.240.0 也可能是 255.255.128.0；
 
 ---
 
