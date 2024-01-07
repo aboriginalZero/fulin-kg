@@ -1,83 +1,59 @@
-剔副本的几种情况：
+一步一步来，最终可以考虑重写个 reposition manager，里面有把 cap replica， cap ec shard, perf replica 做成 3 个类。 但在此之前，需要先把 3 个 migrate 弄成统一的接口，这样才能一步步演进，让所有的 migrate 能共用一个 GetSrcCidForReplicaMigration。
 
-1. sync gen 失败的副本；
-2. recover handler 在 SetupRecover 时遇到 lease 提供的 loc 中已经包含 dst cid 且 src cid 的 gen 是安全的；
-3. access io handler 在 write replica done 时会剔除写失败的副本；
-4. 临时副本重放完会被剔除。
+1. ec migrate 目前的做法是 src_cid 一定等于 replace_cid，所以需要避免各个 ec migrate 的 replace cid 选 not healthy status/state 和 isolated 的 cid，等 ec access 支持用恢复的方式来做迁移，这个条件才能放开；
 
-
-
-做 migrate for repair topo 和 rebalance 时，需要考虑以 chunk 为粒度的遍历
-
-xx 1. 不开分层的 replica ，2. 开分层后的 cap replica，3. 开分层后的 perf replica，4. 开分层后的 cap ec，他们的单测不适合合起来，因为如果之后 cap / perf 策略不同的话，还是得拆出来。
-
-涉及到容量均衡的才要区分是否双活，比如 even / prior / normal rebalance
-
-
-
-一步一步来，最终可以考虑重写个 reposition manager，里面有把 cap replica， cap ec shard, perf replica 做成 3 个类。 但在此之前，需要先把 3 个 migrate 弄成统一的接口，这样才能一步步演进。
-
-1. 引入 migrate_reserve_space_map 和 migrate_generate_used_cmd_slots，
-
-   migrate_generate_used_cmd_slots 的作用，限制每个 chunk 的命令生成上限 ，比如在容量均衡迁移中，一个 chunk 由于负载低一直被分配 migrate cmd，但由于某种原因迁移老失败，那么会一直生成并下发这部分 migrate cmd，而集群中其他待迁移 pextent 没有机会被迁移；
-
-   > 这个单测可以用 migrate summary 来体现，不需要额外补充
-
-   一次扫描中，多个迁移策略会同时执行，均匀卷，优先卷，普通卷有可能会同时迁移，前一个策略生成的 migrate cmd 会影响到后一个策略的剩余可恢复空间的额度，需要正确预估剩余空间，否则可能出现迁移之后 chunk 进入更高负载的情况；
-
-   因为 migrate for rebalance 中不会迁移 prior 和 even extent，所以不需要在这计算 prior_remain_space
-
-   > 补上会有多种 migrate 在一次 migrate scan 中生成 migrate cmd 的单测， 和 repair topo 之间，做个单测验证先 migrate for prior extent 再 migrate for repair topo 会导致 prior 又进入 prior over load 的情况
-   >
-   > migrate for prior extent 中有加避免 topo 降级的条件，migrate for rebalance 中直接把 prior extent 忽略了，所以 prior 只会在 migrate for prior over load extent 和 migrate for localization 中被迁移
-
-   现在打算把 get estimate chunk 做好，然后 calculate remain space 中就不用在把 reserve 那部分累加进来，为此需要改一下 migrate 入口；
+    另外，让各个 replica migrate 中的 replace cid should meet not healthy status/state，要除开 ec migrate；
 
 2. refactor migrate for repair topo，从 GenerateMigrateCmdsForRepairTopo 开始改；
 
-2. ec migrate 目前的做法是 src_cid 一定等于 replace_cid，所以需要避免 ec migrate 的 replace cid 选 not healthy status/state 和 isolated 的 cid，等 ec access 支持用恢复的方式来做迁移，这个条件或许才能放开；
+    1. 在去掉 GetDstCandidates 时要注意在 migrate for repair topo 中也算上 remain prior space，用它做约束；
 
-2. 让各个 replica migrate 中的 replace cid should meet not healthy status/state，要除开 ec migrate；
+    2. 待做 [ZBS-13401](http://jira.smartx.com/browse/ZBS-13401)，让中高负载的容量均衡策略都要保证 prefer local 本地的副本不会被迁移，且如果 prefer local 变了，那么也要让他所在的 chunk 有一个本地副本（有个上限是保留归保留，但如果超过 95%，超过的 部分不考虑 prefer local 一定有对应的副本）
 
-2. 改一下 migrate for even volume 的写法；
+        怎么判断是否会超过 95% 呢？
 
-3. 为什么在 migrate for pair topo 和 rebalance 中不用考虑 prior remain space？后者是不会迁移 prior extent，前者会迁移，所以可能会导致 repair topo 后 dst chunk 进入 prior 高负载；
+        如果 volume 的 prefer local 到新 chunk 后（不论是人为运维还是上层虚拟机被迁移到其他节点），现有的迁移策略能让新位置的 prefer local 有副本吗？
 
-    在去掉 GetDstCandidates 时要注意在 migrate for repair topo 中也算上 remain prior space，用它做约束；
+        如果不能，在 migrate for rebalance 之后，再有一个 migrate for prefer local，他的目的是保证让 prefer local 有副本，
 
-4. 在 migrate for prior extent 中引入 remain space map 来正确计算（不一定需要，目前看他好像没啥问题）；
+        [ZBS-25949](http://jira.smartx.com/browse/ZBS-25949) 修改后的 migrate for repair topo 能够达到的效果是不会 replace prefer local，在 prefer local 满足 topo rank 不降级的情况下，dst 会优先选 prefer local，貌似能达到这个效果？双活下也可以吗？prefer local 从 prefer zone 迁移到 secondary zone。
 
-6. 调整 CalculateRemainSpace，另外，如果所有的 migrate 都会被 remain_space_map 限制，那就可以放到 UnableMigrateByCid() 中（这个就不用了，因为不同策略里的 remain 上限并不同）
+3. refactor migrate for rebalance
 
-7. recover / migrate for removing chunk 用到的函数，是否可以拿回 recover_manager.cc 中？
+    1. [ZBS-26042](http://jira.smartx.com/browse/ZBS-26042) 还缺一个 even volume 的 ut 验证 [ZBS-25847](http://jira.smartx.com/browse/ZBS-25847)
 
-8. 先把 migrate for repair topo 拆出来给 review，另外是 migrate for rebalance，然后才是 migrate for localization；
+    2. rebalance 时能 recover jiewei 发现的问题，机架 A 有节点 1 2 3 4，机架 B 有节点 5 6 7 ，normal extent 容量均衡会去算一个 avg_load，B 上的节点负载都大于 avg_load，A 上的都小于 avg_load，5 容量不够了，只能往 1 2 3 4 迁，但是他们都在 A 上，由于 topo 降级所以都没法迁。改进使得 5 可以向 6/7 上迁。
 
-9. 让所有的 migrate 能共用一个 GetSrcCidForReplicaMigration
+        even volume 中的做法应该能实现这个效果，参考即可。
 
-9. migrate for localization 中有 loose_medium_load_ratio 弹性边界的概念，其他 migrate 中不需要吗？
+4. 改一下 migrate for even volume 的写法，指的是 vector 变 array ?
 
-10. 因为后续的操作不会去操作 even pextent，所以 migrate for even volume 执行完，后续可以接着执行后续 migrate ，但开了分层后的 migrate for over load prior extent，假设分层之后的状态稳定，那 prior extent 作为 perf thick extent，也会参与后续的 migrate for rebalance 平衡，那好像就支持双活了
+5. 在 migrate for prior extent 中引入 remain space map 来正确计算（不一定需要，目前看他好像没啥问题）；
 
-11. 在分层升级过程中，prior extent 还属于 cap，所以可能还是得保留，即使是升级之后，他属于 perf，也得让 perf thick extent 的优先级在所有 perf extent 里最高，所以还是得保留一个独立的 migrate 策略，因为算他的负载跟算 perf extent 整体的负载并不一致，如果他两在一次里触发的话，可能会有冲突；
+    目前 migrate 中的逻辑是每次获取一个 pid 的 entry 都要通过 GetPhysicalExtentTableEntry 调用一次锁，但在 prior  extent 的迁移中，可以批量获取 diff_pids 中所有的 pentry，因此可以相应做优化。
 
-5. migrate 策略复杂的地方在于代码写的太面向过程了，已经要做面向对象抽象的
+6. recover / migrate for removing chunk 用到的函数，是否可以拿回 recover_manager.cc 中？
+
+    暂时不需要，拿回来的好处是啥呢？
+
+7. migrate for localization 中有 loose_medium_load_ratio 弹性边界的概念，其他 migrate 中不需要吗？
+
+    检查一下其他 migrate 中是否都像 migrate for even volume 那样允许 4 个 pextent 级别的不均匀。
+
+8. 因为后续的操作不会去操作 even pextent，所以 migrate for even volume 执行完，后续可以接着执行后续 migrate ，但开了分层后的 migrate for over load prior extent，假设分层之后的状态稳定，那 prior extent 作为 perf thick extent，也会参与后续的 migrate for rebalance 平衡，那好像就支持双活了
+
+9. 在分层升级过程中，prior extent 还属于 cap，所以可能还是得保留，即使是升级之后，他属于 perf，也得让 perf thick extent 的优先级在所有 perf extent 里最高，所以还是得保留一个独立的 migrate 策略，因为算他的负载跟算 perf extent 整体的负载并不一致，如果他两在一次里触发的话，可能会有冲突；
+
+10. migrate 策略复杂的地方在于代码写的太面向过程了，已经要做面向对象抽象的，只把 MigrateFilter 抽象出来；
+
+11. migrate for localization
+
+     1. 针对 ec 的 best topo distance 的计算，斯坦纳树问题，对应的 DP 做法 Dreyfus-Wagner 算法。yutian 说最新做法是从拓扑学的角度出发的，现有代码已经是最优解而非近似计算了
+     2. 重构 recover manager 时，需要考虑 prior extent 不需要在低负载下支持局部化，master 分支上目前还是支持，但 5.5.x 已经不支持了
 
 
 
-1. 待做 [ZBS-13401](http://jira.smartx.com/browse/ZBS-13401)，让中高负载的容量均衡策略都要保证 prefer local 本地的副本不会被迁移，且如果 prefer local 变了，那么也要让他所在的 chunk 有一个本地副本（有个上限是保留归保留，但如果超过 95%，超过的 部分不考虑 prefer local 一定有对应的副本）
-
-   怎么判断是否会超过 95% 呢？
-
-2. rebalance 时能 recover jiewei 发现的问题，机架 A 有节点 1 2 3 4，机架 B 有节点 5 6 7 ，normal extent 容量均衡会去算一个 avg_load，B 上的节点负载都大于 avg_load，A 上的都小于 avg_load，5 容量不够了，只能往 1 2 3 4 迁，但是他们都在 A 上，由于 topo 降级所以都没法迁。改进使得 5 可以向 6/7 上迁。
-
-   even volume 中的做法应该能实现这个效果，参考即可。
-
-3. 后续可以改进容量均衡迁移中 replace chunk 和 dst chunk 1 1 配对，可以改成尽可能让多个 src_cid 参与进来，除非所有 under chunk 都不行，才退出循环。（其实下一轮就会用上的）
-
-
-
-
+命令行相关
 
 1. zbs-meta chunk list_pids，显示所有 chunk 的更细粒度的空间显示，把各个 pids 和他们的 space 显示出来，包括有关 reposition cmd 空间大小；
 
@@ -107,13 +83,23 @@ xx 1. 不开分层的 replica ，2. 开分层后的 cap replica，3. 开分层�
 
     当有多个 volume 需要 recover，耗时太久时，可以优先 recover 指定卷上的 pextent
 
+5. zbs-meta recover set_runtime <start_hour> <end_hour>
+
+    默认是 [0, 23]，左右闭区间，参考 taskd 中的实现，[ZBS-10973](http://jira.smartx.com/browse/ZBS-10973) 
+
+    副本是期望 3，剩余 2 要恢复，EC 则是丢失 m 个 shard 还是 1 个？
+
+    是否也考虑做一个 zbs-meta migrate set_runtime <start_hour> <end_hour>，否则在业务高峰期带宽也有可能被 migrate io 抢占，但是 repair topo 应该是不希望关闭的吧？
+
+    往 UpdatableRecoverParams 中增加 2 个字段，start hour  end_hour。同时，通过这个 patch 改 recover 的触发策略，IsNeedRecover。
+
+    单测要写在 function_test 中
+
 
 
 做一次冲突检查，合法且和当前恢复不冲突，prefer local 和 topo 相关的不管。
 
 ZBS-20993，允许 RPC 产生恢复/迁移命令，可以指定源和目的地，在运维场景或许会有用。
-
-
 
 
 
@@ -151,100 +137,12 @@ recover_handler_.migrate_throughput_in_last_duration() >
 migrate_speed_limit * kRepositionIOPercentThrottle
 ```
 
-
-
-避免某些 pid / volume migrate 迟迟不完成造成集群整体的 migrate 阻塞
-
-1. migrate for chunk removing，没必要添加，因为只要有 chunk removing，就会一直执行这种 migrate，其他 mgirate 没有机会执行，直到他的数据迁移完了，他的 state / status 状态变更后，才会跳过这个 migrate；
-
-    > 这个情况，不对 replace cid 做限制，但对 src 和 dst 做限制
-
-2. migrate for even volume，需要添加，如果一个 even volume 占用了所有的 quota 且一直没法完成，其他 even volume 没有机会做 migrate 的情况，甚至下面的几种 migrate 也一直没有机会；
-
-    需要有一个 chunk 的上限，避免一个 chunk 一直无法完成，一直产生给他的 migrate cmd 把 quota 占满；
-
-    1. migrate for even volume repair topo，不需要有，但调用了 GetSrcCidForReplicaMigration() 默认就会有，看起来还是需要在 GetSrcCidForReplicaMigration() 里加个是否启用的 flag，因为后续 for localization 也会用到；
-    2. migrate for even volume rebalance，需要有 chunk 上限的限制；
-
-3. migrate for over load prior extent，需要添加，因为如果一个节点负载比较高的节点消耗了所有 quota，且一直难以完成，那么其他节点都没有机会做 migrate；
-
-4. migrate for localization，不需要添加，因为按 pid 为粒度扫描，当前几个无法完成不会影响到其他 pid migrate cmd 下发；
-
-5. migrate for repair topo，不需要添加，因为按 pid 为粒度扫描，当前几个无法完成不会影响到其他 pid migrate cmd 下发；
-
-6. migrate for rebalance，需要添加，因为如果一个负载比较高的节点消耗了所有 quota，且一直难以完成，那么其他节点都没有机会做 migrate；
-
-结论：给所有 migrate 都添加 generate_cmds_per_chunk_limit_ ，但他的值不支持自调节，只是 generate_cmds_per_round_limit_ / 2，引入 generate_cmds_per_chunk_limit_ 的目的是避免一个节点用完所有的 generate quota 而其他节点 / migrate 没有机会生成。
-
-* 以 pid 为粒度扫描的，用 next_xxx_scan_pid_map 来避免让某些 pid migrate 影响到整体，next_xxx_scan_pid_map 保留现状，他其实不需要 generate_cmds_per_chunk_limit_，但为了便于理解，还是加上吧；
-* 以 chunk + pid 为粒度扫描的，用 randint + generate_cmds_per_chunk_limit_ 来避免某些 pid 阻塞导致其他 chunk / pid 没机会 migrate；
-
-
-
-1. access recover read 是 extent 粒度，write 是 block 粒度？
-
-2. 为什么 AllocRecoverForAgile 中一定不会有 prior extent？
-
-3. 在 HasSpaceForCow() 为什么用的是 total_data_capacity 而不是 valid_data_space ？
-
-4. 为什么对节点进入超高负载的判断用的是 used_data_space 而不是 allocated_data_space？
-
-    改进迁移策略，在节点上待回收数据较多时（已经使用的数据空间占比超过 95%），如果集群没有进入极高负载状态（整体空间分配比例达到 90%），不向该节点迁移数据以保证回收顺利进行。
-
-    lsm1 回收空间的速率非常慢，所以如果删除一个 extent，存在 chunk 的 provisioned space 会减少（分配数据空间比例在减小），但 used space 可能仍然很高的情况，如果这时集群上的其他节点向它迁移数据，会进一步降低回收速率。
-
-    在 Migrate 时进行检查，如果集群整体尚有可用空间时比如整体 provisioned 比例在 90% 以下，不向 Used Space 比例大于 95% 的节点迁移数据，即便 Provsioned 比较低。
-
-    
-
 recover > sink > migrate
 
 分层之后，io 分成 app io, recover io 和 sink io 共 3 种。其中，app io 优先级最高，sink io 保其它副本的性能，recover io 保副本安全，在不同场景下的优先级应该不一样
 
 1. 若 app io 流量较小，此时业务不应该让 recover io；
 2. recover 的默认值是上限的 0.2，migrate 是 0.1；
-
-
-
-[ZBS-26042](http://jira.smartx.com/browse/ZBS-26042) 还缺一个 even volume 的 ut 验证 [ZBS-25847](http://jira.smartx.com/browse/ZBS-25847)
-
-针对 ec 的 best topo distance 的计算，斯坦纳树问题，对应的 DP 做法 Dreyfus-Wagner 算法。yutian 说最新做法是从拓扑学的角度出发的，现有代码已经是最优解而非近似计算了
-
-
-
-1. recover 支持分批扫描
-
-   比较纠结的是，目前 recover_manager 中 scan_extents_per_round_limit 这个参数只限制了 recover / migrate for localization / migrate for repair topo 一次扫描的 pextent 数量，而对其他类型的 migrate （如 migrate for even volume/ prior extent / rebalance）并没有做限制，这让他的语义并不完整。
-
-   需要在其他 migrate 中加上这个限制
-
-6. reposition params 支持分层
-
-    分层之后，perf speed limit 与 cap speed limit 必然不同，但是要怎么限制呢？
-
-    分层之后，盘就是分开用了，perf 层用 ssd，cap 层用 hdd
-
-    补充对应的单测
-
-    access_io_stats.h 中 access_io_perf_t 和 access_io_stats_t 的区别？前者在 zbs 内部用，后者好像是给 zbs 外部用的
-
-    变量  to_submit_iocbs_ 看起来不是线程安全的，还是说他不需要保证线程安全，access_handler 和 local_io_handler 和 temporary_replica_io_handler 等都是在一个线程？
-
-3. 重构 recover manager 时，需要考虑 prior extent 不需要在低负载下支持局部化，master 分支上目前还是支持，但 5.5.x 已经不支持了
-
-
-
-单测里面
-
-```cpp
-// 验证双活生效
-RecoverManager* recover_manager = GetMetaContext().recover_manager;
-
-// 验证 GFLAGS 更改生效
-RecoverManager recover_manager(&(GetMetaContext()));
-
-改用 CO_TEST_F 开头好像就可以了
-```
 
 
 
@@ -277,56 +175,38 @@ rx_pids -> dst_pids，tx_pids -> replace_cids, recover_src_pids -> src_pids
 
 策略类梳理（seq means prior）
 
-1. 通过 rpc 显示指定的 recover cmd（这个不一定要支持）
-
-2. 周期性扫描产生的 recover cmd
+1. 周期性扫描产生的 recover cmd
 
     待做 [ZBS-21199](http://jira.smartx.com/browse/ZBS-21199)，支持设置允许 recover 的时段，不在该时段内仅做 partial recover。在判断每个 pid 是否需要 recover 时，每个 pid 拿到 pentry 的时候就可以判断如果期望副本是 3 而目前副本是 2 时，不用触发 recover。
 
     往 UpdatableRecoverParams 中增加 2 个字段，start hour  end_hour。同时，通过这个 patch 改 recover 的触发策略，IsNeedRecover。
 
-3. 预期内的节点下线
-
-    ReGenerateMigrateForRemovingChunk()
-
-    待做 [ZBS-21443](http://jira.smartx.com/browse/ZBS-21443)，节点移除还要考虑其他节点的负载情况。
-
-    因为节点移除时，他上面的副本需要尽快迁移完，否则不会执行下一条命令（zbs-deploy-manage meta_remove_node < storage ip>）。从存储池中移除节点的时候，仅考虑 migrate dst cid 在不迁出副本的情况下是否可以容纳待迁移的数据，但这样可能导致 dst cid 超高负载或满载后，副本还没迁移完。
-
-    例如节点 a b c d ，存在大量 extent 的 3 副本分布在 b c d，此时移除 c，只能向 a 迁移，a 如果容量较小，可能会被 c 来的数据填满，此时可以将 a 上的 2 副本 pextent 移到 b 或 d，以腾出空间给的 c 迁移过来的 3 副本 pextent。
-
-    这个问题可以泛化成，有节点 a - e，如果有 100w 个 pextent  副本分布在 a b c，此时移除 a，只能往 d e 上迁移，而如果 d e 的容量远比 a b c 小，a 上的 pextent 容量远超过 d + e，而一个出现 removing chunk 直到他迁移结束，容量均衡并没有机会被执行，所以这个 removing chunk 可能一直不会完成。引入 ec 之后，这个问题触发的概率会更高。
-
-    需要确认一下 a 在作为 migrate dst 且进入超高负载时，是否有机会把自己可迁移的数据迁移出去。
-
-    要在这个逻辑里加上，到了超高负载时，允许在 removing chunk 的过程中先执行 replace_cid 为 a 的 ReGenerateMigrateForBalanceInStoragePool
-
-4. 通过 rpc 显示指定的 migrate cmd
+2. 通过 rpc 显示指定的 migrate cmd
 
     待做 [ZBS-20993](http://jira.smartx.com/browse/ZBS-20993)，允许 rpc 触发 migrate 命令，应该可以和预期内的节点下线合在一起做，因为他们的优先级都会更高，需要马上看到迁移效果
 
-    可以对外做 2 个接口，一个是 pid 为粒度的，一个是 volume 为粒度的（MigrateForVolumeRemoving）
+    仅支持 volume 粒度的就好（MigrateForVolumeRemoving）
 
     需要支持 prior volume 吗？
 
     可能需要把 std::list < RecoverCmd> 改成 hashmap
 
-5. 低负载
+3. 低负载
 
     ReGenerateMigrateForLocalizeInStoragePool()，让副本位置符合 LocalizedComparator
 
-6. 中高负载
+4. 中高负载
 
     中高负载目前实际上的区别仅在：
 
     1. 中负载每 1h 扫描一次，高负载每 5min 扫描一次；
     2. 中负载不移动 local 和 parent 的 pextent，高负载会移动；
-    
+
     如果 ReGenerateMigrateForRepairTopo 生成了 cmd，那么只生成这个目标的 cmd，否则试图去生成 ReGenerateMigrateForBalanceInStoragePool 的 cmd。需要对 ReGenerateMigrateForBalanceInStoragePool() 改进，先保证都有本地副本，再去做容量均衡。
-    
+
     待做 [ZBS-13401](http://jira.smartx.com/browse/ZBS-13401)，让中高负载的容量均衡策略都要保证 prefer local 本地的副本不会被迁移，且如果 prefer local 变了，那么也要让他所在的 chunk 有一个本地副本（有个上限是保留归保留，但如果超过 95%，超过的 部分不考虑 prefero local 一定有对应的副本）。
 
-7. 超高负载
+5. 超高负载
 
     跳过 topo repair 扫描，只做 ReGenerateMigrateForBalanceInStoragePool()
 
@@ -347,13 +227,13 @@ rx_pids -> dst_pids，tx_pids -> replace_cids, recover_src_pids -> src_pids
    1. 高负载情况下，prefer local 的数据会被迁移；
    2. 虚拟机热迁移（用户操作、无法干预）且处于高负载，此时不会做 prefer local 的副本迁移。
 
-2. ZBS-21443、ZBS-20993
+2. ZBS-20993
 
 3. ZBS-21199
 
 
 
-改 Prefer Local / TopoAware / Localized 三个比较器名字，[ZBS-25802](
+改 Prefer Local / TopoAware / Localized 三个比较器名字，ZBS-25802
 
 如果都给了 topology 且两个副本的 zone distance, topo distance 都相同的情况下，LocalizedComparator 和 TopoAwareComparator 区别在于：
 
@@ -460,13 +340,31 @@ recover manager 中 recover 和 migrate 的不同之处：
 2. recover 的那个扫描只是一个非常浅的过滤 extent，分配 src dst 是在下发阶段，migrate 的 src dst 在扫描阶段就定下来了。不论是 recover 还是 migrate，下发阶段都会根据 avail_cmd_slots 过滤命令，另外在放到 session 的 queue 之前还有可能根据 lease owner 改 src，被 space 过滤
 2. recover 是可以跨 zone，topo 降级的，但是 migrate 在 2 : 1 的情况下不会有跨域 migrate，且 migrate 需要满足 topo 安全
 2. 理论上 migrate 也应该把 generate 和 distribute 合在一起，但 generate migrate cmd 相较于 migrate 策略  更复杂，计算复杂度更高，如果合在一起会卡很久。
-2. chunk removing 要求尽快迁移，所以不考虑 topo 安全，跟 recover 用的同一个选择策略，
+2. chunk removing 要求尽快迁移，所以不考虑 topo 安全，跟 recover 用的同一个选择策略
 
 
 
-1. 现有代码在 EnqueueCmd 的时候会将 migrate src_cid 设置成 lease owner，但如果 src_cid 跟 dst_cid 跨 zone，或者是 failslow，（他可能没有 cmd quota 了，不过这个条件在生成时是硬性规定的，派发时倒不用）这么选还是好事吗？
-2. 目前 migrate 中的逻辑是每次获取一个 pid 的 entry 都要通过 GetPhysicalExtentTableEntry 调用一次锁，但在 prior  extent 的迁移中，可以批量获取 diff_pids 中所有的 pentry，因此可以相应做优化。
-3. GenerateRecoverCmds 里面的 src 也可以有选择策略的，目前的写法太乱了。
+避免某些 pid / volume migrate 迟迟不完成造成集群整体的 migrate 阻塞：
+
+* 以 pid 为粒度扫描的，用 next_xxx_scan_pid_map 来避免让某些 pid migrate 影响到整体，next_xxx_scan_pid_map 保留现状，他其实不需要 generate_cmds_per_chunk_limit_，但为了便于理解，还是加上吧；
+* 以 chunk + pid 为粒度扫描的，用 randint + generate_cmds_per_chunk_limit_ 来避免某些 pid 阻塞导致其他 chunk / pid 没机会 migrate；
+
+
+
+剔副本的 4 种情况：
+
+1. sync gen 失败的副本；
+2. recover handler 在 SetupRecover 时遇到 lease 提供的 loc 中已经包含 dst cid 且 src cid 的 gen 是安全的；
+3. access io handler 在 write replica done 时会剔除写失败的副本；
+4. 临时副本重放完会被剔除。
+
+
+
+做 migrate for repair topo 和 rebalance 时，需要考虑以 chunk 为粒度的遍历，其他的考虑以 pid 为粒度遍历就好。
+
+xx 1. 不开分层的 replica ，2. 开分层后的 cap replica，3. 开分层后的 perf replica，4. 开分层后的 cap ec，他们的单测不适合合起来，因为如果之后 cap / perf 策略不同的话，还是得拆出来。
+
+涉及到容量均衡的才要区分是否双活，比如 even / prior / normal rebalance
 
 
 
@@ -502,12 +400,43 @@ gtest系列之事件机制
 
 3. lsm 测跟 dongdong 的聊天内容
 
-   meta 侧空间计算中的字段含义，
-   [快照/克隆对空间参数的影响](https://docs.google.com/document/d/1oOZ6CENaLFBU_AG6tZ4nnxv1CFUNvv3ND_NWVGVN2PY/edit#heading=h.x0vh71hjzfds)
+   meta 侧空间计算中的字段含义，[快照/克隆对空间参数的影响](https://docs.google.com/document/d/1oOZ6CENaLFBU_AG6tZ4nnxv1CFUNvv3ND_NWVGVN2PY/edit#heading=h.x0vh71hjzfds)
+   
+4. 目前遇到的高负载下不迁移：要么 topo 降级了，要么 lease owner 没释放，要么是双活只能在单 zone 内迁移
 
-4. migrate 这段时间的跟 zhiwei 的聊天，smtxos 和 pin test 频道中的 case 整理
+4. 后续写文档可以考虑的组织方式
 
-   目前遇到的高负载下不迁移：要么 topo 降级了，要么 lease owner 没释放，要么是双活只能在单 zone 内迁移
+   1. migrate for removing chunk
+   2. migrate for no-removing chunk
+      1. migrate for even volumes
+      2. migrate for uneven volumes
+         1. migrate for over load prior extents
+         2. migrate for normal extents
+            1. normal low
+               1. migrate for localization
+   
+            2. normal mediun / high / very high
+               1. migrate for repair topo, it generated, return
+               2. migrate for rebalance
+   
+   
+   先介绍所有 sub migrate strategies 中共有的限制条件：
+   
+   1. failslow
+       1. must not be dst;
+       2. should not be src/replace in ec migrate;
+       3. should not be src, should be replace in replica migrate;
+   2. src select 是共有的
+   3. 介绍 src / dst / replace 通用的选择策略，然后再分别介绍各个部分中独有的
+   4. EnqueueCmd 的时候会将 migrate src_cid 设置成 lease owner，所以以上选到的 mgirate src 不一定就是最后给到 access 时的 src
+
+
+
+遗留问题：
+
+1. access recover read 是 extent 粒度，write 是 block 粒度？
+2. 为什么 AllocRecoverForAgile 中一定不会有 prior extent？
+3. 在 HasSpaceForCow() 为什么用的是 total_data_capacity 而不是 valid_data_space ？
 
 
 
