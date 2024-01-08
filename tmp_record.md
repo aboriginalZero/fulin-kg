@@ -4,6 +4,10 @@
 
     另外，让各个 replica migrate 中的 replace cid should meet not healthy status/state，要除开 ec migrate；
 
+    在 refactor migrate for repair topo 后，要添加 ec shard 的 replace 一定等于 src，在 healthy 等条件不同时的单测。
+
+    把他跟 src 分开，src
+
 2. refactor migrate for repair topo，从 GenerateMigrateCmdsForRepairTopo 开始改；
 
     1. 在去掉 GetDstCandidates 时要注意在 migrate for repair topo 中也算上 remain prior space，用它做约束；
