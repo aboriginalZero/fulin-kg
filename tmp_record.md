@@ -87,7 +87,7 @@
 
     默认是 [0, 23]，左右闭区间，参考 taskd 中的实现，[ZBS-10973](http://jira.smartx.com/browse/ZBS-10973) 
 
-    副本是期望 3，剩余 2 要恢复，EC 则是丢失 m 个 shard 还是 1 个？
+    副本是期望 3，剩余 2 要恢复，EC 则是期望 m >= 2，允许丢失 m - 1 个 shard 
 
     是否也考虑做一个 zbs-meta migrate set_runtime <start_hour> <end_hour>，否则在业务高峰期带宽也有可能被 migrate io 抢占，但是 repair topo 应该是不希望关闭的吧？
 
@@ -347,7 +347,12 @@ recover manager 中 recover 和 migrate 的不同之处：
 避免某些 pid / volume migrate 迟迟不完成造成集群整体的 migrate 阻塞：
 
 * 以 pid 为粒度扫描的，用 next_xxx_scan_pid_map 来避免让某些 pid migrate 影响到整体，next_xxx_scan_pid_map 保留现状，他其实不需要 generate_cmds_per_chunk_limit_，但为了便于理解，还是加上吧；
+
+  migrate for removing chunk / localization / repair topo / even volume repair topo
+
 * 以 chunk + pid 为粒度扫描的，用 randint + generate_cmds_per_chunk_limit_ 来避免某些 pid 阻塞导致其他 chunk / pid 没机会 migrate；
+
+  migrate for over load prior extent / balance / even volume balance
 
 
 
