@@ -418,14 +418,16 @@ gtest系列之事件机制
    1. migrate for removing chunk
    2. migrate for no-removing chunk
       1. migrate for even volumes
+         1. migrate for even volumes repair topo
+         2. migrate for even volumes rebalance
       2. migrate for uneven volumes
          1. migrate for over load prior extents
-         2. migrate for normal extents
+         2. migrate for normal (cap / perf) extents ( 1. cap layer 2. perf layer )
             1. normal low
                1. migrate for localization
-   
+      
             2. normal mediun / high / very high
-               1. migrate for repair topo, it generated, return
+               1. migrate for repair topo
                2. migrate for rebalance
    
    
