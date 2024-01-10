@@ -1,3 +1,11 @@
+1. migrate / recover dst 要根据 ever exist = true 否 false 分别从 alive loc 和 loc 中选；
+
+   git stash save zbs2，On ZBS-26732-2: filter stale reposition cmd before distributing
+
+2. even migrate 暴露出来的还有 2 个问题；
+
+3. prior migrate 设计；
+
 一步一步来，最终可以考虑重写个 reposition manager，里面有把 cap replica， cap ec shard, perf replica 做成 3 个类。 但在此之前，需要先把 3 个 migrate 弄成统一的接口，这样才能一步步演进，让所有的 migrate 能共用一个 GetSrcCidForReplicaMigration。
 
 1. ec migrate 目前的做法是 src_cid 一定等于 replace_cid，所以需要避免各个 ec migrate 的 replace cid 选 not healthy status/state 和 isolated 的 cid，等 ec access 支持用恢复的方式来做迁移，这个条件才能放开；
