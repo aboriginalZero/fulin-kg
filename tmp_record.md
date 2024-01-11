@@ -1,3 +1,62 @@
+操作步骤
+
+1. 下载补丁包到各个 scvm 的 /tmp 目录，（或许要提供 md5 值？）
+
+   ```shell
+   # 检查是否存在 
+   ls /tmp/scvm_failure_common.tar
+   ```
+
+2. 对各个 scvm 节点
+
+   ```shell
+   # 在所有 scvm 节点上，进入到此目录
+   cd /usr/share/tuna/script
+   
+   # 在所有 scvm 节点上，将已有 io reroute 脚本备份
+   rm -rf /home/smartx/scvm_failure_common.bak && mv scvm_failure_common /home/smartx/scvm_failure_common.bak
+   
+   # 在所有 scvm 节点上，解压到 /usr/share/tuna/script 目录
+   tar -xvf /tmp/scvm_failure_common.tar -C .
+   
+   # 在所有 scvm 节点上，确保补丁包的 reroute version 是 1.5.1，执行后续操作
+   cat scvm_failure_common/reroute_version
+   
+   # 在所有 scvm 节点上，清空已有 ioreroute 脚本及服务
+   zbs-deploy-manage clear-hypervisor
+   
+   # 重新部署 ioreroute 脚本并启动服务
+   # 任选一个 scvm 上节点执行
+   zbs-deploy-manage deploy-hypervisor --gen_ssh_key
+   # 在剩下的 N - 1 个 scvm 上节点执行
+   zbs-deploy-manage deploy-hypervisor
+   ```
+
+3. 对各个 xen server 节点
+
+   ```shell
+   # 在所有的 xen server 节点上，观察 io reroute 输出日志
+   tail -f /var/log/scvm_failure.log
+   ```
+
+   若出现 “the session of local scvm is not stable”，那么等待 3 分钟， 查看 192.168.33.2 的下一跳是否能指向本地 scvm 存储 ip，预期出现如下日志：
+
+   ```
+   Thu Jan 11 12:40:01 CST 2024 [+] local scvm active, try to route to local scvm
+   Thu Jan 11 12:40:01 CST 2024 [+] try to delete route
+   Thu Jan 11 12:40:01 CST 2024 [+] trying to del route 192.168.33.2 --> 10.10.130.219
+   Thu Jan 11 12:40:01 CST 2024 [+] delete route success
+   Thu Jan 11 12:40:01 CST 2024 [+] try add route:
+   Thu Jan 11 12:40:01 CST 2024 [+] trying to add route from 192.168.33.2 to 10.10.130.218
+   Thu Jan 11 12:40:01 CST 2024 [+] add route succss
+   ```
+
+   
+
+
+
+
+
 1. migrate / recover dst 要根据 ever exist = true 否 false 分别从 alive loc 和 loc 中选；
 
    git stash save zbs2，On ZBS-26732-2: filter stale reposition cmd before distributing
