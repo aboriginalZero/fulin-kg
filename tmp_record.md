@@ -61,9 +61,17 @@
 
    git stash save zbs2，On ZBS-26732-2: filter stale reposition cmd before distributing
 
-2. even migrate 暴露出来的还有 2 个问题；
+2. even migrate 暴露出来的还有 2 个问题，其中一次只生成 1 条 migrate cmd 还没定位到原因；
 
-3. prior migrate 设计；
+2. 加一个 choosen pid 的类变量，因为可能在一次 migrate scan 中会执行多个 migrate 策略，可以记录下每次已经选择的，否则会出现被后面覆盖使用的特点；
+
+2. 一个快照被克隆 10 次后期望有 even volume 特征的单测；
+
+2. 有多个 even volume，然后验证他们的 migrate for even volume rebalance 的单测，包括双活，参考 CapEvenECShardMigrationWithTiering；
+
+6. prior migrate 设计；
+
+7. if (LIKELY(cross_zone_repair && contain_prefer_local)) 可能是错的
 
 一步一步来，最终可以考虑重写个 reposition manager，里面有把 cap replica， cap ec shard, perf replica 做成 3 个类。 但在此之前，需要先把 3 个 migrate 弄成统一的接口，这样才能一步步演进，让所有的 migrate 能共用一个 GetSrcCidForReplicaMigration。
 
