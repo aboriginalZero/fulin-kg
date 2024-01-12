@@ -1,73 +1,30 @@
-操作步骤
-
-1. 下载补丁包到各个 scvm 的 /tmp 目录，（或许要提供 md5 值？）
-
-   ```shell
-   # 检查是否存在 
-   ls /tmp/scvm_failure_common.tar
-   ```
-
-2. 对各个 scvm 节点
-
-   ```shell
-   # 在所有 scvm 节点上，进入到此目录
-   cd /usr/share/tuna/script
-   
-   # 在所有 scvm 节点上，将已有 io reroute 脚本备份
-   rm -rf /home/smartx/scvm_failure_common.bak && mv scvm_failure_common /home/smartx/scvm_failure_common.bak
-   
-   # 在所有 scvm 节点上，解压到 /usr/share/tuna/script 目录
-   tar -xvf /tmp/scvm_failure_common.tar -C .
-   
-   # 在所有 scvm 节点上，确保补丁包的 reroute version 是 1.5.1，执行后续操作
-   cat scvm_failure_common/reroute_version
-   
-   # 在所有 scvm 节点上，清空已有 ioreroute 脚本及服务
-   zbs-deploy-manage clear-hypervisor
-   
-   # 重新部署 ioreroute 脚本并启动服务
-   # 任选一个 scvm 上节点执行
-   zbs-deploy-manage deploy-hypervisor --gen_ssh_key
-   # 在剩下的 N - 1 个 scvm 上节点执行
-   zbs-deploy-manage deploy-hypervisor
-   ```
-
-3. 对各个 xen server 节点
-
-   ```shell
-   # 在所有的 xen server 节点上，观察 io reroute 输出日志
-   tail -f /var/log/scvm_failure.log
-   ```
-
-   若出现 “the session of local scvm is not stable”，那么等待 3 分钟， 查看 192.168.33.2 的下一跳是否能指向本地 scvm 存储 ip，预期出现如下日志：
-
-   ```
-   Thu Jan 11 12:40:01 CST 2024 [+] local scvm active, try to route to local scvm
-   Thu Jan 11 12:40:01 CST 2024 [+] try to delete route
-   Thu Jan 11 12:40:01 CST 2024 [+] trying to del route 192.168.33.2 --> 10.10.130.219
-   Thu Jan 11 12:40:01 CST 2024 [+] delete route success
-   Thu Jan 11 12:40:01 CST 2024 [+] try add route:
-   Thu Jan 11 12:40:01 CST 2024 [+] trying to add route from 192.168.33.2 to 10.10.130.218
-   Thu Jan 11 12:40:01 CST 2024 [+] add route succss
-   ```
-
-   
-
-
-
-
-
-1. migrate / recover dst 要根据 ever exist = true 否 false 分别从 alive loc 和 loc 中选；
-
-   git stash save zbs2，On ZBS-26732-2: filter stale reposition cmd before distributing
-
 2. even migrate 暴露出来的还有 2 个问题，其中一次只生成 1 条 migrate cmd 还没定位到原因；
 
 2. 加一个 choosen pid 的类变量，因为可能在一次 migrate scan 中会执行多个 migrate 策略，可以记录下每次已经选择的，否则会出现被后面覆盖使用的特点；
 
-2. 一个快照被克隆 10 次后期望有 even volume 特征的单测；
+   有一个长期存在的问题是，做容量均衡类的迁移，比如 chunk 1 2 3 4，2 到 3 的迁移命令可能会被 1 到 4 顶掉，因为有可能是同一个 pid，而目前只允许一个 pid 一次下发一条迁移命令，造成一个迷惑的现象是更着急迁出的节点反而需要更长的等待时候才会下发迁移命令，这个问题在目前一次 scan 有多种迁移策略执行下出现的概率会更高。
 
-2. 有多个 even volume，然后验证他们的 migrate for even volume rebalance 的单测，包括双活，参考 CapEvenECShardMigrationWithTiering；
+3. 还有一个问题是，迁移命令生成之后到下发之前的那个时间窗口里，一部分命令可能过时了，比如 dst 已经有副本了，或者 src 读不到副本了，这个过时命令的拦截需要适配分层和 ec。
+
+   migrate / recover dst 要根据 ever exist = true 否 false 分别从 alive loc 和 loc 中选；
+
+   git stash save zbs2，On ZBS-26732-2: filter stale reposition cmd before distributing
+
+4. 一个快照被克隆 10 次后期望有 even volume 特征的单测；
+
+   ```
+   LOOP(FLAGS_clone_time_hint_for_even_alloc) {
+           std::string clone_name = "clone" + ToHexString(i);
+           ASSERT_STATUS(cluster_->CloneSnapshot(snapshot.id(), "pool", clone_name,
+                                                 snapshot.size(), &volume));
+       }
+   ```
+
+   
+
+5. 有多个 even volume，然后验证他们的 migrate for even volume rebalance 的单测，包括双活，参考 CapEvenECShardMigrationWithTiering；
+
+   包括同时有 ec + replica 的 even volume
 
 6. prior migrate 设计；
 
@@ -493,7 +450,7 @@ gtest系列之事件机制
    1. migrate for removing chunk
    2. migrate for no-removing chunk
       1. migrate for even volumes
-         1. migrate for even volumes repair topo
+         1. migrate for even volumes repair topo (if generated, return)
          2. migrate for even volumes rebalance
       2. migrate for uneven volumes
          1. migrate for over load prior extents
@@ -502,7 +459,7 @@ gtest系列之事件机制
                1. migrate for localization
       
             2. normal mediun / high / very high
-               1. migrate for repair topo
+               1. migrate for repair topo  (if generated, return)
                2. migrate for rebalance
    
    
