@@ -1,5 +1,3 @@
-2. even migrate 暴露出来的还有 2 个问题，其中一次只生成 1 条 migrate cmd 还没定位到原因；
-
 2. 加一个 choosen pid 的类变量，因为可能在一次 migrate scan 中会执行多个 migrate 策略，可以记录下每次已经选择的，否则会出现被后面覆盖使用的特点；
 
    有一个长期存在的问题是，做容量均衡类的迁移，比如 chunk 1 2 3 4，2 到 3 的迁移命令可能会被 1 到 4 顶掉，因为有可能是同一个 pid，而目前只允许一个 pid 一次下发一条迁移命令，造成一个迷惑的现象是更着急迁出的节点反而需要更长的等待时候才会下发迁移命令，这个问题在目前一次 scan 有多种迁移策略执行下出现的概率会更高。
@@ -10,39 +8,15 @@
 
    git stash save zbs2，On ZBS-26732-2: filter stale reposition cmd before distributing
 
-4. 一个快照被克隆 10 次后期望有 even volume 特征的单测；
+4. even migrate 只生成 1 条 migrate cmd 还没定位到原因，有可能就是因为当 cmd_num_limit = 0 时还会多下发一条，在 [ZBS-26779](http://jira.smartx.com/browse/ZBS-26779) 中修复了；
 
-   ```
-   LOOP(FLAGS_clone_time_hint_for_even_alloc) {
-           std::string clone_name = "clone" + ToHexString(i);
-           ASSERT_STATUS(cluster_->CloneSnapshot(snapshot.id(), "pool", clone_name,
-                                                 snapshot.size(), &volume));
-       }
-   ```
-
-   
-
-5. 有多个 even volume，然后验证他们的 migrate for even volume rebalance 的单测，包括双活，参考 CapEvenECShardMigrationWithTiering；
-
-   包括同时有 ec + replica 的 even volume
-
-6. prior migrate 设计；
-
-7. if (LIKELY(cross_zone_repair && contain_prefer_local)) 可能是错的
+5. prior migrate 设计；
 
 一步一步来，最终可以考虑重写个 reposition manager，里面有把 cap replica， cap ec shard, perf replica 做成 3 个类。 但在此之前，需要先把 3 个 migrate 弄成统一的接口，这样才能一步步演进，让所有的 migrate 能共用一个 GetSrcCidForReplicaMigration。
 
-1. ec migrate 目前的做法是 src_cid 一定等于 replace_cid，所以需要避免各个 ec migrate 的 replace cid 选 not healthy status/state 和 isolated 的 cid，等 ec access 支持用恢复的方式来做迁移，这个条件才能放开；
+1. refactor migrate for repair topo，从 GenerateMigrateCmdsForRepairTopo 开始改；
 
-    另外，让各个 replica migrate 中的 replace cid should meet not healthy status/state，要除开 ec migrate；
-
-    在 refactor migrate for repair topo 后，要添加 ec shard 的 replace 一定等于 src，在 healthy 等条件不同时的单测。
-
-    把他跟 src 分开，src
-
-2. refactor migrate for repair topo，从 GenerateMigrateCmdsForRepairTopo 开始改；
-
-    1. 在去掉 GetDstCandidates 时要注意在 migrate for repair topo 中也算上 remain prior space，用它做约束；
+    1. 在去掉 GetDstCandidates 时要注意在 migrate for repair topo 中也算上 remain prior space，用它做约束，然后在 candidate replace cid 的 sort 中加上 remain prior space ；
 
     2. 待做 [ZBS-13401](http://jira.smartx.com/browse/ZBS-13401)，让中高负载的容量均衡策略都要保证 prefer local 本地的副本不会被迁移，且如果 prefer local 变了，那么也要让他所在的 chunk 有一个本地副本（有个上限是保留归保留，但如果超过 95%，超过的 部分不考虑 prefer local 一定有对应的副本）
 
@@ -54,7 +28,7 @@
 
         [ZBS-25949](http://jira.smartx.com/browse/ZBS-25949) 修改后的 migrate for repair topo 能够达到的效果是不会 replace prefer local，在 prefer local 满足 topo rank 不降级的情况下，dst 会优先选 prefer local，貌似能达到这个效果？双活下也可以吗？prefer local 从 prefer zone 迁移到 secondary zone。
 
-3. refactor migrate for rebalance
+2. refactor migrate for rebalance
 
     1. [ZBS-26042](http://jira.smartx.com/browse/ZBS-26042) 还缺一个 even volume 的 ut 验证 [ZBS-25847](http://jira.smartx.com/browse/ZBS-25847)
 
@@ -62,27 +36,25 @@
 
         even volume 中的做法应该能实现这个效果，参考即可。
 
-4. 改一下 migrate for even volume 的写法，指的是 vector 变 array ?
-
-5. 在 migrate for prior extent 中引入 remain space map 来正确计算（不一定需要，目前看他好像没啥问题）；
+3. 在 migrate for prior extent 中引入 remain space map 来正确计算（不一定需要，目前看他好像没啥问题）；
 
     目前 migrate 中的逻辑是每次获取一个 pid 的 entry 都要通过 GetPhysicalExtentTableEntry 调用一次锁，但在 prior  extent 的迁移中，可以批量获取 diff_pids 中所有的 pentry，因此可以相应做优化。
 
-6. recover / migrate for removing chunk 用到的函数，是否可以拿回 recover_manager.cc 中？
+4. recover / migrate for removing chunk 用到的函数，是否可以拿回 recover_manager.cc 中？
 
     暂时不需要，拿回来的好处是啥呢？
 
-7. migrate for localization 中有 loose_medium_load_ratio 弹性边界的概念，其他 migrate 中不需要吗？
+5. migrate for localization 中有 loose_medium_load_ratio 弹性边界的概念，其他 migrate 中不需要吗？
 
     检查一下其他 migrate 中是否都像 migrate for even volume 那样允许 4 个 pextent 级别的不均匀。
 
-8. 因为后续的操作不会去操作 even pextent，所以 migrate for even volume 执行完，后续可以接着执行后续 migrate ，但开了分层后的 migrate for over load prior extent，假设分层之后的状态稳定，那 prior extent 作为 perf thick extent，也会参与后续的 migrate for rebalance 平衡，那好像就支持双活了
+6. 因为后续的操作不会去操作 even pextent，所以 migrate for even volume 执行完，后续可以接着执行后续 migrate ，但开了分层后的 migrate for over load prior extent，假设分层之后的状态稳定，那 prior extent 作为 perf thick extent，也会参与后续的 migrate for rebalance 平衡，那好像就支持双活了
 
-9. 在分层升级过程中，prior extent 还属于 cap，所以可能还是得保留，即使是升级之后，他属于 perf，也得让 perf thick extent 的优先级在所有 perf extent 里最高，所以还是得保留一个独立的 migrate 策略，因为算他的负载跟算 perf extent 整体的负载并不一致，如果他两在一次里触发的话，可能会有冲突；
+7. 在分层升级过程中，prior extent 还属于 cap，所以可能还是得保留，即使是升级之后，他属于 perf，也得让 perf thick extent 的优先级在所有 perf extent 里最高，所以还是得保留一个独立的 migrate 策略，因为算他的负载跟算 perf extent 整体的负载并不一致，如果他两在一次里触发的话，可能会有冲突；
 
-10. migrate 策略复杂的地方在于代码写的太面向过程了，已经要做面向对象抽象的，只把 MigrateFilter 抽象出来；
+8. migrate 策略复杂的地方在于代码写的太面向过程了，已经要做面向对象抽象的，只把 MigrateFilter 抽象出来；
 
-11. migrate for localization
+9. migrate for localization
 
      1. 针对 ec 的 best topo distance 的计算，斯坦纳树问题，对应的 DP 做法 Dreyfus-Wagner 算法。yutian 说最新做法是从拓扑学的角度出发的，现有代码已经是最优解而非近似计算了
      2. 重构 recover manager 时，需要考虑 prior extent 不需要在低负载下支持局部化，master 分支上目前还是支持，但 5.5.x 已经不支持了
