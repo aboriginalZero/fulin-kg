@@ -2,15 +2,25 @@
 
    有一个长期存在的问题是，做容量均衡类的迁移，比如 chunk 1 2 3 4，2 到 3 的迁移命令可能会被 1 到 4 顶掉，因为有可能是同一个 pid，而目前只允许一个 pid 一次下发一条迁移命令，造成一个迷惑的现象是更着急迁出的节点反而需要更长的等待时候才会下发迁移命令，这个问题在目前一次 scan 有多种迁移策略执行下出现的概率会更高。
 
+   CapRebalanceOneBelowThreeOverWithTiering 重命名，以及其他 2 个抄下他的	
+
 3. 还有一个问题是，迁移命令生成之后到下发之前的那个时间窗口里，一部分命令可能过时了，比如 dst 已经有副本了，或者 src 读不到副本了，这个过时命令的拦截需要适配分层和 ec。
 
    migrate / recover dst 要根据 ever exist = true 否 false 分别从 alive loc 和 loc 中选；
 
    git stash save zbs2，On ZBS-26732-2: filter stale reposition cmd before distributing
 
-4. even migrate 只生成 1 条 migrate cmd 还没定位到原因，有可能就是因为当 cmd_num_limit = 0 时还会多下发一条，在 [ZBS-26779](http://jira.smartx.com/browse/ZBS-26779) 中修复了；
+4. 加 recover / migrate 日志
 
-5. prior migrate 设计；
+    可以把 ever exist，对应的 ec (alive) location 也打印下，如果是 recover 显示 expected replica num，
+
+    只有 ec recover 才显示 dst_shard_idx，区分  migrate / normal recover / special recover / agile recover
+
+    如果是 ec 把 pextent size 也打印出来
+
+5. even migrate 只生成 1 条 migrate cmd 还没定位到原因，有可能就是因为当 cmd_num_limit = 0 时还会多下发一条，在 [ZBS-26779](http://jira.smartx.com/browse/ZBS-26779) 中修复了；
+
+6. prior migrate 设计；
 
 一步一步来，最终可以考虑重写个 reposition manager，里面有把 cap replica， cap ec shard, perf replica 做成 3 个类。 但在此之前，需要先把 3 个 migrate 弄成统一的接口，这样才能一步步演进，让所有的 migrate 能共用一个 GetSrcCidForReplicaMigration。
 
@@ -422,7 +432,7 @@ gtest系列之事件机制
    1. migrate for removing chunk
    2. migrate for no-removing chunk
       1. migrate for even volumes
-         1. migrate for even volumes repair topo (if generated, return)
+         1. migrate for even volumes repair topo (if generated, return) 
          2. migrate for even volumes rebalance
       2. migrate for uneven volumes
          1. migrate for over load prior extents
