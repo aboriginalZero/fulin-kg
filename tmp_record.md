@@ -1,18 +1,12 @@
 2. 还有一个问题是，迁移命令生成之后到下发之前的那个时间窗口里，一部分命令可能过时了，比如 dst 已经有副本了，或者 src 读不到副本了，这个过时命令的拦截需要适配分层和 ec。
 
-   migrate / recover dst 要根据 ever exist = true 否 false 分别从 alive loc 和 loc 中选；
+   migrate 和 recover 的 src 不能只是从 alive loc 中选，如果满足那两类 extent 条件，是可以从 loc 中选；
 
-   git stash save zbs2，On ZBS-26732-2: filter stale reposition cmd before distributing
+   写单测验证可以从多种 migrate / recover 情况下，对 reposition cmd stale 的判断是否正确。
 
-3. 加 recover / migrate 日志
+3. even migrate 只生成 1 条 migrate cmd 还没定位到原因，有可能就是因为当 cmd_num_limit = 0 时还会多下发一条，在 [ZBS-26779](http://jira.smartx.com/browse/ZBS-26779) 或 [ZBS-26736](http://jira.smartx.com/browse/ZBS-26736) 中修复了；
 
-    可以把 ever exist，对应的 ec (alive) location 也打印下，如果是 recover 显示 expected replica num，
-
-    
-
-4. even migrate 只生成 1 条 migrate cmd 还没定位到原因，有可能就是因为当 cmd_num_limit = 0 时还会多下发一条，在 [ZBS-26779](http://jira.smartx.com/browse/ZBS-26779) 或 [ZBS-26736](http://jira.smartx.com/browse/ZBS-26736) 中修复了；
-
-5. prior migrate 设计；
+4. prior migrate 设计；
 
 一步一步来，最终可以考虑重写个 reposition manager，里面有把 cap replica， cap ec shard, perf replica 做成 3 个类。 但在此之前，需要先把 3 个 migrate 弄成统一的接口，这样才能一步步演进，让所有的 migrate 能共用一个 GetSrcCidForReplicaMigration。
 
