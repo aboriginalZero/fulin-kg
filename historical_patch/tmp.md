@@ -308,7 +308,7 @@ Vtable 的内容就是若干个 VExtent，里面只有 3 个字段，vextent_id�
 
 快照会将 VTable 复制一份
 
-我们的 COW PEXTENT 的触发时机是 GetVExtentLease rpc，如果 chunk 那里 lease 没有 expire，也就不会调用 GetVExtentLease，所以需要通过 revoke 主动让他 expire
+我们的 COW PEXTENT 的触发时机是 GetVExtentLease rpc，如果 access/chunk 那里 lease 没有 expire，也就不会调用 GetVExtentLease，所以需要通过 revoke 主动让他 expire
 
 COW 是先 revoke，然后打快照，保证了快照后，extent 无法写入的语意，如果不 revoke lease，快照是可写的
 

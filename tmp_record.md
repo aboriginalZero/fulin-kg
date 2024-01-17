@@ -1,3 +1,44 @@
+在 15:26:54 和 15:27:15 之间，34 zk 上应该要有关于对端关闭连接之类的异常日志，但目前没有，需要排查是网络问题还是 zk 卡住还是 zk + meta 卡住或 os 卡住。
+
+从心跳的角度，最早是 61 上的 chunk 在 15:26:53 发现跟 access manager 失去心跳，且 Fail to connect to zookeeper in 2000 ms 的日志，但在 7s 后 15:27:00，发现是能跟 meta rpc server 建立连接，却无法跟 access manager 建立连接
+
+```
+W0115 15:26:53.074805  1756 socket_client_transport.cc:155] [NETWORK] fd 98: EPOLLRDHUP received.
+I0115 15:26:53.075680  1756 socket_client_transport.cc:56] Close() is scheduled due to event handler running
+W0115 15:26:53.246078  1893 proto_async_client.h:482] EPOLLRDHUP received.
+W0115 15:26:53.246201  1893 proto_async_client.h:494] Failed to recv msg: [ENIOError]
+W0115 15:26:53.246590  1893 session_follower.cc:634] [DATA REPORT FAILURE]:  response: , st: 
+Traceback:
+[EProtoAsyncClient]: closed
+W0115 15:26:53.803565  1756 proto_async_client.h:482] EPOLLRDHUP received.
+W0115 15:26:53.803723  1756 proto_async_client.h:494] Failed to recv msg: [ENIOError]
+W0115 15:26:53.868939  1893 proto_async_client.h:482] EPOLLRDHUP received.
+W0115 15:26:53.869007  1893 proto_async_client.h:494] Failed to recv msg: [ENIOError]
+W0115 15:26:53.869068  1893 session_follower.cc:288] [SESSION KEEPALIVE FAILURE]:  response: , st: 
+Traceback:
+[EProtoAsyncClient]: closed
+I0115 15:26:53.869099  1893 session_follower.cc:231] [FOLLOWER SESSION SLEEP BEFORE RECONNECT]
+I0115 15:26:55.065096  1756 data_channel_client_v2.cc:76] Enable OnConencted
+I0115 15:26:55.241696  1893 zookeeper.cc:148] Initialize zookeeper, zoo hosts: '10.0.0.39:2181,10.0.0.36:2181,10.0.0.34:2181,10.0.0.35:2181,10.0.0.33:2181', kSessiontimeout: 6000, client_id: 0x0, passwd: ''
+I0115 15:26:55.242472  1893 main.cc:89] [ZOO] log_env:1104 2024-01-15 15:26:55,242:1630(0x7ff23f5fe700):ZOO_INFO@log_env@1104: Client environment:zookeeper.version=zookeeper C client 3.5.9
+I0115 15:26:55.242501  1893 main.cc:89] [ZOO] log_env:1108 2024-01-15 15:26:55,242:1630(0x7ff23f5fe700):ZOO_INFO@log_env@1108: Client environment:host.name=SCVM-6
+......
+I0115 15:27:00.947129  1756 proto_async_client.h:169] Connect to 0.0.0.0:0-->10.0.0.34:10100 with timeout_ms 10
+I0115 15:27:00.947727  1756 proto_async_client.h:355] Connected to 10.0.0.41:46776-->10.0.0.34:10100
+W0115 15:27:00.995883  1893 session_follower.cc:288] [SESSION KEEPALIVE FAILURE]:  response: , st: 
+Traceback:
+[ETimedOut]: ProtoAsyncClient meet timeout: expect timeout ms: 1750 elapsed ms: 2002 socket: 10.0.0.41:50188-->10.0.0.34:10103
+W0115 15:27:00.996052  1893 session_follower.cc:219] [FOLLOWER SESSION JEOPARDY]
+I0115 15:27:00.996132  1893 session_follower.cc:231] [FOLLOWER SESSION SLEEP BEFORE RECONNECT]
+
+```
+
+
+
+
+
+
+
 2. 还有一个问题是，迁移命令生成之后到下发之前的那个时间窗口里，一部分命令可能过时了，比如 dst 已经有副本了，或者 src 读不到副本了，这个过时命令的拦截需要适配分层和 ec。
 
    migrate 和 recover 的 src 不能只是从 alive loc 中选，如果满足那两类 extent 条件，是可以从 loc 中选；
@@ -573,6 +614,10 @@ access 从 meta 拿到的 lease 中的 location 是 loc 而不是 alive loc，�
 分配一个 thin pextent，直到初次写之前，他的 location 都是空的，所以 alive_location 也为空。
 
 ### COW 内容
+
+快照会将 VTable 复制一份，Vtable 的内容就是若干个 VExtent，里面只有 3 个字段，vextent_id，location，alive_location，第一个字段是 volume 的 offset 与 pextent 的对应关系，后两个字段就是对应 pextent 的 location 和 alive_location。（vtable 看起来好像也是从 ptable 中复制来的？MetaRpcServer::GetVTable）
+
+我们的 COW PEXTENT 的触发时机是 GetVExtentLease rpc，如果 access/chunk 那里 lease 没有 expire，也就不会调用 GetVExtentLease，所以需要通过 revoke 主动让他 expire。COW 是先 revoke，然后打快照，保证了快照后，extent 无法写入的语意，如果不 revoke lease，快照只读假设将被打破。
 
 COW 之后，child alive loc 不一定等于 parent alive loc。实际上，COW 在 Transaction Prepare 的 CowPExtent 时只会只会复制 parent 的 loc，然后在 Commit -> PersistExtents -> UpdateMetaContextWhenSuccess -> SetPExtents 时会将 loc 上的每一个副本的 last_report_ms 设为当前时间，所以 child alive loc = child loc = parent loc，但是不一定等于 parent alive loc。
 
