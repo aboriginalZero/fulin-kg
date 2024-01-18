@@ -1,6 +1,147 @@
-在 15:26:54 和 15:27:15 之间，34 zk 上应该要有关于对端关闭连接之类的异常日志，但目前没有，需要排查是网络问题还是 zk 卡住还是 zk + meta 卡住或 os 卡住。
+在 15:26:54 和 15:27:15 之间，34 zk 日志上应该要有关于对端关闭连接之类的异常日志，但目前没有，（另外这段时间内 34 的 meta 日志也没有任何输出）需要排查这个时间窗口内是网络问题还是 zk 卡住还是 zk + meta 卡住或 os 卡住。
 
-从心跳的角度，最早是 61 上的 chunk 在 15:26:53 发现跟 access manager 失去心跳，且 Fail to connect to zookeeper in 2000 ms 的日志，但在 7s 后 15:27:00，发现是能跟 meta rpc server 建立连接，却无法跟 access manager 建立连接
+肯定不会是 os 卡住，因为 zbs-chunk 等其他进程这段时间内都有日志输出。
+
+也不会是 meta 卡住，因为 chunk 还是能连上 meta rpc server。
+
+33 在 15:26:57 有因 ETimeOut 连不上在 34 上的 access manager 的日志，不过在 sleep 1.5s 后在 15:26:59 又重新连上了，但此时 zk leader 应该已经切主了（有可能 meta leader 也切主了）。老 leader 还认为自己没死。
+
+看 33 的 chunk 日志
+
+```
+W0115 15:26:57.895701  2174 session_follower.cc:288] [SESSION KEEPALIVE FAILURE]:  response: , st: 
+Traceback:
+[ETimedOut]: ProtoAsyncClient meet timeout: expect timeout ms: 11987 elapsed ms: 11988 socket: 10.0.0.33:60220-->10.0.0.34:10103
+W0115 15:26:57.898164  2174 session_follower.cc:219] [FOLLOWER SESSION JEOPARDY]
+I0115 15:26:57.899541  2174 session_follower.cc:231] [FOLLOWER SESSION SLEEP BEFORE RECONNECT]
+
+......
+
+I0115 15:26:59.399592  2174 session_follower.cc:236] [FOLLOWER SESSION RECONNECT]
+I0115 15:26:59.407071  2174 zookeeper.cc:148] Initialize zookeeper, zoo hosts: '10.0.0.34:2181,10.0.0.35:2181,10.0.0.33:2181,10.0.0.36:2181,10.0.0.39:2181', kSessiontimeout: 6000, client_id: 0x0, passwd: ''
+I0115 15:26:59.410329 21277 main.cc:89] [ZOO] check_events:2477 2024-01-15 15:26:59,410:2075(0x7f6a7c3c7700):ZOO_INFO@check_events@2477: initiated connection to server [10.0.0.35:2181]
+
+```
+
+此时 zk leader 切主了吗？
+
+看 35 的 meta 日志，从 15:26:55 开始有跟 zk 连不上的日志，
+
+```
+E0115 15:26:55.024391  2221 main.cc:81] [ZOO] handle_socket_error_msg:2495 2024-01-15 15:26:55,014:2111(0x7f9199d15700):ZOO_ERROR@handle_socket_error_msg@2495: Socket [10.0.0.39:2181] zk retcode=-4, errno=112(Host is down): failed while receiving a server response
+W0115 15:26:55.043150  2201 zookeeper.cc:220] zookeeper session event: CONNECTED_STATE --> CONNECTING_STATE
+W0115 15:26:55.043215  2201 zookeeper.cc:183] Start the session timeout timer: 3600
+I0115 15:26:55.043247  2201 quorum_cluster.cc:443] QuorumCluster state change: Running --> Running_Connecting
+E0115 15:26:59.059476  2201 db_cluster.cc:406] Error occurred when doing auto replay: 
+Traceback:
+[EZKConnectError]:  [GET CHILDREN] path: /zbs/meta/__mj_j
+
+......
+(此时认为 leader 还是 34，但 quorum cluster state 从 running 变成 expired 变成 stop，meta 主动触发重启，并在 15:27:03 认为此时 leader 是 39，seq 从 433 变成 494)
+
+I0115 15:26:59.100847  2201 quorum_cluster.cc:529] Leader is 10.0.0.34:10100. seq is 433
+W0115 15:26:59.100881  2201 zookeeper.cc:220] zookeeper session event: CONNECTED_STATE --> EXPIRED_SESSION_STATE
+W0115 15:26:59.100900  2201 zookeeper.cc:183] Start the session timeout timer: 3600
+E0115 15:26:59.100925  2201 quorum_cluster.cc:349] Zookeeper session timeout.
+I0115 15:26:59.100941  2201 quorum_cluster.cc:443] QuorumCluster state change: Running --> Expired
+I0115 15:26:59.100975  2201 quorum_server.cc:59] Get quorum cluster event: EXPIRED
+W0115 15:26:59.100991  2201 quorum_server.cc:74] Session expired.
+I0115 15:26:59.101007  2201 quorum_server.cc:39] Stop quorum server: 
+Traceback:
+
+......
+I0115 15:27:03.261574  2201 quorum_cluster.cc:529] Leader is 10.0.0.39:10100. seq is 494
+I0115 15:27:03.261595  2201 quorum_cluster.cc:550] [MEMBER IDX]: 3
+```
+
+看 39 的 meta 日志，从 15:26:54 开始有跟 zk 连不上的日志，发现在 doing auto replay 是报错
+
+```
+I0115 15:27:02.815147  2196 quorum_cluster.cc:518] [ROLE CHANGE] I am the leader now.  seq is 494
+......
+I0115 15:27:03.275115 16707 thread.cc:114] Set thread name to: AccessManagerTh
+I0115 15:27:03.275203 16707 access_manager.cc:185] AccessManager starts.
+I0115 15:27:03.275242 16707 access_manager.cc:100] Initializing AccessManager
+I0115 15:27:03.325750 16707 access_manager.cc:1166] [ACCESS SESSION]: uuid: "4c2c1eb0-bb35-4b63-8afe-48ca69eab4cf" ip: "10.0.0.34" num_ip: 570425354 port: 10201 cid: 2 secondary_data_ip: "192.168.0.34" zone: "default" scvm_mode_host_data_ip: ""
+I0115 15:27:03.326203 16707 access_manager.cc:1166] [ACCESS SESSION]: uuid: "4f8aa022-f29d-471e-8591-c3b2a341410f" ip: "10.0.0.33" num_ip: 553648138 port: 10201 cid: 3 secondary_data_ip: "192.168.0.33" zone: "default" scvm_mode_host_data_ip: ""
+I0115 15:27:03.326360 16707 access_manager.cc:1166] [ACCESS SESSION]: uuid: "60225d50-9dac-445b-a48c-c3031d60722f" ip: "10.0.0.41" num_ip: 687865866 port: 10201 cid: 6 secondary_data_ip: "192.168.0.61" zone: "default" scvm_mode_host_data_ip: ""
+I0115 15:27:03.326454 16707 access_manager.cc:1166] [ACCESS SESSION]: uuid: "710a2c39-09a5-4fd3-8449-3ab79cbd4870" ip: "10.0.0.36" num_ip: 603979786 port: 10201 cid: 4 secondary_data_ip: "192.168.0.36" zone: "default" scvm_mode_host_data_ip: ""
+I0115 15:27:03.326606 16707 access_manager.cc:1166] [ACCESS SESSION]: uuid: "88a81edf-e236-440a-a7f2-c6f89fd35c6c" ip: "10.0.0.39" num_ip: 654311434 port: 10201 cid: 5 secondary_data_ip: "192.168.0.39" zone: "default" scvm_mode_host_data_ip: ""
+I0115 15:27:03.326723 16707 access_manager.cc:1166] [ACCESS SESSION]: uuid: "ce09038b-48c9-43d0-b6f5-18d63cdb56ee" ip: "10.0.0.35" num_ip: 587202570 port: 10201 cid: 1 secondary_data_ip: "192.168.0.35" zone: "default" scvm_mode_host_data_ip: ""
+I0115 15:27:03.326889 16707 access_manager.cc:148] AccessManager listens at 10.0.0.39:10103
+......
+W0115 15:27:04.326944 16707 access_manager.cc:174] There are sessions not reponding. Wait a while.
+W0115 15:27:08.328191 16707 access_manager.cc:174] There are sessions not reponding. Wait a while.
+W0115 15:27:12.328608 16707 access_manager.cc:174] There are sessions not reponding. Wait a while.
+
+```
+
+从 15:27:02 开始，meta leader 切到 39 上面，35 的 meta 日志能验证这个情况，但是 34 的 meta 日志在这段时间内没有任何输出，至少要有 Leader 切换了的日志，所以有可能 34 还认为自己是 leader，出现双 meta leader 的情况，chunk 的 keepalive 还在跟原本的 meta leader 的 access manager 连接。新 access manager 注册了新的 access session
+
+39 的 meta leader 从 META_BOOTING 到 META_RUNNING 花了 12.4 s，耗时应该主要在 wait for existing sessions' first keepalive or all SessionExpired. 从开了 WaitSession 的定时器，用了 12.4s 才收到 6 个中唯一一个 cid 6 的 CONNECTED_HEALTHY，其他 cid SESSION_EXPIRED，meta status 才开始进入 META_RUNNING
+
+```
+// wait for existing sessions' first keepalive or all SessionExpired.
+if (!sessions_.empty()) {
+	init_handle_ = new TimerHandle(&loop_,
+	BIND(&AccessManager::WaitSession, this), kWaitSessionIntervalMs);
+} else {
+  // 39 meta 日志中出现 timer handle 的内存泄漏，像是等了很久都没等到 keepalive 导致的，W0115 15:27:15.328764 16707 timer_handle.cc:74] detect leaking timer handle: src/meta/access_manager.cc:157
+	context_->meta_server->UpdateMetaStatus(META_RUNNING);
+}
+```
+
+猜测可能是老 meta leader 卡住，新 meta leader 貌似没有得到大家的承认，在这个 12.4s 里 chunk 并没有 "Try to reset session client to ip: 10.0.0.39 port: 10103"，还是在尝试跟 34 连接，新 meta leader 一直没有 session response 过来。所以这段时间的业务 IO 应该是中断的。
+
+```
+
+```
+
+可能是老 meta leader 的 db cluster io 卡死，meta follower 要 replay 发现有 error
+
+meta follower auto replay 失败就会主动重启自己
+
+35 的 meta 在 15:27:03 就发现 meta 切到 39 了，但是 35 的 chunk 此时还是接着发心跳给 34
+
+39 的 meta 在 15:27:02 就发现自己是 new leader seq 494 了，在此之前，最近的是 15:26:59 还认为 34 是 leader seq 433
+
+```
+E0115 15:26:59.059476  2201 db_cluster.cc:406] Error occurred when doing auto replay: 
+Traceback:
+[EZKConnectError]:  [GET CHILDREN] path: /zbs/meta/__mj_j
+W0115 15:26:59.065270  2201 zookeeper.cc:199] Stop the session timeout timer.
+W0115 15:26:59.065490  2201 zookeeper.cc:220] zookeeper session event: CONNECTING_STATE --> CONNECTED_STATE
+W0115 15:26:59.065510  2201 zookeeper.cc:199] Stop the session timeout timer.
+I0115 15:26:59.065559  2201 zookeeper.cc:231] zookeeper client_id: 0x50000009747682d, passwd: 'E1210870B482657ACEFB63A36224932E'
+I0115 15:26:59.065580  2201 quorum_cluster.cc:443] QuorumCluster state change: Running_Connecting --> Running
+I0115 15:26:59.100770  2201 quorum_cluster.cc:698] Ger priority config: 
+I0115 15:26:59.100847  2201 quorum_cluster.cc:529] Leader is 10.0.0.34:10100. seq is 433
+W0115 15:26:59.100881  2201 zookeeper.cc:220] zookeeper session event: CONNECTED_STATE --> EXPIRED_SESSION_STATE
+W0115 15:26:59.100900  2201 zookeeper.cc:183] Start the session timeout timer: 3600
+E0115 15:26:59.100925  2201 quorum_cluster.cc:349] Zookeeper session timeout.
+I0115 15:26:59.100941  2201 quorum_cluster.cc:443] QuorumCluster state change: Running --> Expired
+I0115 15:26:59.100975  2201 quorum_server.cc:59] Get quorum cluster event: EXPIRED
+W0115 15:26:59.100991  2201 quorum_server.cc:74] Session expired.
+I0115 15:26:59.101007  2201 quorum_server.cc:39] Stop quorum server: 
+Traceback:
+[EAgain]: 
+
+......
+
+I0115 15:27:03.261574  2201 quorum_cluster.cc:529] Leader is 10.0.0.39:10100. seq is 494
+```
+
+在老 meta leader 被击杀之前，
+
+
+
+从心跳的角度，最早是 61 上的 chunk 在 15:26:53 发现跟 access manager 失去心跳，且 Fail to connect to zookeeper in 2000 ms 的日志，另外在 7s 后的 15:27:00，发现是能跟 meta rpc server 建立连接，却无法跟 access manager 建立连接
+
+所以不像是整个 meta 卡住，更像是 access manager 卡住，另外也确实有网络 ping 不通的日志。
+
+
+
+看 chunk 日志中 data channel server v2 相关日志，在 15:26:53 
 
 ```
 W0115 15:26:53.074805  1756 socket_client_transport.cc:155] [NETWORK] fd 98: EPOLLRDHUP received.
