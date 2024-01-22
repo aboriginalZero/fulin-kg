@@ -1,22 +1,8 @@
 meta in zbs 中关于 db cluster 部分
 
-https://docs.google.com/document/d/1Vviv0TN9K_oCNx57b_8m92GpVg9f1hymhS1EPAZj_3M/edit
 
-http://gerrit.smartx.com/c/zbs/+/37290
 
-https://docs.google.com/document/d/1AiDRmI_OmJk9e_um1Xt2c4Gzd1HV0iDLU55amRNYjno/edit#heading=h.wfhi0u4x2tzo
-
-https://docs.google.com/document/d/1lFhwOiMTU2wYMkdk-xtwxKBrgBmPQl74KA0QV8e6KI8/edit#heading=h.cab5w2vrakjq
-
-meta 升级设计
-
-https://docs.google.com/document/d/1gNQ3algt5fH1WA2whXCsrmA5iBgEo1lQzo98h4yIypA/edit
-
-内核实时线程的说明
-
-https://access.redhat.com/documentation/id-id/red_hat_enterprise_linux_for_real_time/9/html/understanding_rhel_for_real_time/assembly_scheduling-policies-for-rhel-for-real-time_understanding-rhel-for-real-time-core-concepts
-
-整理一下这个售后处理的流程。
+整理一下这个售后处理的流程，zk leader kill 包含 zk session、access session、db cluster 相关的内容
 
 下一个 smtxos 开始使用 yq，了解 yq 的用法，https://github.com/mikefarah/yq 
 
@@ -29,13 +15,9 @@ zbs-meta -fjson chunk list | jq '.[] | {"ID", "Perf Valid Space", "Perf Allocate
 zbs-meta -fjson topo list | jq 'map(select(.type =="NODE")) | .[] | "\(.["description"]), ring id \(.["ring_id"])"'
 ```
 
-
-
-s7 134.142 填充输入，smartx/HC!r0cks
-
 查看 co-list 的[脚本](http://192.168.90.221/f/core/co.py)
 
-通过 bt full 查看当前线程完整栈帧，通过 frame x 到指定页，然后看具体变量（所以需要知道变量都是在哪个线程中被持有）
+通过 bt full 查看当前线程完整栈帧，通过 frame x 到指定页，然后看具体变量（所以需要知道变量都是在哪个线程中持有的）
 
 解压 RPM 包，rpm2cpio xxx.rpm | cpio -div
 
@@ -48,15 +30,13 @@ gdb.parse_and_eval("((detail::ThreadLocalData*)%s)->pid"%cur_tld.str())
 
 
 
-DBCluster是一个通用的组件，用于各个节点间进行数据的同步。
-在有数据修改时，DBCluster会首先将journal提交到journal cluster（目前基于zookeeper实现），当提交到journal cluster完成后，数据修改就可以返回了，journal cluster保证修改的持久性，本地的LevelDb会异步的被修改。
+DBCluster是一个通用的组件，用于各个节点间进行数据的同步。在有数据修改时，DBCluster会首先将journal提交到journal cluster（目前基于zookeeper实现），当提交到journal cluster完成后，数据修改就可以返回了，journal cluster保证修改的持久性，本地的LevelDb会异步的被修改。
 
 
 
-2. 补一个 watchdog 退出打印日志的 patch
-3. 补一个同时有多个 removing cid 的单测
-4. even migrate 只生成 1 条 migrate cmd 还没定位到原因，有可能就是因为当 cmd_num_limit = 0 时还会多下发一条，在 [ZBS-26779](http://jira.smartx.com/browse/ZBS-26779) 或 [ZBS-26736](http://jira.smartx.com/browse/ZBS-26736) 中修复了；
-5. prior migrate 设计；
+2. 补一个同时有多个 removing cid 的单测
+3. even migrate 只生成 1 条 migrate cmd 还没定位到原因，有可能就是因为当 cmd_num_limit = 0 时还会多下发一条，在 [ZBS-26779](http://jira.smartx.com/browse/ZBS-26779) 或 [ZBS-26736](http://jira.smartx.com/browse/ZBS-26736) 中修复了；
+4. prior migrate 设计；
 
 一步一步来，最终可以考虑重写个 reposition manager，里面有把 cap replica， cap ec shard, perf replica 做成 3 个类。 但在此之前，需要先把 3 个 migrate 弄成统一的接口，这样才能一步步演进，让所有的 migrate 能共用一个 GetSrcCidForReplicaMigration。
 
@@ -498,6 +478,7 @@ gtest系列之事件机制
 1. access recover read 是 extent 粒度，write 是 block 粒度？
 2. 为什么 AllocRecoverForAgile 中一定不会有 prior extent？
 3. 在 HasSpaceForCow() 为什么用的是 total_data_capacity 而不是 valid_data_space ？
+3. lease owner 不释放的一个原因是 inspector 扫描到 extent generation 不一致而触发的读操作（借此剔除 gen 较低的 extent，再经由 recover 完成数据一致）
 
 
 
@@ -517,6 +498,8 @@ SSD 从不像 HDD 那样直接将新数据覆盖写入旧数据。在所有存�
 - `fstrim` 是一个由用户手动调用的命令，用于释放整个文件系统中的未使用空间，也可以被自动调度为定期任务执行。
 
 
+
+内核实时线程的说明，https://access.redhat.com/documentation/id-id/red_hat_enterprise_linux_for_real_time/9/html/understanding_rhel_for_real_time/assembly_scheduling-policies-for-rhel-for-real-time_understanding-rhel-for-real-time-core-concepts
 
 C++ 中为减少内存/读多写少的情况，可以用 absl::flat_hash_map 代替 std::unordered_map，https://zhuanlan.zhihu.com/p/614105687
 
