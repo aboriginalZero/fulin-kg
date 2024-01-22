@@ -34,6 +34,7 @@ DBCluster是一个通用的组件，用于各个节点间进行数据的同步�
 
 
 
+2. MgirateFilter 可以改成 allow, deny 都允许的，如果没要求，就传入 std::nullopt，
 2. 补一个同时有多个 removing cid 的单测
 3. even migrate 只生成 1 条 migrate cmd 还没定位到原因，有可能就是因为当 cmd_num_limit = 0 时还会多下发一条，在 [ZBS-26779](http://jira.smartx.com/browse/ZBS-26779) 或 [ZBS-26736](http://jira.smartx.com/browse/ZBS-26736) 中修复了；
 4. prior migrate 设计；
