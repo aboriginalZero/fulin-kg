@@ -43,9 +43,7 @@ DBCluster是一个通用的组件，用于各个节点间进行数据的同步�
 
 1. refactor migrate for repair topo，从 GenerateMigrateCmdsForRepairTopo 开始改；
 
-    1. 在去掉 GetDstCandidates 时要注意在 migrate for repair topo 中也算上 remain prior space，用它做约束，然后在 candidate replace cid 的 sort 中加上 remain prior space ；
-
-    2. 待做 [ZBS-13401](http://jira.smartx.com/browse/ZBS-13401)，让中高负载的容量均衡策略都要保证 prefer local 本地的副本不会被迁移，且如果 prefer local 变了，那么也要让他所在的 chunk 有一个本地副本（有个上限是保留归保留，但如果超过 95%，超过的 部分不考虑 prefer local 一定有对应的副本）
+    1. 待做 [ZBS-13401](http://jira.smartx.com/browse/ZBS-13401)，让中高负载的容量均衡策略都要保证 prefer local 本地的副本不会被迁移，且如果 prefer local 变了，那么也要让他所在的 chunk 有一个本地副本（有个上限是保留归保留，但如果超过 95%，超过的 部分不考虑 prefer local 一定有对应的副本）
 
         怎么判断是否会超过 95% 呢？
 
@@ -55,9 +53,13 @@ DBCluster是一个通用的组件，用于各个节点间进行数据的同步�
 
         [ZBS-25949](http://jira.smartx.com/browse/ZBS-25949) 修改后的 migrate for repair topo 能够达到的效果是不会 replace prefer local，在 prefer local 满足 topo rank 不降级的情况下，dst 会优先选 prefer local，貌似能达到这个效果？双活下也可以吗？prefer local 从 prefer zone 迁移到 secondary zone。
 
+        migrate for ec repair topo 中对 ec src 的选择过于宽松了，其实还可以选到更好的 src，但是目前不做处理，目前只根据 replace 来选 src
+
 2. refactor migrate for rebalance
 
     1. [ZBS-26042](http://jira.smartx.com/browse/ZBS-26042) 还缺一个 even volume 的 ut 验证 [ZBS-25847](http://jira.smartx.com/browse/ZBS-25847)
+
+    2. 能让 failslow 的优先被选成 replace
 
     2. rebalance 时能 recover jiewei 发现的问题，机架 A 有节点 1 2 3 4，机架 B 有节点 5 6 7 ，normal extent 容量均衡会去算一个 avg_load，B 上的节点负载都大于 avg_load，A 上的都小于 avg_load，5 容量不够了，只能往 1 2 3 4 迁，但是他们都在 A 上，由于 topo 降级所以都没法迁。改进使得 5 可以向 6/7 上迁。
 
@@ -78,8 +80,6 @@ DBCluster是一个通用的组件，用于各个节点间进行数据的同步�
 6. 因为后续的操作不会去操作 even pextent，所以 migrate for even volume 执行完，后续可以接着执行后续 migrate ，但开了分层后的 migrate for over load prior extent，假设分层之后的状态稳定，那 prior extent 作为 perf thick extent，也会参与后续的 migrate for rebalance 平衡，那好像就支持双活了
 
 7. 在分层升级过程中，prior extent 还属于 cap，所以可能还是得保留，即使是升级之后，他属于 perf，也得让 perf thick extent 的优先级在所有 perf extent 里最高，所以还是得保留一个独立的 migrate 策略，因为算他的负载跟算 perf extent 整体的负载并不一致，如果他两在一次里触发的话，可能会有冲突；
-
-8. migrate 策略复杂的地方在于代码写的太面向过程了，已经要做面向对象抽象的，只把 MigrateFilter 抽象出来；
 
 9. migrate for localization
 
