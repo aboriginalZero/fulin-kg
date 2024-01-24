@@ -35,9 +35,9 @@ DBCluster是一个通用的组件，用于各个节点间进行数据的同步�
 
 
 2. MgirateFilter 可以改成 allow, deny 都允许的，如果没要求，就传入 std::nullopt，
-2. 补一个同时有多个 removing cid 的单测
-3. even migrate 只生成 1 条 migrate cmd 还没定位到原因，有可能就是因为当 cmd_num_limit = 0 时还会多下发一条，在 [ZBS-26779](http://jira.smartx.com/browse/ZBS-26779) 或 [ZBS-26736](http://jira.smartx.com/browse/ZBS-26736) 中修复了；
-4. prior migrate 设计；
+3. 补一个同时有多个 removing cid 的单测
+4. even migrate 只生成 1 条 migrate cmd 还没定位到原因，有可能就是因为当 cmd_num_limit = 0 时还会多下发一条，在 [ZBS-26779](http://jira.smartx.com/browse/ZBS-26779) 或 [ZBS-26736](http://jira.smartx.com/browse/ZBS-26736) 中修复了；
+5. prior migrate 设计；
 
 一步一步来，最终可以考虑重写个 reposition manager，里面有把 cap replica， cap ec shard, perf replica 做成 3 个类。 但在此之前，需要先把 3 个 migrate 弄成统一的接口，这样才能一步步演进，让所有的 migrate 能共用一个 GetSrcCidForReplicaMigration。
 
@@ -64,6 +64,12 @@ DBCluster是一个通用的组件，用于各个节点间进行数据的同步�
     2. rebalance 时能 recover jiewei 发现的问题，机架 A 有节点 1 2 3 4，机架 B 有节点 5 6 7 ，normal extent 容量均衡会去算一个 avg_load，B 上的节点负载都大于 avg_load，A 上的都小于 avg_load，5 容量不够了，只能往 1 2 3 4 迁，但是他们都在 A 上，由于 topo 降级所以都没法迁。改进使得 5 可以向 6/7 上迁。
 
         even volume 中的做法应该能实现这个效果，参考即可。
+        
+    4. 另起一个 patch 去改变其中的变量名，包括 GFLAGS。
+
+    5. 为保证与 migrate for localization 统一，即使 src = isolated 也允许迁移
+
+    6. 考虑双活，相较于是否与 prefer local topo distance 更近，要优先选跟 dst cid 一个 zone 的，因为有可能 prefer local 在 prefer zone，而此时在 secondary zone 内部做 migrate，在没有 owner 的情况下，src 最好还是选 secondary 的，这样 owner 也会在 secondary zone 中产生。
 
 3. 在 migrate for prior extent 中引入 remain space map 来正确计算（不一定需要，目前看他好像没啥问题）；
 
