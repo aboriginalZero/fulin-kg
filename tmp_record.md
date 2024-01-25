@@ -59,17 +59,23 @@ DBCluster是一个通用的组件，用于各个节点间进行数据的同步�
 
     1. 替换过旧的 MigrateForRebalance
 
-    2. 另起一个 patch 去改变其中的变量名，包括 GFLAGS。
+        没法这么操作，因为 even volume rebalance 是 move num limit，uneven volume rebalance 是 move space limit，并且后者有一个 thick pids, thin pids wo/with origin 的获取过程，所以需要分开。
+
+    2. 另起一个 patch 去改变其中的变量名，包括 GFLAGS，函数名。
 
     2. 允许同个机架内部高于平均负载的节点作为迁移目标 ，使得机架内部的负载也比较均衡。
 
         rebalance 时能 recover jiewei 发现的问题，机架 A 有节点 1 2 3 4，机架 B 有节点 5 6 7 ，normal extent 容量均衡会去算一个 avg_load，B 上的节点负载都大于 avg_load，A 上的都小于 avg_load，5 容量不够了，只能往 1 2 3 4 迁，但是他们都在 A 上，由于 topo 降级所以都没法迁。改进使得 5 可以向 6/7 上迁。还缺一个 even volume 的 ut 验证 [ZBS-25847](http://jira.smartx.com/browse/ZBS-25847)
+        
+        构造一个容量相同，优先选 isolated 的情况，isolated chunk should be as repalce cid firstly in migrate for rebalance in next patch
         
     5. 能让 failslow 的优先被选成 replace
 
     5. 如果一个节点容量 > 95%，在 migrate for rebalance 的时候可以突破 isolated 的规则，允许 src cid 选 isolated 的，否则有可能单点被撑爆，因为现在 ec migrate replace cid = src cid，如果 replace cid 是 isolated 的，虽然理论上不会有新的 pextent 分配到 isolated chunk，但是有可能在他上面已有的 thin pextents 的继续使用或者 COW 等情况导致本地空间被撑爆的概率也比以前高了。
 
     6. 考虑双活，相较于是否与 prefer local topo distance 更近，要优先选跟 dst cid 一个 zone 的，因为有可能 prefer local 在 prefer zone，而此时在 secondary zone 内部做 migrate，在没有 owner 的情况下，src 最好还是选 secondary 的，这样 owner 也会在 secondary zone 中产生。
+
+    6. 需要一个 rpc 来排序给出 chunk ratio，even pids nums
 
 3. 在 migrate for prior extent 中引入 remain space map 来正确计算（不一定需要，目前看他好像没啥问题）；
 
@@ -153,7 +159,7 @@ ZBS-20993，允许 RPC 产生恢复/迁移命令，可以指定源和目的地�
 6. io metrics 调整
     1. LocalIOHandler 中的 ctx->sw.Start() 应该放在所有会执行 LocalIODone 前？
     2. METRIC_INITIALIZE 中的 args 是怎么用起来的呢？
-    2. 目前 Acccess IO Stats 中的统计是 app io 的流量，在 access handler 的调节中，后续要考虑 sink io，先不用做 recover io metrics；
+    2. 目前 Acccess IO Stats 中的统计不做区分，统计的是 app + recover io 的流量，在 access handler 的调节中，后续要考虑 sink io，先不用做 recover io metrics；
     2. 在 access io handler 中做的 UpdateIOStats，对外展示有好处，但实际上没有流量，自动调节的话，可以忽略这部分。
 5.  io 分成 app io, recover io 和 sink io 共 3 种，粗略理解，sink io 保性能，recover io 保安全，然后他们在不同场景下的优先级应该不一样：
     1. 比如 app io 流量小的话，应该让 recover io 高，sink io 小一些；
