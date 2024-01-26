@@ -207,6 +207,62 @@ set sheduler-locking off
 thread apply all bt
 ```
 
+### 典型调试过程
+
+1. 用户提供了一个 coredump 和集群收集日志
+
+2. 起一个 zbs-buildtime 的 docker，从 17.20 上下载、安装对应的 zbs 和对应的 debuginfo 的 rpm
+
+   ```shell
+   wget zbs-4.0.14-rc3.0.release.git.gdb25d78fa.el7.SMTX.HCI.x86_64.rpm
+   # 解压并找到这个 coredump 
+   rpm2cpio xxx.rpm | cpio -div
+   # 设置正在调试的可执行文件
+   (gdb) file zbs-metad
+   
+   wget zbs-debuginfo-4.0.14-rc3.0.release.git.gdb25d78fa.el7.SMTX.HCI.x86_64.rpm
+   # 安装 debuginfo 包以正确显示符号表
+   rpm -Uvh zbs-debuginfo-4.0.14-rc3.0.release.git.gdb25d78fa.el7.SMTX.HCI.x86_64.rpm
+   
+   # 设置源文件搜索路径
+   docker cp /home/code/zbs2 <docker_id>:/path
+   (gdb) directory /path
+   ```
+
+3. 如果符号还是不能正常显示，需要查看 glibc 版本是否一致（在用户集群收集日志里的 report_node_info_ip 中会显示集群使用的 glibc 版本）
+
+   若要更换低版本的 glibc，需要找到对应的 [common](https://mirrors.bfsu.edu.cn/centos-vault/7.2.1511/os/x86_64/Packages/glibc-2.17-105.el7.x86_64.rpm) 和 [debuginfo](http://ftp.scientificlinux.org/linux/scientific/7rolling/archive/debuginfo/glibc-debuginfo-2.17-105.el7.x86_64.rpm) 等安装包并替换现有的
+
+   ```
+   rpm -Uvh glibc-2.17-106.el7_2.8.x86_64.rpm glibc-common-2.17-106.el7_2.8.x86_64.rpm glibc-debuginfo-2.17-106.el7_2.8.x86_64.rpm glibc-headers-2.17-106.el7_2.8.x86_64.rpm glibc-debuginfo-common-2.17-106.el7_2.8.x86_64.rpm glibc-devel-2.17-106.el7_2.8.x86_64.rpm --force
+   ```
+
+4. 查看 coredump 中的变量来推测退出时机
+
+   ```
+   gdb usr/sbin/zbs-metad UrgentThread.core.2042.1705303636
+   (gdb) file zbs-metad
+   (gdb) directory /path
+   (gdb) thread apply all bt
+   (gdb) thread 1
+   (gdb) bt full
+   (gdb) frame 1
+   (gdb) print 在这个线程中的变量
+   ```
+
+5. 查看特殊类变量
+
+   1. 查看 co-list，[对应说明](https://docs.google.com/document/d/1kLfRK0X44sq_8O5hOYIYdZQk8XV5rragK1izof8ZqyI/edit#heading=h.b88mlnz9busr)
+
+   2. 查看 btree size 等直接通过 gdb 无法获取的信息，可以借助 gdb.parse_and_eval() 来实现，[参考]( http://gerrit.smartx.com/c/zbs/+/34467)
+
+      ```shell
+      # 执行对应的 C++ 代码 ((detail::ThreadLocalData*)cur_tld)->pid
+      gdb.parse_and_eval("((detail::ThreadLocalData*)%s)->pid"%cur_tld.str())
+      ```
+
+
+
 [参考1](https://zhuanlan.zhihu.com/p/74897601)，[参考2](https://cloud.tencent.com/developer/article/1142947)
 
 待补充
@@ -216,3 +272,4 @@ https://coolshell.cn/articles/3643.html
 https://blog.csdn.net/haoel/category_9197.html
 
 gdb 使用方法，https://wizardforcel.gitbooks.io/100-gdb-tips/content/info-function.html
+

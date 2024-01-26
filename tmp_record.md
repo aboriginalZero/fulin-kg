@@ -1,45 +1,8 @@
-meta in zbs 中关于 db cluster 部分
+1. prefer zone id 在 recover 中的传递；
 
+1. prior migrate 设计；
 
-
-整理一下这个售后处理的流程，zk leader kill 包含 zk session、access session、db cluster 相关的内容
-
-下一个 smtxos 开始使用 yq，了解 yq 的用法，https://github.com/mikefarah/yq 
-
-命令行查看指令列，zbs-meta -fjson chunk list | jq '.[] | {"ID", "Used Space", "Data Capacity"}'
-
-```shell
-# json 格式查看所有 chunk 已使用空间
-zbs-meta -fjson chunk list | jq '.[] | {"ID", "Perf Valid Space", "Perf Allocated Space"}'
-# 查看所有的 chunk 的 ring id
-zbs-meta -fjson topo list | jq 'map(select(.type =="NODE")) | .[] | "\(.["description"]), ring id \(.["ring_id"])"'
-```
-
-查看 co-list 的[脚本](http://192.168.90.221/f/core/co.py)
-
-通过 bt full 查看当前线程完整栈帧，通过 frame x 到指定页，然后看具体变量（所以需要知道变量都是在哪个线程中持有的）
-
-解压 RPM 包，rpm2cpio xxx.rpm | cpio -div
-
-如果要查看 btree size 等直接通过 gdb 无法获取的信息，可以借助 gdb.parse_and_eval() 来实现，[参考]( http://gerrit.smartx.com/c/zbs/+/34467)
-
-```shell
-# 执行对应的 C++ 代码 ((detail::ThreadLocalData*)cur_tld)->pid
-gdb.parse_and_eval("((detail::ThreadLocalData*)%s)->pid"%cur_tld.str())
-```
-
-
-
-DBCluster是一个通用的组件，用于各个节点间进行数据的同步。在有数据修改时，DBCluster会首先将journal提交到journal cluster（目前基于zookeeper实现），当提交到journal cluster完成后，数据修改就可以返回了，journal cluster保证修改的持久性，本地的LevelDb会异步的被修改。
-
-
-
-2. MgirateFilter 可以改成 allow, deny 都允许的，如果没要求，就传入 std::nullopt，
-3. 补一个同时有多个 removing cid 的单测
-4. even migrate 只生成 1 条 migrate cmd 还没定位到原因，有可能就是因为当 cmd_num_limit = 0 时还会多下发一条，在 [ZBS-26779](http://jira.smartx.com/browse/ZBS-26779) 或 [ZBS-26736](http://jira.smartx.com/browse/ZBS-26736) 中修复了；
-5. prior migrate 设计；
-
-一步一步来，最终可以考虑重写个 reposition manager，里面有把 cap replica， cap ec shard, perf replica 做成 3 个类。 但在此之前，需要先把 3 个 migrate 弄成统一的接口，这样才能一步步演进，让所有的 migrate 能共用一个 GetSrcCidForReplicaMigration。
+1. 补一个同时有多个 removing cid 的单测；
 
 1. refactor migrate for repair topo，从 GenerateMigrateCmdsForRepairTopo 开始改；
 
@@ -55,7 +18,7 @@ DBCluster是一个通用的组件，用于各个节点间进行数据的同步�
 
         migrate for ec repair topo 中对 ec src 的选择过于宽松了，其实还可以选到更好的 src，但是目前不做处理，目前只根据 replace 来选 src
 
-2. refactor migrate for rebalance
+5. refactor migrate for rebalance
 
     1. 替换过旧的 MigrateForRebalance
 
@@ -76,6 +39,10 @@ DBCluster是一个通用的组件，用于各个节点间进行数据的同步�
     6. 考虑双活，相较于是否与 prefer local topo distance 更近，要优先选跟 dst cid 一个 zone 的，因为有可能 prefer local 在 prefer zone，而此时在 secondary zone 内部做 migrate，在没有 owner 的情况下，src 最好还是选 secondary 的，这样 owner 也会在 secondary zone 中产生。
 
     6. 需要一个 rpc 来排序给出 chunk ratio，even pids nums
+
+3. MgirateFilter 可以改成 allow, deny 都允许的，如果没要求，就传入 std::nullopt
+
+7. even migrate 只生成 1 条 migrate cmd 还没定位到原因，有可能就是因为当 cmd_num_limit = 0 时还会多下发一条，在 [ZBS-26779](http://jira.smartx.com/browse/ZBS-26779) 或 [ZBS-26736](http://jira.smartx.com/browse/ZBS-26736) 中修复了；
 
 3. 在 migrate for prior extent 中引入 remain space map 来正确计算（不一定需要，目前看他好像没啥问题）；
 
@@ -116,7 +83,9 @@ DBCluster是一个通用的组件，用于各个节点间进行数据的同步�
 
 2. zbs-meta chunk list_pid < cid>，看指定 chunk 持有哪些不同种类的 pid，除了 ip + port 还要支持直接给定 cid；
 
-    对应 rpc ListPid，这个可以考虑补充下显示 thin/thick 个数，以及 reserve_pids 这样的，涉及到跟以往的兼容，这边先不修改
+    对应 rpc ListPid，这个可以考虑补充下显示 thin/thick 个数，以及 reserve_pids 这样的，
+
+    涉及到跟以往的兼容，这边先不修改
 
 3. zbs-meta migrate < volume id> <replace_cid> <dst_cid>，尽量从 replace_cid 上移除，并尽量放到 dst_cid 上，不保证严格执行；
 
@@ -476,7 +445,7 @@ gtest系列之事件机制
    
    先介绍所有 sub migrate strategies 中共有的限制条件：
    
-   1. failslow
+   1. isolated
        1. must not be dst;
        2. should not be src/replace in ec migrate;
        3. should not be src, should be replace in replica migrate;
@@ -490,7 +459,7 @@ gtest系列之事件机制
 
 1. access recover read 是 extent 粒度，write 是 block 粒度？
 2. 为什么 AllocRecoverForAgile 中一定不会有 prior extent？
-3. 在 HasSpaceForCow() 为什么用的是 total_data_capacity 而不是 valid_data_space ？
+3. 在 HasSpaceForCow() 中为什么用的是 total_data_capacity 而不是 valid_data_space ？
 3. lease owner 不释放的一个原因是 inspector 扫描到 extent generation 不一致而触发的读操作（借此剔除 gen 较低的 extent，再经由 recover 完成数据一致）
 
 
@@ -498,6 +467,21 @@ gtest系列之事件机制
 
 
 待整理
+
+整理一下 xen io reroute 中 meta leader 被 kill 的售后处理的流程，zk leader kill 包含 zk session、access session、db cluster 相关的内容。meta in zbs 中关于 db cluster 部分，DBCluster是一个通用的组件，用于各个节点间进行数据的同步。在有数据修改时，DBCluster会首先将journal提交到journal cluster（目前基于zookeeper实现），当提交到journal cluster完成后，数据修改就可以返回了，journal cluster保证修改的持久性，本地的LevelDb会异步的被修改。
+
+下一个 smtxos 开始使用 yq，了解 yq 的用法，https://github.com/mikefarah/yq 
+
+命令行查看指令列，zbs-meta -fjson chunk list | jq '.[] | {"ID", "Used Space", "Data Capacity"}'
+
+```shell
+# json 格式查看所有 chunk 已使用空间
+zbs-meta -fjson chunk list | jq '.[] | {"ID", "Perf Valid Space", "Perf Allocated Space"}'
+# 查看所有的 chunk 的 ring id
+zbs-meta -fjson topo list | jq 'map(select(.type =="NODE")) | .[] | "\(.["description"]), ring id \(.["ring_id"])"'
+```
+
+
 
 unmap 是针对精简配置的存储阵列做空间回收，提高存储空间使用效率，应用于删除虚拟机文件的场景。VMware 向存储阵列发送 UNMAP 的 SCSI 指令，存储释放相应空间。
 
