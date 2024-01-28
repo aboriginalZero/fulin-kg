@@ -1,3 +1,5 @@
+1. recover dst 允许选 isolated ？
+
 1. prefer zone id 在 recover 中的传递；
 
 1. prior migrate 设计；
