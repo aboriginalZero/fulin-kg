@@ -1,3 +1,5 @@
+1. 在 migrate for even volumes 中，replace cid 应该选 more even extents 而非 lower remain space。
+
 1. recover / removing chunk dst 允许选 isolated ？
 
 1. 在 migrate for even volume rebalance 中的 MigrateCmdContext 在声明时，要传入 deny_src_isolated；
