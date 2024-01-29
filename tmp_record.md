@@ -1,6 +1,14 @@
-1. recover dst 允许选 isolated ？
+1. recover / removing chunk dst 允许选 isolated ？
 
-1. prefer zone id 在 recover 中的传递；
+1. 在 migrate for even volume rebalance 中的 MigrateCmdContext 在声明时，要传入 deny_src_isolated；
+
+3. 在 perf layer 的 uneven rebalance 中，优先迁移 thick pids 变得没有意义，因为 perf thick pextents 一定是 prior extents，所以这部分 pextents 一定不会被迁移；
+
+     如果迁移，有可能导致 prior over load，并不追求 prior under load 的节点之间的相对均衡。
+
+4. prefer zone id 在 recover 中的传递
+
+     顺带把这个做进去，GenerateMigrateCmdsForRemovingChunk 中 migrate_generate_used_cmd_slots 对 src / dst 的判断应该传入 AllocRecoverCap/PerfExtents；
 
 1. prior migrate 设计；
 
