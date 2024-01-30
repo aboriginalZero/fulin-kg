@@ -1,16 +1,16 @@
-1. 在 migrate for even volumes 中，replace cid 应该选 more even extents 而非 lower remain space。
+1. migrate for uneven volume rebalance 中，仅在 replace cid 处于高容量时才允许迁移 parent，处于极高容量时才允许迁移 lease owner, parent 和 prefer local
 
-1. recover / removing chunk dst 允许选 isolated ？
+1. 在 perf layer 的 uneven rebalance 中，优先迁移 thick pids 变得没有意义，因为 perf thick pextents 一定是 prior extents，所以这部分 pextents 一定不会被迁移，如果迁移，有可能导致 prior over load，而我们并不追求 prior under load 的节点之间的相对均衡。
 
-1. 在 migrate for even volume rebalance 中的 MigrateCmdContext 在声明时，要传入 deny_src_isolated；
+1. (done) 在 migrate for even volumes 中，replace cid 应该选 more even extents 而非 lower remain space
 
-3. 在 perf layer 的 uneven rebalance 中，优先迁移 thick pids 变得没有意义，因为 perf thick pextents 一定是 prior extents，所以这部分 pextents 一定不会被迁移；
+4. (done) 在 migrate for even volume rebalance 中的 MigrateCmdContext 在声明时，要传入 deny_src_isolated，即拒绝 src_cid isolated 的情况下生成 migrate cmd
 
-     如果迁移，有可能导致 prior over load，并不追求 prior under load 的节点之间的相对均衡。
-
-4. prefer zone id 在 recover 中的传递
+5. prefer zone id 在 recover 中的传递
 
      顺带把这个做进去，GenerateMigrateCmdsForRemovingChunk 中 migrate_generate_used_cmd_slots 对 src / dst 的判断应该传入 AllocRecoverCap/PerfExtents；
+
+1. recover / removing chunk dst 允许选 isolated ？允许，为了尽快迁出。
 
 1. prior migrate 设计；
 
@@ -464,6 +464,7 @@ gtest系列之事件机制
    2. src select 是共有的
    3. 介绍 src / dst / replace 通用的选择策略，然后再分别介绍各个部分中独有的
    4. EnqueueCmd 的时候会将 migrate src_cid 设置成 lease owner，所以以上选到的 mgirate src 不一定就是最后给到 access 时的 src
+   4. 在介绍副本恢复策略时，可以着重介绍 recover dst 黑名单机制
 
 
 
