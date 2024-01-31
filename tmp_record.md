@@ -11,6 +11,8 @@ migrate for over load prior extents  把其中的 valid_cache_space 改成 perf_
 
 
 
+1. 因为扫描的代价比较大，初始状态和生成一条新命令之后都做下空间检查，没有空间就保留快速退出逻辑）生成新命令后的检查可以在  dst cid 剩余空间归零 或者 < 目前支持的 EC 最小 Extent size 之后触发，因此不会消耗很多资源。
+
 1. prefer zone id 在 recover 中的传递
 
      顺带把这个做进去，GenerateMigrateCmdsForRemovingChunk 中 migrate_generate_used_cmd_slots 对 src / dst 的判断应该传入 AllocRecoverCap/PerfExtents；
