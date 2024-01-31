@@ -1,18 +1,23 @@
-1. migrate for uneven volume rebalance 中，仅在 replace cid 处于高容量时才允许迁移 parent，处于极高容量时才允许迁移 lease owner, parent 和 prefer local
+migrate for over load prior extents  把其中的 valid_cache_space 改成 perf_valid_data_space，迁移策略基本不变，不过还需要考虑到 cap space 的变动。
 
-1. 在 perf layer 的 uneven rebalance 中，优先迁移 thick pids 变得没有意义，因为 perf thick pextents 一定是 prior extents，所以这部分 pextents 一定不会被迁移，如果迁移，有可能导致 prior over load，而我们并不追求 prior under load 的节点之间的相对均衡。
 
-1. (done) 在 migrate for even volumes 中，replace cid 应该选 more even extents 而非 lower remain space
 
-4. (done) 在 migrate for even volume rebalance 中的 MigrateCmdContext 在声明时，要传入 deny_src_isolated，即拒绝 src_cid isolated 的情况下生成 migrate cmd
+一个节点原本 perf 用到接近满，例如 90%，设置 prs_ratio 为 20%，这时候发生 B 类超载。
+然后再将超过 prs_ratio 比例的 perf pextent 转化为 perf thick，这时候会发生 A 类超载。
 
-5. prefer zone id 在 recover 中的传递
+然后就同时超载了。
+
+
+
+
+
+1. prefer zone id 在 recover 中的传递
 
      顺带把这个做进去，GenerateMigrateCmdsForRemovingChunk 中 migrate_generate_used_cmd_slots 对 src / dst 的判断应该传入 AllocRecoverCap/PerfExtents；
 
-1. recover / removing chunk dst 允许选 isolated ？允许，为了尽快迁出。
+1. 另起一个 patch 去改变其中的变量名，包括 GFLAGS，函数名。
 
-1. prior migrate 设计；
+1. recover / removing chunk dst 允许选 isolated ？允许，为了尽快迁出。
 
 1. 补一个同时有多个 removing cid 的单测；
 
@@ -30,31 +35,7 @@
 
         migrate for ec repair topo 中对 ec src 的选择过于宽松了，其实还可以选到更好的 src，但是目前不做处理，目前只根据 replace 来选 src
 
-5. refactor migrate for rebalance
-
-    1. 替换过旧的 MigrateForRebalance
-
-        没法这么操作，因为 even volume rebalance 是 move num limit，uneven volume rebalance 是 move space limit，并且后者有一个 thick pids, thin pids wo/with origin 的获取过程，所以需要分开。
-
-    2. 另起一个 patch 去改变其中的变量名，包括 GFLAGS，函数名。
-
-    2. 允许同个机架内部高于平均负载的节点作为迁移目标 ，使得机架内部的负载也比较均衡。
-
-        rebalance 时能 recover jiewei 发现的问题，机架 A 有节点 1 2 3 4，机架 B 有节点 5 6 7 ，normal extent 容量均衡会去算一个 avg_load，B 上的节点负载都大于 avg_load，A 上的都小于 avg_load，5 容量不够了，只能往 1 2 3 4 迁，但是他们都在 A 上，由于 topo 降级所以都没法迁。改进使得 5 可以向 6/7 上迁。还缺一个 even volume 的 ut 验证 [ZBS-25847](http://jira.smartx.com/browse/ZBS-25847)
-        
-        构造一个容量相同，优先选 isolated 的情况，isolated chunk should be as repalce cid firstly in migrate for rebalance in next patch
-        
-    5. 能让 failslow 的优先被选成 replace
-
-    5. 如果一个节点容量 > 95%，在 migrate for rebalance 的时候可以突破 isolated 的规则，允许 src cid 选 isolated 的，否则有可能单点被撑爆，因为现在 ec migrate replace cid = src cid，如果 replace cid 是 isolated 的，虽然理论上不会有新的 pextent 分配到 isolated chunk，但是有可能在他上面已有的 thin pextents 的继续使用或者 COW 等情况导致本地空间被撑爆的概率也比以前高了。
-
-    6. 考虑双活，相较于是否与 prefer local topo distance 更近，要优先选跟 dst cid 一个 zone 的，因为有可能 prefer local 在 prefer zone，而此时在 secondary zone 内部做 migrate，在没有 owner 的情况下，src 最好还是选 secondary 的，这样 owner 也会在 secondary zone 中产生。
-
-    6. 需要一个 rpc 来排序给出 chunk ratio，even pids nums
-
 3. MgirateFilter 可以改成 allow, deny 都允许的，如果没要求，就传入 std::nullopt
-
-7. even migrate 只生成 1 条 migrate cmd 还没定位到原因，有可能就是因为当 cmd_num_limit = 0 时还会多下发一条，在 [ZBS-26779](http://jira.smartx.com/browse/ZBS-26779) 或 [ZBS-26736](http://jira.smartx.com/browse/ZBS-26736) 中修复了；
 
 3. 在 migrate for prior extent 中引入 remain space map 来正确计算（不一定需要，目前看他好像没啥问题）；
 
@@ -62,7 +43,7 @@
 
 4. recover / migrate for removing chunk 用到的函数，是否可以拿回 recover_manager.cc 中？
 
-    暂时不需要，拿回来的好处是啥呢？不至于出现跨线程用协程锁的问题
+    不至于出现跨线程用协程锁的问题，yutian 建议暂时不需要。
 
 5. migrate for localization 中有 loose_medium_load_ratio 弹性边界的概念，其他 migrate 中不需要吗？
 
@@ -122,6 +103,8 @@
     往 UpdatableRecoverParams 中增加 2 个字段，start hour  end_hour。同时，通过这个 patch 改 recover 的触发策略，IsNeedRecover。
 
     单测要写在 function_test 中
+    
+6. 需要一个 rpc 来排序给出 chunk ratio，even pids nums？感觉没必要，但是测试的时候可以先加着
 
 
 
@@ -638,7 +621,7 @@ prioritized_rx_pids 是 perf_rx_pids 的子集，一定被包含在 perf_rx_pids
 
 
 
-cap_pids，除了 allocating / repositioning  的 cap 层 pids 都会被记入 cap_pids，cap_pids 一定包含 cap_tx_pids 和 cap_recover_src_pids（但不是仅由他们两组成的），一定不包含 cap_rx_pids ，与cap_reserved_pids 可能会有交集（取决于是否调用了 GetLeaseForRefreshLocation rpc，没调用的话是不会有交集的），也因此，求的 allocated_data_space 可能是略大的，因为有可能某个 pid 既在 cap_pids 又在 cap_reserved_pids。
+cap_pids，除了 allocating / repositioning  的 cap 层 pids 都会被记入 cap_pids，cap_pids 还一定包含 cap_tx_pids 和 cap_recover_src_pids（但不是仅由他们两组成的），一定不包含 cap_rx_pids ，与cap_reserved_pids 可能会有交集（取决于是否调用了 GetLeaseForRefreshLocation rpc，没调用的话是不会有交集的），也因此，求的 allocated_data_space 可能是略大的，因为有可能某个 pid 既在 cap_pids 又在 cap_reserved_pids。
 
 cap_thick_pids，在 cap 层的 thcik pids；
 
@@ -667,7 +650,7 @@ cap_rx_pids / cap_tx_pids / cap_recover_src_pids，这三个分别对应 reposit
 * add：下发 reposition cmd 时会调用 ReserveSpaceForRecover()，然后放入 pid_cmds_；
 * delete：在 DoScan 时会调用 CleanTimeoutAndFinishedCmd()，满足 cmd finished or timeout 的条件时就会删除，然后从 pid_cmds_ 中删除；
 
-这个空间大小也体现在 ongoing recover / migrate space，不过它的计算只计算了 src 的空间。算空间大小，不应该减去 cap_tx_pids，因为在这里的 pid 一定还在 cap_pids，并且当 reposition 成功，会有 RemovePextent 或者 ReplacePextent，到那时候会把 cap_pids 里面的相关 pid 去掉。
+这个空间大小也体现在 ongoing recover / migrate space，不过他们只算了 src 的空间。算节点已分配空间大小，不应该减去 cap_tx_pids，因为在这里的 pid 一定还在 cap_pids，并且当 reposition 成功，会有 RemovePextent 或者 ReplacePextent，到那时候会把 cap_pids 里面的相关 pid 去掉。
 
 
 
