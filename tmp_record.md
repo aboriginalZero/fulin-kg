@@ -1,13 +1,4 @@
-migrate for over load prior extents  把其中的 valid_cache_space 改成 perf_valid_data_space，迁移策略基本不变，不过还需要考虑到 cap space 的变动。
-
-
-
-一个节点原本 perf 用到接近满，例如 90%，设置 prs_ratio 为 20%，这时候发生 B 类超载。
-然后再将超过 prs_ratio 比例的 perf pextent 转化为 perf thick，这时候会发生 A 类超载。
-
-然后就同时超载了。
-
-
+1. migrate for over load prior extents  把其中的 valid_cache_space 改成 perf_valid_data_space，迁移策略基本不变，不过还需要考虑到 cap space 的变动。
 
 1. 副本分配时，如果集群是中负载，不用遵循局部化分配，否则有可能刚分配完就要迁移，副本分配的代码里有对 expected localization loc 中如果有 isolated cid 的特殊处理
 
