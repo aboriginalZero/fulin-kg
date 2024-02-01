@@ -9,9 +9,11 @@ migrate for over load prior extents  把其中的 valid_cache_space 改成 perf_
 
 
 
+1. 副本分配时，如果集群是中负载，不用遵循局部化分配，否则有可能刚分配完就要迁移，副本分配的代码里有对 expected localization loc 中如果有 isolated cid 的特殊处理
 
+2. GetLocsForECShardLocalization 的计算可以延迟到第一个 ec shard 出现时
 
-1. prefer zone id 在 recover 中的传递
+3. prefer zone id 在 recover 中的传递
 
      顺带把这个做进去，GenerateMigrateCmdsForRemovingChunk 中 migrate_generate_used_cmd_slots 对 src / dst 的判断应该传入 AllocRecoverCap/PerfExtents；
 
