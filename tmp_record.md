@@ -1,14 +1,14 @@
 1. migrate for over load prior extents  把其中的 valid_cache_space 改成 perf_valid_data_space，迁移策略基本不变，不过还需要考虑到 cap space 的变动。
 
-1. 副本分配时，如果集群是中负载，不用遵循局部化分配，否则有可能刚分配完就要迁移，副本分配的代码里有对 expected localization loc 中如果有 isolated cid 的特殊处理
+2. 副本分配时，如果集群是中负载，不用遵循局部化分配，否则有可能刚分配完就要迁移
 
-2. GetLocsForECShardLocalization 的计算可以延迟到第一个 ec shard 出现时
+     副本分配的代码里有对 expected localization loc 中如果有 isolated cid 的特殊处理
 
-3. prefer zone id 在 recover 中的传递
+3. GenerateMigrateCmdsForRemovingChunk 中 migrate_generate_used_cmd_slots 对 src / dst 的判断应该传入 AllocRecoverCap/PerfExtents；
 
-     顺带把这个做进去，GenerateMigrateCmdsForRemovingChunk 中 migrate_generate_used_cmd_slots 对 src / dst 的判断应该传入 AllocRecoverCap/PerfExtents；
+     传入会有点麻烦，可能出现 removing chunk 的时候总是选某个 src / dst cid，但那个 dst cid 可生成的余额不足，还一直选他。但是影响最大也就造成一次 generate 过程中只选 1 个 src cid，用满他的 256 的配额，所以先不修复。
 
-1. 另起一个 patch 去改变其中的变量名，包括 GFLAGS，函数名。
+1. 另起一个 patch 去改变 recover manager 中的变量名，包括 GFLAGS，改成 tolerance。
 
 1. recover / removing chunk dst 允许选 isolated ？允许，为了尽快迁出。
 
