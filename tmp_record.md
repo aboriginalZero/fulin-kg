@@ -1,8 +1,12 @@
-1. meta 层面的 reposition auto mode，要自适应调节 generate limit
+1. migrate for over load prior extents  把其中的 valid_cache_space 改成 perf_valid_data_space，迁移策略基本不变，不过还需要考虑到 cap space 的变动；
 
-1. migrate for over load prior extents  把其中的 valid_cache_space 改成 perf_valid_data_space，迁移策略基本不变，不过还需要考虑到 cap space 的变动。
+1. 因为后续的操作不会去操作 even pextent，所以 migrate for even volume 执行完，后续可以接着执行后续 migrate ，但开了分层后的 migrate for over load prior extent，假设分层之后的状态稳定，那 prior extent 作为 perf thick extent，也会参与后续的 migrate for rebalance 平衡，那好像就支持双活了
 
-3. 副本分配时，如果集群是中负载，不用遵循局部化分配，现有代码是除了高负载，都要遵循，有可能造成刚分配完就要迁移的现象。
+3. 在分层升级过程中，prior extent 还属于 cap，所以可能还是得保留，即使是升级之后，他属于 perf，也得让 perf thick extent 的优先级在所有 perf extent 里最高，所以还是得保留一个独立的 migrate 策略，因为算他的负载跟算 perf extent 整体的负载并不一致，如果他两在一次里触发的话，可能会有冲突；
+
+1. meta 层面的 reposition auto mode 要在 560 中做起来，要自适应调节 generate limit；
+
+3. 副本分配时，如果集群是中负载，不用遵循局部化分配，现有代码是除了高负载，都要遵循，有可能造成刚分配完就要迁移的现象
 
      副本分配的代码里有对 expected localization loc 中如果有 isolated cid 的特殊处理
 
@@ -41,15 +45,6 @@
 5. migrate for localization 中有 loose_medium_load_ratio 弹性边界的概念，其他 migrate 中不需要吗？
 
     检查一下其他 migrate 中是否都像 migrate for even volume 那样允许 4 个 pextent 级别的不均匀。
-
-6. 因为后续的操作不会去操作 even pextent，所以 migrate for even volume 执行完，后续可以接着执行后续 migrate ，但开了分层后的 migrate for over load prior extent，假设分层之后的状态稳定，那 prior extent 作为 perf thick extent，也会参与后续的 migrate for rebalance 平衡，那好像就支持双活了
-
-7. 在分层升级过程中，prior extent 还属于 cap，所以可能还是得保留，即使是升级之后，他属于 perf，也得让 perf thick extent 的优先级在所有 perf extent 里最高，所以还是得保留一个独立的 migrate 策略，因为算他的负载跟算 perf extent 整体的负载并不一致，如果他两在一次里触发的话，可能会有冲突；
-
-9. migrate for localization
-
-     1. 针对 ec 的 best topo distance 的计算，斯坦纳树问题，对应的 DP 做法 Dreyfus-Wagner 算法。yutian 说最新做法是从拓扑学的角度出发的，现有代码已经是最优解而非近似计算了
-     2. 重构 recover manager 时，需要考虑 prior extent 不需要在低负载下支持局部化，master 分支上目前还是支持，但 5.5.x 已经不支持了
 
 
 
@@ -447,9 +442,34 @@ gtest系列之事件机制
 遗留问题：
 
 1. access recover read 是 extent 粒度，write 是 block 粒度？
+
 2. 为什么 AllocRecoverForAgile 中一定不会有 prior extent？
+
 3. 在 HasSpaceForCow() 中为什么用的是 total_data_capacity 而不是 valid_data_space ？
-3. lease owner 不释放的一个原因是 inspector 扫描到 extent generation 不一致而触发的读操作（借此剔除 gen 较低的 extent，再经由 recover 完成数据一致）
+
+4. lease owner 不释放的一个原因是 inspector 扫描到 extent generation 不一致而触发的读操作（借此剔除 gen 较低的 extent，再经由 recover 完成数据一致）
+
+5. 为什么 LSM 写 4 KiB cache 需要写 journal，写 256 KiB cache 不需要？
+
+    4k 写为了避免写放大，除了写一个 4k 的真实数据外，还需要写对应的 bitmap （一个 256 KiB 的 block 中有 64 个 4k ）并持久化到 journal。
+
+    否则就需要写 4k 真实数据 + 1020k 实际为 0 的数据，这将引起写放大。
+
+6. LSM2 中，采取 Journaling+Soft Update 的方式保证 crash consistency。默认采用 Journaling，所有数据和元数据的更新都需要通过 Journal 进行保护，然后再写入 BDev。当数据是初次写入时，允许采用 Soft Update 方式，先将数据写入磁盘，再把元数据写入 Journal，避免因数据写入 Journal 引起的写放大。
+
+    初次写的数据如果丢了，元数据没来得及写入 Journal 会有什么后果？
+
+7. 在元数据中，最消耗内存的是 PBlob ，我们必须实现 PBlob 不常驻内存。PBlobEntry 数量跟 PBlob 接近，但单个 PBlobEntry 较小，可全量放内存。对于独占数据，无需额外内存保存 Entry，只需要计算映射值即可；对于共享数据，需要在内存中保存 Entry，因此，快照数量的增加，会增加 LSM 的内存占用。
+
+    为啥独占数据，无需额外内存保存 Entry，只需要计算映射值即可？
+
+8. 为啥 class PBlobCtx 相较于 message PBlobPB 可以节省内存和操作开销？
+
+9. 为啥只有 private pblob 可能触发 promote 的 IO 读，以及 shared pblob 为啥不会？
+
+10. 普通 IO 读不需要修改 Journal，触发 promote 的 IO 读由于涉及到从 data block 到 cache block 的拷贝，所以需要写一条 amend pblob PB 的 Journal，然后才会按照普通 IO 读的流程走下去。
+
+11. 只有 partition 中会使用 checksum，每 8 KiB + 512 B 的布局，每 8 KiB 计算出 CRC32 值，保存在随后的 512 B 里。
 
 
 
