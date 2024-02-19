@@ -1,3 +1,45 @@
+1. migrate for over load prior extents 也只是各 zone 内部的迁移，无法处理双活跨 zone 迁移
+
+    migrate for uneven repair topo 是会迁移 prior extents（不论他在 cap 还是 perf 层），并且保证不会进入 prior over load 状态
+
+    
+
+    如果在 normal 低负载迁移时 deny prior extent，即 prior extent 不需要满足局部化，只需要满足拓扑安全就好。然后在 migrate for prior extents 中去处理 prior over load 和 repair topo
+
+    让 migrate for uneven extents 中的 3 个策略都 deny prior extents，然后在 migrate for prior extents 中单独处理：
+
+    1. prior repair topo，只考虑包含 2 ：1 的拓扑安全，不考虑局部化，但考虑 prefer local 优先，这个迁移的优先级比 prior over load 要高；
+
+       也就是说，即使出现部分降级数据，也要保证数据分布符合 2 ：1 和拓扑安全
+
+    2. prior (perf thick) over load，只考虑容量不超过，不考虑当节点都是 prior under load 时的内部均衡；
+
+       满足拓扑不降级的前提下，如果出现某节点 prior over load，将它迁移到 under load
+
+    3. perf thin over load，只考虑 perf thin 跟 perf valid data space - planned_prs 的关系
+
+    
+
+    关于 perf extent 不论 thick 还是 thin 都不考虑局部化，这样处理起来简单。因为总是期望性能层的数据会下沉到容量层，性能层的副本安全要求可以稍微放宽些，只要满足拓扑安全 + 本地化就好了。
+
+    1. perf thick over load
+
+       1. over load 
+
+    2. perf thin over load
+
+       1. 将 perf thin used data space > perf valid data space - planned_prs 的
+
+    3. perf thick / thin repair topo
+
+       1. thick 和 thin 都需要 repair topo 来达到数据分布符合 2 ：1 和拓扑安全的效果
+       2. 若产生了 migrate cmd，不需要考虑 migrate for perf rebalance
+       3. 若包含 thick + thin 的 perf allocated ratio 超过 95%，那么直接跳过 migrate for repair topo，进入 migrate for rebalance
+
+    4. perf thick / thin rebalance
+
+       考虑到不同节点 SSD 盘数量不同，prior ratio 不同，所以还是要有一个 perf thin + perf thick 总体的容量均衡，perf thick / thin 都允许迁移，但要保证不进入更高负载（thick 看的是 allocated prs 和 planned prs 的关系，thin 看的是 perf thin used data space 和 perf valid data space - planned_prs 的关系），perf thick 优先于 perf thin。
+
 1. migrate for over load prior extents  把其中的 valid_cache_space 改成 perf_valid_data_space，迁移策略基本不变，不过还需要考虑到 cap space 的变动；
 
 1. 因为后续的操作不会去操作 even pextent，所以 migrate for even volume 执行完，后续可以接着执行后续 migrate ，但开了分层后的 migrate for over load prior extent，假设分层之后的状态稳定，那 prior extent 作为 perf thick extent，也会参与后续的 migrate for rebalance 平衡，那好像就支持双活了
