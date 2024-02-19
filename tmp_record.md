@@ -1,66 +1,18 @@
-1. migrate for over load prior extents 也只是各 zone 内部的迁移，无法处理双活跨 zone 迁移
-
-    migrate for uneven repair topo 是会迁移 prior extents（不论他在 cap 还是 perf 层），并且保证不会进入 prior over load 状态
-
-    
-
-    如果在 normal 低负载迁移时 deny prior extent，即 prior extent 不需要满足局部化，只需要满足拓扑安全就好。然后在 migrate for prior extents 中去处理 prior over load 和 repair topo
-
-    让 migrate for uneven extents 中的 3 个策略都 deny prior extents，然后在 migrate for prior extents 中单独处理：
-
-    1. prior repair topo，只考虑包含 2 ：1 的拓扑安全，不考虑局部化，但考虑 prefer local 优先，这个迁移的优先级比 prior over load 要高；
-
-       也就是说，即使出现部分降级数据，也要保证数据分布符合 2 ：1 和拓扑安全
-
-    2. prior (perf thick) over load，只考虑容量不超过，不考虑当节点都是 prior under load 时的内部均衡；
-
-       满足拓扑不降级的前提下，如果出现某节点 prior over load，将它迁移到 under load
-
-    3. perf thin over load，只考虑 perf thin 跟 perf valid data space - planned_prs 的关系
-
-    
-
-    关于 perf extent 不论 thick 还是 thin 都不考虑局部化，这样处理起来简单。因为总是期望性能层的数据会下沉到容量层，性能层的副本安全要求可以稍微放宽些，只要满足拓扑安全 + 本地化就好了。
-
-    1. perf thick over load
-
-       1. over load 
-
-    2. perf thin over load
-
-       1. 将 perf thin used data space > perf valid data space - planned_prs 的
-
-    3. perf thick / thin repair topo
-
-       1. thick 和 thin 都需要 repair topo 来达到数据分布符合 2 ：1 和拓扑安全的效果
-       2. 若产生了 migrate cmd，不需要考虑 migrate for perf rebalance
-       3. 若包含 thick + thin 的 perf allocated ratio 超过 95%，那么直接跳过 migrate for repair topo，进入 migrate for rebalance
-
-    4. perf thick / thin rebalance
-
-       考虑到不同节点 SSD 盘数量不同，prior ratio 不同，所以还是要有一个 perf thin + perf thick 总体的容量均衡，perf thick / thin 都允许迁移，但要保证不进入更高负载（thick 看的是 allocated prs 和 planned prs 的关系，thin 看的是 perf thin used data space 和 perf valid data space - planned_prs 的关系），perf thick 优先于 perf thin。
-
-1. migrate for over load prior extents  把其中的 valid_cache_space 改成 perf_valid_data_space，迁移策略基本不变，不过还需要考虑到 cap space 的变动；
-
-1. 因为后续的操作不会去操作 even pextent，所以 migrate for even volume 执行完，后续可以接着执行后续 migrate ，但开了分层后的 migrate for over load prior extent，假设分层之后的状态稳定，那 prior extent 作为 perf thick extent，也会参与后续的 migrate for rebalance 平衡，那好像就支持双活了
-
-3. 在分层升级过程中，prior extent 还属于 cap，所以可能还是得保留，即使是升级之后，他属于 perf，也得让 perf thick extent 的优先级在所有 perf extent 里最高，所以还是得保留一个独立的 migrate 策略，因为算他的负载跟算 perf extent 整体的负载并不一致，如果他两在一次里触发的话，可能会有冲突；
-
 1. meta 层面的 reposition auto mode 要在 560 中做起来，要自适应调节 generate limit；
 
-3. 副本分配时，如果集群是中负载，不用遵循局部化分配，现有代码是除了高负载，都要遵循，有可能造成刚分配完就要迁移的现象
+2. 副本分配时，如果集群是中负载，不用遵循局部化分配，现有代码是除了高负载，都要遵循，有可能造成刚分配完就要迁移的现象
 
      副本分配的代码里有对 expected localization loc 中如果有 isolated cid 的特殊处理
 
-4. GenerateMigrateCmdsForRemovingChunk 中 migrate_generate_used_cmd_slots 对 src / dst 的判断应该传入 AllocRecoverCap/PerfExtents；
+3. GenerateMigrateCmdsForRemovingChunk 中 migrate_generate_used_cmd_slots 对 src / dst 的判断应该传入 AllocRecoverCap/PerfExtents；
 
      传入会有点麻烦，可能出现 removing chunk 的时候总是选某个 src / dst cid，但那个 dst cid 可生成的余额不足，还一直选他。但是影响最大也就造成一次 generate 过程中只选 1 个 src cid，用满他的 256 的配额，所以先不修复。
 
-1. recover / removing chunk dst 允许选 isolated ？允许，为了尽快迁出。
+4. recover / removing chunk dst 允许选 isolated ？允许，为了尽快迁出。
 
-1. 补一个同时有多个 removing cid 的单测；
+5. 补一个同时有多个 removing cid 的单测；
 
-1. refactor migrate for repair topo，从 GenerateMigrateCmdsForRepairTopo 开始改；
+6. refactor migrate for repair topo，从 GenerateMigrateCmdsForRepairTopo 开始改；
 
     1. 待做 [ZBS-13401](http://jira.smartx.com/browse/ZBS-13401)，让中高负载的容量均衡策略都要保证 prefer local 本地的副本不会被迁移，且如果 prefer local 变了，那么也要让他所在的 chunk 有一个本地副本（有个上限是保留归保留，但如果超过 95%，超过的 部分不考虑 prefer local 一定有对应的副本）
 
@@ -74,19 +26,15 @@
 
         migrate for ec repair topo 中对 ec src 的选择过于宽松了，其实还可以选到更好的 src，但是目前不做处理，目前只根据 replace 来选 src
 
-3. MgirateFilter 可以改成 allow, deny 都允许的，如果没要求，就传入 std::nullopt
+7. MgirateFilter 可以改成 allow, deny 都允许的，如果没要求，就传入 std::nullopt
 
-3. 在 migrate for prior extent 中引入 remain space map 来正确计算（不一定需要，目前看他好像没啥问题）；
+8. 在 migrate for prior extent 中引入 remain space map 来正确计算（不一定需要，目前看他好像没啥问题）；
 
     目前 migrate 中的逻辑是每次获取一个 pid 的 entry 都要通过 GetPhysicalExtentTableEntry 调用一次锁，但在 prior  extent 的迁移中，可以批量获取 diff_pids 中所有的 pentry，因此可以相应做优化。
 
-4. recover / migrate for removing chunk 用到的函数，是否可以拿回 recover_manager.cc 中？
+9. recover / migrate for removing chunk 用到的函数，是否可以拿回 recover_manager.cc 中？
 
     不至于出现跨线程用协程锁的问题，yutian 建议暂时不需要。
-
-5. migrate for localization 中有 loose_medium_load_ratio 弹性边界的概念，其他 migrate 中不需要吗？
-
-    检查一下其他 migrate 中是否都像 migrate for even volume 那样允许 4 个 pextent 级别的不均匀。
 
 
 
