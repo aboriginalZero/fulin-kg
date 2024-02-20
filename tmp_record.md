@@ -431,35 +431,33 @@ gtest系列之事件机制
 
 遗留问题：
 
-1. access recover read 是 extent 粒度，write 是 block 粒度？
+1. 为什么 AllocRecoverForAgile 中一定不会有 prior extent？
 
-2. 为什么 AllocRecoverForAgile 中一定不会有 prior extent？
+2. 在 HasSpaceForCow() 中为什么用的是 total_data_capacity 而不是 valid_data_space ？
 
-3. 在 HasSpaceForCow() 中为什么用的是 total_data_capacity 而不是 valid_data_space ？
+3. lease owner 不释放的一个原因是 inspector 扫描到 extent generation 不一致而触发的读操作（借此剔除 gen 较低的 extent，再经由 recover 完成数据一致）
 
-4. lease owner 不释放的一个原因是 inspector 扫描到 extent generation 不一致而触发的读操作（借此剔除 gen 较低的 extent，再经由 recover 完成数据一致）
-
-5. 为什么 LSM 写 4 KiB cache 需要写 journal，写 256 KiB cache 不需要？
+4. 为什么 LSM 写 4 KiB cache 需要写 journal，写 256 KiB cache 不需要？
 
     4k 写为了避免写放大，除了写一个 4k 的真实数据外，还需要写对应的 bitmap （一个 256 KiB 的 block 中有 64 个 4k ）并持久化到 journal。
 
     否则就需要写 4k 真实数据 + 1020k 实际为 0 的数据，这将引起写放大。
 
-6. LSM2 中，采取 Journaling+Soft Update 的方式保证 crash consistency。默认采用 Journaling，所有数据和元数据的更新都需要通过 Journal 进行保护，然后再写入 BDev。当数据是初次写入时，允许采用 Soft Update 方式，先将数据写入磁盘，再把元数据写入 Journal，避免因数据写入 Journal 引起的写放大。
+5. LSM2 中，采取 Journaling+Soft Update 的方式保证 crash consistency。默认采用 Journaling，所有数据和元数据的更新都需要通过 Journal 进行保护，然后再写入 BDev。当数据是初次写入时，允许采用 Soft Update 方式，先将数据写入磁盘，再把元数据写入 Journal，避免因数据写入 Journal 引起的写放大。
 
     初次写的数据如果丢了，元数据没来得及写入 Journal 会有什么后果？
 
-7. 在元数据中，最消耗内存的是 PBlob ，我们必须实现 PBlob 不常驻内存。PBlobEntry 数量跟 PBlob 接近，但单个 PBlobEntry 较小，可全量放内存。对于独占数据，无需额外内存保存 Entry，只需要计算映射值即可；对于共享数据，需要在内存中保存 Entry，因此，快照数量的增加，会增加 LSM 的内存占用。
+6. 在元数据中，最消耗内存的是 PBlob ，我们必须实现 PBlob 不常驻内存。PBlobEntry 数量跟 PBlob 接近，但单个 PBlobEntry 较小，可全量放内存。对于独占数据，无需额外内存保存 Entry，只需要计算映射值即可；对于共享数据，需要在内存中保存 Entry，因此，快照数量的增加，会增加 LSM 的内存占用。
 
     为啥独占数据，无需额外内存保存 Entry，只需要计算映射值即可？
 
-8. 为啥 class PBlobCtx 相较于 message PBlobPB 可以节省内存和操作开销？
+7. 为啥 class PBlobCtx 相较于 message PBlobPB 可以节省内存和操作开销？
 
-9. 为啥只有 private pblob 可能触发 promote 的 IO 读，以及 shared pblob 为啥不会？
+8. 为啥只有 private pblob 可能触发 promote 的 IO 读，以及 shared pblob 为啥不会？
 
-10. 普通 IO 读不需要修改 Journal，触发 promote 的 IO 读由于涉及到从 data block 到 cache block 的拷贝，所以需要写一条 amend pblob PB 的 Journal，然后才会按照普通 IO 读的流程走下去。
+9. 普通 IO 读不需要修改 Journal，触发 promote 的 IO 读由于涉及到从 data block 到 cache block 的拷贝，所以需要写一条 amend pblob PB 的 Journal，然后才会按照普通 IO 读的流程走下去。
 
-11. 只有 partition 中会使用 checksum，每 8 KiB + 512 B 的布局，每 8 KiB 计算出 CRC32 值，保存在随后的 512 B 里。
+10. 只有 partition 中会使用 checksum，每 8 KiB + 512 B 的布局，每 8 KiB 计算出 CRC32 值，保存在随后的 512 B 里。
 
 
 
@@ -547,6 +545,34 @@ iscsi access point 3 部分策略：iscsi 建立连接、异常重定向、动�
 临时异常回切：对于临时分配到次可用域的接入点，一旦主可用域有一个节点恢复，且该节点对应的 access session 存活超过一定时间（3分钟），则自动平衡检查时应当尝试将其迁移回主可用域。
 
 https://docs.google.com/document/d/1t14uKF6YCaijgXAq-bS-WR_I1SaLhYxbOnKXhspBtlQ/edit#heading=h.iidguj2la1
+
+### access io 并发控制
+
+access 中 app io 写需要拿读屏障，recover io （recover io 读写是一体的）用写屏障，这会使得多个 app io 写之间不会互斥，而 recover io 会跟 app io 写以及其它 recover io 互斥。
+
+1. app io 读不需要拿读屏障，所以 app io 读可以和 app io 写、recover io 并发；
+
+2. 允许多个 app io 写并发是因为块设备不需要保证同一个 lba 上 inflight io 的先来后到；
+
+3. recover io 需要保证跟 app io 写以及其它 recover io 互斥，这是因为需要保证多个副本之间的内容是一样的。一个 recover io 包含一次读和一次写，如果 recover io 读后有 app io 写，那recover io 写可能会覆盖 app io 写，导致多副本间内容不一致。
+
+互斥/并发都是按 block 粒度的，据此可以得到：
+
+1. 若当前正在 app read block a，不论再来什么 io，都无需阻塞即可执行；
+2. 若当前正在 app write block a：
+   1. app read block a 无需阻塞即可执行；
+   2. 另一个 app write block a 无需阻塞即可执行；
+   3. recover block a 需要阻塞等待 normal write 完成才能执行；
+3. 若当前正在 recover block a：
+   1. app read block a 无需阻塞即可执行；
+   2. app write block a 需要阻塞等待 recover 完成才能执行；
+   3. 另一个 recover block a 需要阻塞等待前一个 recover 完成才能执行；
+
+具体搜 block_barrier_guard< true/ false> 代码，在 replica_io_handler 和 replica_recover_handler 之间起作用。
+
+另外，access io handler 内部负责非 recover IO 的 3 种类型的 IO 互斥。sink io 会跟 app io 互斥，具体通过代码 LockBlock 和 WaitBlockUnlock 分析 sink io 的读还是写与 app io 的读还是写互斥，LockBlock 和 WaitBlockUnlock 可以看成同一个读写锁，前者像读锁，后者像读锁。
+
+access 按一个 pextent 的 gen 不降序的方式顺序下发 io co 给 lsm（有这么个保序机制），lsm 收到后内部并发执行 io co，在 lsm 内部，如果这些 io co 写的是同一个 pblob，还是需要加锁，如果是不同 pblob，就可以并发执行。
 
 ### sync gen
 
