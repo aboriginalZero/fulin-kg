@@ -1,3 +1,7 @@
+1. 明确以下分层之后，转换/克隆出一个普通卷的流程，包括 lextent, pextent 分配等，CloneVolumeTransaction/CowLExtentTransaction。
+
+    vtable 放在哪里？
+
 1. meta 层面的 reposition auto mode 要在 560 中做起来，要自适应调节 generate limit；
 
 2. 副本分配时，如果集群是中负载，不用遵循局部化分配，现有代码是除了高负载，都要遵循，有可能造成刚分配完就要迁移的现象
@@ -433,31 +437,29 @@ gtest系列之事件机制
 
 1. 为什么 AllocRecoverForAgile 中一定不会有 prior extent？
 
-2. 在 HasSpaceForCow() 中为什么用的是 total_data_capacity 而不是 valid_data_space ？
+2. lease owner 不释放的一个原因是 inspector 扫描到 extent generation 不一致而触发的读操作（借此剔除 gen 较低的 extent，再经由 recover 完成数据一致）
 
-3. lease owner 不释放的一个原因是 inspector 扫描到 extent generation 不一致而触发的读操作（借此剔除 gen 较低的 extent，再经由 recover 完成数据一致）
-
-4. 为什么 LSM 写 4 KiB cache 需要写 journal，写 256 KiB cache 不需要？
+3. 为什么 LSM 写 4 KiB cache 需要写 journal，写 256 KiB cache 不需要？
 
     4k 写为了避免写放大，除了写一个 4k 的真实数据外，还需要写对应的 bitmap （一个 256 KiB 的 block 中有 64 个 4k ）并持久化到 journal。
 
     否则就需要写 4k 真实数据 + 1020k 实际为 0 的数据，这将引起写放大。
 
-5. LSM2 中，采取 Journaling+Soft Update 的方式保证 crash consistency。默认采用 Journaling，所有数据和元数据的更新都需要通过 Journal 进行保护，然后再写入 BDev。当数据是初次写入时，允许采用 Soft Update 方式，先将数据写入磁盘，再把元数据写入 Journal，避免因数据写入 Journal 引起的写放大。
+4. LSM2 中，采取 Journaling+Soft Update 的方式保证 crash consistency。默认采用 Journaling，所有数据和元数据的更新都需要通过 Journal 进行保护，然后再写入 BDev。当数据是初次写入时，允许采用 Soft Update 方式，先将数据写入磁盘，再把元数据写入 Journal，避免因数据写入 Journal 引起的写放大。
 
     初次写的数据如果丢了，元数据没来得及写入 Journal 会有什么后果？
 
-6. 在元数据中，最消耗内存的是 PBlob ，我们必须实现 PBlob 不常驻内存。PBlobEntry 数量跟 PBlob 接近，但单个 PBlobEntry 较小，可全量放内存。对于独占数据，无需额外内存保存 Entry，只需要计算映射值即可；对于共享数据，需要在内存中保存 Entry，因此，快照数量的增加，会增加 LSM 的内存占用。
+5. 在元数据中，最消耗内存的是 PBlob ，我们必须实现 PBlob 不常驻内存。PBlobEntry 数量跟 PBlob 接近，但单个 PBlobEntry 较小，可全量放内存。对于独占数据，无需额外内存保存 Entry，只需要计算映射值即可；对于共享数据，需要在内存中保存 Entry，因此，快照数量的增加，会增加 LSM 的内存占用。
 
     为啥独占数据，无需额外内存保存 Entry，只需要计算映射值即可？
 
-7. 为啥 class PBlobCtx 相较于 message PBlobPB 可以节省内存和操作开销？
+6. 为啥 class PBlobCtx 相较于 message PBlobPB 可以节省内存和操作开销？
 
-8. 为啥只有 private pblob 可能触发 promote 的 IO 读，以及 shared pblob 为啥不会？
+7. 为啥只有 private pblob 可能触发 promote 的 IO 读，以及 shared pblob 为啥不会？
 
-9. 普通 IO 读不需要修改 Journal，触发 promote 的 IO 读由于涉及到从 data block 到 cache block 的拷贝，所以需要写一条 amend pblob PB 的 Journal，然后才会按照普通 IO 读的流程走下去。
+8. 普通 IO 读不需要修改 Journal，触发 promote 的 IO 读由于涉及到从 data block 到 cache block 的拷贝，所以需要写一条 amend pblob PB 的 Journal，然后才会按照普通 IO 读的流程走下去。
 
-10. 只有 partition 中会使用 checksum，每 8 KiB + 512 B 的布局，每 8 KiB 计算出 CRC32 值，保存在随后的 512 B 里。
+9. 只有 partition 中会使用 checksum，每 8 KiB + 512 B 的布局，每 8 KiB 计算出 CRC32 值，保存在随后的 512 B 里，所以 valid_data_space = 94% * total_data_capacity
 
 
 
@@ -507,6 +509,14 @@ git submodule ，https://git-scm.com/book/zh/v2/Git-%E5%B7%A5%E5%85%B7-%E5%AD%90
 
 
 
+vscode 中用 vim 插件，这样可以按区域替换代码
+
+一个遗留问题是，单测里面想要触发两次 recover cmd，怎么让 entry 的 GetLocation() 得到及时更新，试了 sleep(9) 不行，可能不止需要一个心跳周期，还有其他条件没触发。
+
+以一个 functional test 单测为例子展开看 zbs 系统的启动流程。
+
+
+
 ### access point
 
 zbs 当前行为：
@@ -545,6 +555,66 @@ iscsi access point 3 部分策略：iscsi 建立连接、异常重定向、动�
 临时异常回切：对于临时分配到次可用域的接入点，一旦主可用域有一个节点恢复，且该节点对应的 access session 存活超过一定时间（3分钟），则自动平衡检查时应当尝试将其迁移回主可用域。
 
 https://docs.google.com/document/d/1t14uKF6YCaijgXAq-bS-WR_I1SaLhYxbOnKXhspBtlQ/edit#heading=h.iidguj2la1
+
+### zbs io 流
+
+zbs app io trace
+
+1. --> ZbsClient::Write() --> ZbsClient::DoIO<>() --> ZbsClient::SplitIO() --> ZbsClient::SubmitIO() --> InternalIOClient::SubmitIO()
+2. --> 判断走网络还是本地，VExtent 粒度，路由到合适的 AccessIOHandler，此时有获取一次 lease，根据 lease owner uuid 跟本地 session uuid 判断是否相等
+3. --> AccessIOHandler::SubmitWriteVExtent() --> AccessIOHandler::WriteVExtent() 
+4. --> Meta::GetVExtentLease() -->Meta::CacheVExtentLease() --> Meta::CacheLease() ，此时也有一次获取 Lease，是根据 volume_id 和 vextent_no 拿到 pextent 的 location 等信息，对 location 上的每一个 cid 执行下面操作
+5. --> ECIOHandler / ReplicaIOHandler::Write() --> PextentIOHandler::Write() 
+6. --> 判断走网络还是本地，PExtent 粒度，本地的话直接在 PextentIOHandler 塞入队列，如果是走网络，是通过远程 Chunk 上的 LocalIOHandler 塞入队列
+7. --> LSMCmdQueue::Submit，队列中的元素会被 lsm 根据不同的 op code 执行不同的操作，比如 LSM_CMD_RECOVER_START 等；
+8. --> LSM::DoIO() --> LSM::RecoverWrite() --> LSM::DoRecoverWrite() --> ExtentInode::SetupRecoverWrite() ，此时会有 pblob 层面的操作。
+
+
+
+zbs reposition io trace
+
+1. --> RecoverManager::GenerateRecoverCmds() --> RecoverManager::AddRecoverCmdUnlock() --> AccessManager::EnqueueRecoverCmd()
+
+2. --> AccessManager::ComposeAccessResponse() --> 通过心跳下发给 access handler --> AccessHandler::HandleAccessResponse()
+
+3. --> RecoverHandler::NotifyRecover() --> RecoverHandler::TriggerMoreRecover() --> RecoverHandler::ScheduleRecover() --> RecoverHandler::DoScheduleRecover()
+
+4. 根据 resiliency_type，分别给到 ECRecoverHandler / ReplicaRecoverHandler
+
+5. --> ReplicaRecoverHandler::HandleRecoverNotification() --> ReplicaRecoverHandler::DoRecover() 
+
+6. --> ReplicaRecoverHandler::RecoverStart() 
+
+   1. --> PExtentIOHandler::SyncRecoverStart() --> PExtentIOHandler::RecoverStart()
+   2. --> ReplicaRecoverHandler::GetReplicaGeneration() ，向 dst_cid 获取 gen 并校验；
+
+7. --> 按 256 KiB 为粒度，做 1024 次 ReadFromSrc() + WriteToDst() 
+
+   1. --> ReplicaRecoverHandler::ReadFromSrc() --> PExtentIOHandler::RecoverRead() 
+
+   2. --> 判断走网络还是本地，PExtent 粒度，本地的话直接在 PextentIOHandler 塞入队列，如果是走网络，是通过远程 Chunk 上的 LocalIOHandler 塞入队列
+
+   3. 读是没法避免的，而写的话，如果读的时候 LSM 返回 ELSMNotAllocData 且支持敏捷恢复和 unmap 时，会通过 unmap 来完成这次 recover block write；如果走普通恢复并且 ELSMNotAllocData 或用 all_zero_buf 写 dst cap layer，那么直接完成本次 recover lock write，不会有真实的 IO 流量。
+
+      > lsm 会记录 perf 层有效数据 bitmap，所以如果用 all_zero_buf 写 dst perf layer 不能直接跳过
+
+   4. --> ReplicaRecoverHandler::WriteToDst() --> ReplicaRecoverHandler::DoRecoverWrite() --> PExtentIOHandler::SyncRecoverWrite() --> PExtentIOHandler::RecoverWrite()
+
+   5. --> 判断走网络还是本地，PExtent 粒度，本地的话直接在 PextentIOHandler 塞入队列，如果是走网络，是通过远程 Chunk 上的 LocalIOHandler 塞入队列
+
+8. -->ReplicaRecoverHandler::RecoverEnd() 
+
+9. --> ReplicaRecoverHandler::ReplacePExtentReplica()
+
+
+
+LSMCmdQueue 中的元素在哪被消费呢？
+
+1. EpollLSMIOContext 的 Flush() 把 LsmCmd SubmitIO 给 lsm；
+2. LSM::Init() ，将 cmd_event_poller_ 设为 LSM::HandleCmdAndEvents()，在这里会用 coroutine 执行 LSM::DoIO()；
+3. LSM::DoIO()，其中，根据不同的 op code 执行不同的操作，比如 LSM_CMD_RECOVER_START 等；
+4. LSM::RecoverWrite()，LSM::DoRecoverWrite()；
+5. ExtentInode::SetupRecoverWrite()，会有 pblob 层面的操作。
 
 ### access io 并发控制
 
@@ -699,11 +769,3 @@ cap_reserved_pids，对应正在分配但还没分配成功的空间大小，先
 1. 若想让 l 的优先级更高，那就 return true，
 2. 若想让 r 的优先级更高，那就 return false，
 3. 其他情况想要保持相对顺序不变，那就 return false
-
-
-
-vscode 中用 vim 插件，这样可以按区域替换代码
-
-一个遗留问题是，单测里面想要触发两次 recover cmd，怎么让 entry 的 GetLocation() 得到及时更新，试了 sleep(9) 不行，可能不止需要一个心跳周期，还有其他条件没触发。
-
-以一个 functional test 单测为例子展开看 zbs 系统的启动流程。
