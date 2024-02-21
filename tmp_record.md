@@ -2,6 +2,8 @@
 
     vtable 放在哪里？
 
+1. 根据最新 lsm 设计文档大致了解 lsm2 
+
 1. meta 层面的 reposition auto mode 要在 560 中做起来，要自适应调节 generate limit；
 
 2. 副本分配时，如果集群是中负载，不用遵循局部化分配，现有代码是除了高负载，都要遵循，有可能造成刚分配完就要迁移的现象
@@ -402,26 +404,8 @@ gtest系列之事件机制
    
 4. 目前遇到的高负载下不迁移：要么 topo 降级了，要么 lease owner 没释放，要么是双活只能在单 zone 内迁移
 
-4. 后续写文档可以考虑的组织方式
+4. 后续写文档可以考虑先介绍所有 sub migrate strategies 中共有的限制条件：
 
-   1. migrate for removing chunk
-   2. migrate for no-removing chunk
-      1. migrate for even volumes
-         1. migrate for even volumes repair topo (if generated, return) 
-         2. migrate for even volumes rebalance
-      2. migrate for uneven volumes
-         1. migrate for over load prior extents
-         2. migrate for normal (cap / perf) extents ( 1. cap layer 2. perf layer )
-            1. normal low
-               1. migrate for localization
-      
-            2. normal mediun / high / very high
-               1. migrate for repair topo  (if generated, return)
-               2. migrate for rebalance
-   
-   
-   先介绍所有 sub migrate strategies 中共有的限制条件：
-   
    1. isolated
        1. must not be dst;
        2. should not be src/replace in ec migrate;
@@ -460,6 +444,44 @@ gtest系列之事件机制
 8. 普通 IO 读不需要修改 Journal，触发 promote 的 IO 读由于涉及到从 data block 到 cache block 的拷贝，所以需要写一条 amend pblob PB 的 Journal，然后才会按照普通 IO 读的流程走下去。
 
 9. 只有 partition 中会使用 checksum，每 8 KiB + 512 B 的布局，每 8 KiB 计算出 CRC32 值，保存在随后的 512 B 里，所以 valid_data_space = 94% * total_data_capacity
+
+    分层之后的 valid_data_space = 94% * total_data_capacity，perf_valid_data_space <= 90% * perf_total_data_capacity，10% 指的是至少为 cap read cache 预留 10% 的 perf space
+
+10. SSD 和 HDD 的 Block（560 开始）
+
+    1. SSD 的 Block 大小使用 16 KiB，而不是 4 KiB。主要出于两点考虑：1. 4 KiB 粒度过小，元数据量较大，且占用的内存过高；2. 4 KiB 粒度过小，对读不友好。单个大 IO 会切分成过多的小 IO。
+    2. HDD 的 Block 大小使用 128 KiB，主要出于两点考虑：1. 128 KiB 粒度，占用的内存量可接受；2. HDD 的 IO 延时，大部分来自于寻道，写 IO 的放大对性能影响较小。
+
+11. 256 KiB PBlob 描述
+
+     ```protobuf
+     message PBlobPB {
+     	// 按 4k 粒度记录是否有真实数据
+         optional fixed64 bitmap = 1 [default = 0];
+         optional fixed32 cache_block_id = 2;
+         optional fixed32 data_block_id = 3;
+     
+         // cache_clean is meaningful only when has_cache_block && has_data_block
+         optional bool cache_clean = 4 [default = false];
+     }
+     ```
+
+     PBlob 有如下 5 种状态：
+
+     1. 未分配：cache_block_id 不存在、data_block_id 不存在；
+     2. 冷数据或全闪：cache_block_id 不存在、 data_block_id 存在；
+     3. 热数据：cache_block_id 存在、 data_block_id 存在、二者数据不一致；
+     4. cache bock 可被回收的热数据：cache_block_id 存在、 data_block_id 存在、二者数据一致；
+     5. 新写且未触发过回写：cache_block_id 存在、data_block_id 不存在；
+
+     有如下几种操作：
+
+     1. 创建一个 PBlob，例如 Extent 需要分配空间时；
+     2. 更新 PBlob 内容，包括：
+         1. 修改 Bitmap，例如当有 IO 写入 PBlob 时；
+         2. 修改 Cache Block ID，例如当发生分配、Promotion 或 Eviction 时；
+         3. 修改 Data Block ID，例如当发生分配或 Writeback 时。
+     3. 删除一个 PBlob，例如当没有任何 PBlob Table （这个概念现在可能是 ExtentInode？）引用这个 PBlob 时。
 
 
 
