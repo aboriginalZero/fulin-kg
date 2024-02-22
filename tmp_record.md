@@ -1,24 +1,54 @@
-1. 明确以下分层之后，转换/克隆出一个普通卷的流程，包括 lextent, pextent 分配等，CloneVolumeTransaction/CowLExtentTransaction。
+1. prior migrate
+
+    perf thick
+
+    1. 当 allocated prs < 75% * perf thick 可用空间（planned_prs），执行 perf thick 的局部化；
+    2. 当 allocated prs >  100% * perf thick 可用空间，执行 A 类迁移；
+    3. [75%, 100%] 之间会在后续执行修复拓扑迁移； 
+
+    perf thin
+
+    1. 当 perf thin allocated  < 75% * perf thin 可用空间，执行 perf thin 的局部化；
+    2. 当 perf thin allocated > 100% * perf thin 可用空间，执行 B 类迁移；
+    3. [75%, 100%] 之间会在后续执行修复拓扑迁移； 
+
+    
+
+    若 perf thin 和 thick 分别都 < 75%，不管有没有生成 cmd，都结束本轮扫描；
+
+    若 perf thin > 75% 且没有在上面环节生成 perf thin migrate cmd，执行 perf thin 修复拓扑迁移；
+
+    若 perf thick > 75% 且没有在上面环节生成 perf thick migrate cmd，执行 perf thick 修复拓扑迁移；
+
+    
+
+    若 perf thin + perf thick > 75% 且之前没生成过 perf migrate cmd，执行 perf thin + thick 容量均衡迁移；
+
+    即此时关注的是汇总的 perf allocated
+
+2. 明确以下分层之后，转换/克隆出一个普通卷的流程，包括 lextent, pextent 分配等，CloneVolumeTransaction/CowLExtentTransaction。
 
     vtable 放在哪里？
 
-1. 根据最新 lsm 设计文档大致了解 lsm2 
+    追踪克隆一个普通卷的流程
 
-1. meta 层面的 reposition auto mode 要在 560 中做起来，要自适应调节 generate limit；
+3. 根据最新 lsm 设计文档大致了解 lsm2 
 
-2. 副本分配时，如果集群是中负载，不用遵循局部化分配，现有代码是除了高负载，都要遵循，有可能造成刚分配完就要迁移的现象
+4. meta 层面的 reposition auto mode 要在 560 中做起来，要自适应调节 generate limit；
+
+5. 副本分配时，如果集群是中负载，不用遵循局部化分配，现有代码是除了高负载，都要遵循，有可能造成刚分配完就要迁移的现象
 
      副本分配的代码里有对 expected localization loc 中如果有 isolated cid 的特殊处理
 
-3. GenerateMigrateCmdsForRemovingChunk 中 migrate_generate_used_cmd_slots 对 src / dst 的判断应该传入 AllocRecoverCap/PerfExtents；
+6. GenerateMigrateCmdsForRemovingChunk 中 migrate_generate_used_cmd_slots 对 src / dst 的判断应该传入 AllocRecoverCap/PerfExtents；
 
      传入会有点麻烦，可能出现 removing chunk 的时候总是选某个 src / dst cid，但那个 dst cid 可生成的余额不足，还一直选他。但是影响最大也就造成一次 generate 过程中只选 1 个 src cid，用满他的 256 的配额，所以先不修复。
 
-4. recover / removing chunk dst 允许选 isolated ？允许，为了尽快迁出。
+7. recover / removing chunk dst 允许选 isolated ？允许，为了尽快迁出。
 
-5. 补一个同时有多个 removing cid 的单测；
+8. 补一个同时有多个 removing cid 的单测；
 
-6. refactor migrate for repair topo，从 GenerateMigrateCmdsForRepairTopo 开始改；
+9. refactor migrate for repair topo，从 GenerateMigrateCmdsForRepairTopo 开始改；
 
     1. 待做 [ZBS-13401](http://jira.smartx.com/browse/ZBS-13401)，让中高负载的容量均衡策略都要保证 prefer local 本地的副本不会被迁移，且如果 prefer local 变了，那么也要让他所在的 chunk 有一个本地副本（有个上限是保留归保留，但如果超过 95%，超过的 部分不考虑 prefer local 一定有对应的副本）
 
@@ -32,15 +62,15 @@
 
         migrate for ec repair topo 中对 ec src 的选择过于宽松了，其实还可以选到更好的 src，但是目前不做处理，目前只根据 replace 来选 src
 
-7. MgirateFilter 可以改成 allow, deny 都允许的，如果没要求，就传入 std::nullopt
+10. MgirateFilter 可以改成 allow, deny 都允许的，如果没要求，就传入 std::nullopt
 
-8. 在 migrate for prior extent 中引入 remain space map 来正确计算（不一定需要，目前看他好像没啥问题）；
+11. 在 migrate for prior extent 中引入 remain space map 来正确计算（不一定需要，目前看他好像没啥问题）；
 
-    目前 migrate 中的逻辑是每次获取一个 pid 的 entry 都要通过 GetPhysicalExtentTableEntry 调用一次锁，但在 prior  extent 的迁移中，可以批量获取 diff_pids 中所有的 pentry，因此可以相应做优化。
+     目前 migrate 中的逻辑是每次获取一个 pid 的 entry 都要通过 GetPhysicalExtentTableEntry 调用一次锁，但在 prior  extent 的迁移中，可以批量获取 diff_pids 中所有的 pentry，因此可以相应做优化。
 
-9. recover / migrate for removing chunk 用到的函数，是否可以拿回 recover_manager.cc 中？
+12. recover / migrate for removing chunk 用到的函数，是否可以拿回 recover_manager.cc 中？
 
-    不至于出现跨线程用协程锁的问题，yutian 建议暂时不需要。
+     不至于出现跨线程用协程锁的问题，yutian 建议暂时不需要。
 
 
 
