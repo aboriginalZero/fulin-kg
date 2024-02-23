@@ -721,6 +721,14 @@ access 从 meta 拿到的 lease 中的 location 是 loc 而不是 alive loc，�
 
 分配一个 thin pextent，直到初次写之前，他的 location 都是空的，所以 alive_location 也为空。
 
+
+
+待核实：
+
+分配 pid 跟分配 location 的时期应该不同。
+
+分层之后，创建一个 lextent 时，会马上分配 perf / cap pextent，一定会给 perf 分配 location，如果 cap 的 origin pid 是 0，而且是 thick pextent，也要为 cap 分配 location，否则不分配
+
 ### COW 内容
 
 快照会将 VTable 复制一份，Vtable 的内容就是若干个 VExtent，里面只有 3 个字段，vextent_id，location，alive_location，第一个字段是 volume 的 offset 与 pextent 的对应关系，后两个字段就是对应 pextent 的 location 和 alive_location。（vtable 看起来好像也是从 ptable 中复制来的？MetaRpcServer::GetVTable）
@@ -730,6 +738,33 @@ access 从 meta 拿到的 lease 中的 location 是 loc 而不是 alive loc，�
 COW 之后，child alive loc 不一定等于 parent alive loc。实际上，COW 在 Transaction Prepare 的 CowPExtent 时只会只会复制 parent 的 loc，然后在 Commit -> PersistExtents -> UpdateMetaContextWhenSuccess -> SetPExtents 时会将 loc 上的每一个副本的 last_report_ms 设为当前时间，所以 child alive loc = child loc = parent loc，但是不一定等于 parent alive loc。
 
 ### 560 空间计算
+
+空间计算上有如下等价关系
+
+1. perf_total_data_capacity = (1 - GFLAGS_chunk_lsm2_cache_fixed_ratio) * total_cache_capacity
+
+   默认等于 0.8 * total_cache_capacity，total_cache_capacity 表示 cache 分区总容量；
+
+2. perf_valid_data_space =  perf_total_data_capacity - perf_failure_data_space
+
+   当不存在坏盘时，perf_valid_data_space = perf_total_data_capacity，即不增减物理盘且不处于升级过程中，这个值应该是固定的。
+
+   当集群升级期间开启分层后一段时间内，可能存在大量的 dirty space 需要 writeback，此时 LSM 无法保证这些空间被性能层及时使用，所以在这段期间，perf_valid_data_space = perf_allocated_data_space + valid_free_cache_space + cap_cache_clean_space，随着回写完成，valid_free_cache_space 变大，perf_valid_data_space 也跟着变大。
+
+3. perf_planned_space = min(perf_total_data_capacity, (perf_allocated_data_space + GFLAGS_chunk_lsm2_perf_fixed_free_ratio * total_cache_capacity))
+
+   默认等于 0.1 * total_cache_capacity + min(perf_allocated_data_space, 0.7 * total_cache_capacity)
+
+4. cap_cache_capacity = total_cache_capacity - perf_planned_space
+
+   默认等于 0.9 * total_cache_capacity - min(perf_allocated_data_space, (0.7 * total_cache_capacity))，未在 ChunkSpaceInfo 中提供
+
+   1. 当 perf 实际使用空间为 0 时，容量层读缓存空间取得最大值，0.9 * total_cache_capacity；
+   2. 当 perf 实际使用空间超过 0.7 * total_cache_capacity 时，容量层读缓存空间取得最小值，0.2 * total_cache_capacity；
+
+5. planned_prioritized_space = prio_space_percentage * perf_valid_data_space
+
+持有 pextent 特点
 
 prioritized_pids 就是 perf_thick_pids，因为 perf 层只会有 perf thin 和 prior 两种类型的 extent，不会有非 prior 的 thick extent
 
