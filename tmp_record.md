@@ -1,8 +1,42 @@
-1. 明确以下分层之后，转换/克隆出一个普通卷的流程，包括 lextent, pextent 分配等，CloneVolumeTransaction/CowLExtentTransaction。
+1. 拆分 prior migrate 任务
+
+2. 明确以下分层之后，转换/克隆出一个普通卷的流程，包括 lextent, pextent 分配等，CloneVolumeTransaction/CowLExtentTransaction。
 
     vtable 放在哪里？
 
     追踪克隆一个普通卷的流程
+
+    lsm 现在上报 pextent info 的时候，如果 pextent 在 perf layer，不论 thick/thin，都会将 prioritized 字段设为 true，所以会出现单测创建 perf thin 之后，出现 FOUND REPLICA NEEDS CHANGE PERFHINT，但 LSMProxy::SetExtentsPriority 目前是个空方法，所以没啥影响。
+
+    分层之后，创建一个 volume：
+
+    1. 在 CreateVolume rpc 中先做各类参数校验，通过后执行 CreateVolumeTransaction
+
+        1. cap pextent：不论是否开启分层，不论是什么类型的 volume 都会马上分配 cap pid，但只有 prior 或 thick 才会马上分配 cap location；
+        2. perf pextent：开启分层并且是 prior volume 才会马上同时分配 perf pid 和 location。
+
+    2. 在 CloneVolume 时，CloneVolumeTransaction 根据源卷是快照或普通卷有不同行为
+
+        1. src volume 是快照 
+            1. 从 meta db 中拿到 src volume 的 vtable 并拷贝一份给 dst volume ；
+            2. 设置 dst volume 的 origin id 为 src volume id；
+        2. src volume 是普通卷
+            1. 加锁
+            2. 从 metadb 中拿到 src volume 的 vtable；
+            3. revoke src volume 的 vtable lease；
+            4. 将 src vtable 上各个 vextent cow flag 设置为 true，
+            5. 解锁
+            6. 清空目的卷的 origin id
+
+        二者共同操作包含：
+
+        1. 将目的卷标记成不是快照；
+        2. 从 src volume 复制一份 vtable 给 dst volume；
+        3. 若 dst volume 尺寸大于 src volume，按照 CreateVolume 中的原则分配新的 cap/perf pextent，这些新的 vextent 对应的 vextent 上 cow flag = false。
+
+    3. CowLExtentTransaction
+
+        待补充
 
 2. 根据最新 lsm 设计文档大致了解 lsm2 
 
