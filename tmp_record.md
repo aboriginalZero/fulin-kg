@@ -1,9 +1,29 @@
 1. 拆分 prior migrate 任务
 
-    1. prior pextent 分配
-2. piror pextent 恢复
-    3. piror pextent 迁移
-
+    1. transaction
+    
+    2. prior pextent allocation
+    
+       目前只会在 transaction 中使用 AllocCap/PerfExtents
+    
+       重写一个 elastic_allocator.cc
+    
+       ```c++
+       // AllocCapExtents
+       check_allocated_ratio = !tx_->thin_provision_;
+       is_prioritized = (!context_->ability_manager->IsTieringEnabled()) && tx_->prioritized_);
+       
+       // AllocPerfExtents
+       is_prioritized = tx_->prioritized_;
+       
+       // ReserveSpaceForAllocation
+       
+       ```
+    
+    3. prior migrate
+    
+    4. piror recover
+    
 2. 明确以下分层之后，转换/克隆出一个普通卷的流程，包括 lextent, pextent 分配等，CloneVolumeTransaction/CowLExtentTransaction。
 
     vtable 放在哪里？
