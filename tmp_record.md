@@ -1,3 +1,7 @@
+1. zbs-meta  volume show_by_id 9b0b248f-7c06-4a44-9f31-9d8292e14bdd --show_pextents
+
+    可区分展示 perf 或 cap 的，目前默认只是展示 perf
+    
 1. 拆分 prior migrate 任务
 
     1. transaction
@@ -23,6 +27,10 @@
     3. prior migrate
     
     4. piror recover
+    
+       只有 replica 才会分配临时副本，所以 ec 不会有 agile recover
+    
+       临时副本载 perf layer 中一定是 thin 的，临时副本一定分配上
     
 2. 明确以下分层之后，转换/克隆出一个普通卷的流程，包括 lextent, pextent 分配等，CloneVolumeTransaction/CowLExtentTransaction。
 
@@ -799,7 +807,7 @@ COW 之后，child alive loc 不一定等于 parent alive loc。实际上，COW 
 
 ### 560 空间计算
 
-空间计算上有如下等价关系
+#### space
 
 1. perf_total_data_capacity = (1 - GFLAGS_chunk_lsm2_cache_fixed_ratio) * total_cache_capacity
 
@@ -824,7 +832,7 @@ COW 之后，child alive loc 不一定等于 parent alive loc。实际上，COW 
 
 5. planned_prioritized_space = prio_space_percentage * perf_valid_data_space
 
-持有 pextent 特点
+#### 持有 pextent 特点
 
 prioritized_pids 就是 perf_thick_pids，因为 perf 层只会有 perf thin 和 prior 两种类型的 extent，不会有非 prior 的 thick extent
 
