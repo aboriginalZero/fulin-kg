@@ -24,9 +24,13 @@
        
        ```
     
-    3. prior migrate
+    3. piror recover
     
-    4. piror recover
+        这部分代码可以写到 recover manager，另外也可以总结出一个 recover 和 alloc 虽然大部分相同，但是存在的细微差别。
+    
+        prior recover 如果 recover dst prior space 空间不足要允许写到 perf thin space 吗？这样会影响到下沉的档位。以及，如果允许，该怎么设定一个最多可占用的空间呢？会不会出现极端情况把 perf thin space 都用满了呢？比如某个节点掉线了，上面的 prior pextent 都需要做恢复。
+    
+    4. prior migrate
     
        只有 replica 才会分配临时副本，所以 ec 不会有 agile recover
     
