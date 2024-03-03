@@ -4,7 +4,11 @@
     
     2. prior pextent allocation
     
-       目前只会在 transaction 中使用 AllocCap/PerfExtents
+       560 没有开启之前，不允许创建 prior pextent 的代码在哪里？
+    
+       replica_capacity_only 模式允许创建 prior pextent 吗？
+    
+       目前只会在 transaction 中使用 AllocCap/PerfExtents，后续考虑完善他的单测：集群负载，owner 负载不同，得到的 loc 中的 cids 也不同，关注不重复 cids 数量与 expected_segment_num 的关系、第一个 segment 是否是 owner、分配出来 cid 所在集合。
     
        重写一个 elastic_allocator.cc
     
