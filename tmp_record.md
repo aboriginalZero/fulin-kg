@@ -14,25 +14,13 @@
     
        目前只会在 transaction 中使用 AllocCap/PerfExtents，后续考虑完善他的单测：集群负载，owner 负载不同，得到的 loc 中的 cids 也不同，关注不重复 cids 数量与 expected_segment_num 的关系、第一个 segment 是否是 owner、分配出来 cid 所在集合。
     
-       重写一个 elastic_allocator.cc
-    
-       ```c++
-       // AllocCapExtents
-       check_allocated_ratio = !tx_->thin_provision_;
-       is_prioritized = (!context_->ability_manager->IsTieringEnabled()) && tx_->prioritized_);
-       
-       // AllocPerfExtents
-       is_prioritized = tx_->prioritized_;
-       
-       // ReserveSpaceForAllocation
-       
-       ```
-    
     3. piror recover
     
         这部分代码可以写到 recover manager，另外也可以总结出一个 recover 和 alloc 虽然大部分相同，但是存在的细微差别。
     
-        prior recover 如果 recover dst prior space 空间不足要允许写到 perf thin space 吗？这样会影响到下沉的档位。以及，如果允许，该怎么设定一个最多可占用的空间呢？会不会出现极端情况把 perf thin space 都用满了呢？比如某个节点掉线了，上面的 prior pextent 都需要做恢复。
+        prior recover 如果 recover dst prior space 空间不足时不允许写到 perf thin space。
+    
+        agile recover 和 special recover 回头处理。
     
     4. prior migrate
     
