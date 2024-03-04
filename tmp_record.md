@@ -28,7 +28,7 @@
     
        临时副本载 perf layer 中一定是 thin 的，临时副本一定分配上
     
-2. 明确以下分层之后，转换/克隆出一个普通卷的流程，包括 lextent, pextent 分配等，CloneVolumeTransaction/CowLExtentTransaction。
+3. 明确以下分层之后，转换/克隆出一个普通卷的流程，包括 lextent, pextent 分配等，CloneVolumeTransaction/CowLExtentTransaction。
 
     vtable 放在哪里？
 
@@ -41,6 +41,9 @@
     1. 在 CreateVolume rpc 中先做各类参数校验，通过后执行 CreateVolumeTransaction
 
         1. cap pextent：不论是否开启分层，不论是什么类型的 volume 都会马上分配 cap pid，但只有 prior 或 thick 才会马上分配 cap location；
+
+            > 如果 thick volume 的 lextent 的 cap pextent 不马上分配 location 来预留空间的话，没法保证有足够的下沉空间。
+
         2. perf pextent：开启分层并且是 prior volume 才会马上同时分配 perf pid 和 location。
 
     2. 在 CloneVolume 时，CloneVolumeTransaction 根据源卷是快照或普通卷有不同行为
