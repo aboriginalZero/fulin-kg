@@ -4,17 +4,30 @@
     
 1. 拆分 prior migrate 任务
 
-    1. transaction
+    1. HasSpaceForTemporaryReplica 和 HasSpaceForCow 的修改
     
-    2. prior pextent allocation
+    2. chunk table 的修改
     
-       560 没有开启之前，不允许创建 prior pextent 的代码在哪里？
+        AddPextent/DeletePextent 中对 prioritized 的处理。
+    
+    3. prior pextent allocation
+    
+       升级到 560， 但没有开启之前，不允许创建 prior pextent 的代码在哪里？
     
        replica_capacity_only 模式允许创建 prior pextent 吗？
     
-       目前只会在 transaction 中使用 AllocCap/PerfExtents，后续考虑完善他的单测：集群负载，owner 负载不同，得到的 loc 中的 cids 也不同，关注不重复 cids 数量与 expected_segment_num 的关系、第一个 segment 是否是 owner、分配出来 cid 所在集合。
+       改动之后，可能的坑点：
     
-    3. piror recover
+       1. thick 有个最高 99%；
+       2. temp pid 有个最高 95%；
+       3. pid 分配 location 除了 ec 之外，并不会随机打乱 cid 在 loc 中的位置；
+    
+    4. piror recover
+    
+        先做一个把 prior 替换掉，把 prior 相关单测调对的代码。然后再去调 AllocRecoverCap/PerfExtents 的逻辑
+    
+        1. recover manager 中 calculate remain space 要换成 perf thick / thin / cap，用上 pk 的概念，remain_prior_space_map 换掉；
+        2. AllocRecoverCap/PerfExtents 中只需要传入 is_thick，去掉 is_prioritized
     
         这部分代码可以写到 recover manager，另外也可以总结出一个 recover 和 alloc 虽然大部分相同，但是存在的细微差别。
     
