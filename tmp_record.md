@@ -4,13 +4,9 @@
     
 1. 拆分 prior migrate 任务
 
-    1. HasSpaceForTemporaryReplica 和 HasSpaceForCow 的修改
+    1. chunk table 的修改
     
-    2. chunk table 的修改
-    
-        1. 用到 GetStoragePoolSpace 的地方换成 GetSpHealthySpace，比如 RemoveChunkFromStoragePool
-    
-        2. 如果想在 ChunkTableEntry::UpdateSpaceInfo() 中加上以下断言，那么需要：
+        1. 如果想在 ChunkTableEntry::UpdateSpaceInfo() 中加上以下断言，那么需要：
     
            ```c++
            DCHECK_EQ(cap_pids.Size(), cap_thick_pids.Size() + cap_thin_pids_with_origin.size() + cap_thin_pids_without_origin.size());
@@ -22,9 +18,13 @@
     
            过一遍 ChunkTableTest 和 PExtentAllocatorTest，补上该有的单测 perf thick。
     
-    3. prior pextent allocation
+        2. 用到 GetStoragePoolSpace 的地方换成 GetSpHealthySpace，比如 RemoveChunkFromStoragePool
     
-       升级到 560， 但没有开启之前，不允许创建 prior pextent 的代码在哪里？
+        3. HasSpaceForTemporaryReplica 和 HasSpaceForCow 的修改
+    
+    2. prior pextent allocation
+    
+       升级到 560，但没有开启之前，不允许创建 prior pextent 的代码在哪里？
     
        replica_capacity_only 模式允许创建 prior pextent 吗？
     
@@ -34,7 +34,7 @@
        2. temp pid 有个最高 95%；
        3. pid 分配 location 除了 ec 之外，并不会随机打乱 cid 在 loc 中的位置；
     
-    4. piror recover
+    3. piror recover
     
         先做一个把 prior 替换掉，把 prior 相关单测调对的代码。然后再去调 AllocRecoverCap/PerfExtents 的逻辑
     
@@ -244,6 +244,15 @@ smtx os 5.1.1 中不论存储是否分层，都要求 2 块容量至少 130 GiB 
 
 
 在恢复或者迁移任务结束时，新加入副本的状态被设置为未知，需要等待下一次心跳周期 LSM 上报副本后才可以确认副本为健康？allocation 的逻辑是马上会被设置为活跃副本，参考 Commit -> PersistExtents -> UpdateMetaContextWhenSuccess -> SetPExtents。
+
+
+
+[ZBS-13583](http://jira.smartx.com/browse/ZBS-13583) ，考虑改进如下 Case
+
+\1. extent 是一个空的 child ，自己没有数据，所以如果要读写一定要有 origin 
+ \2. 这个 extent 初始状态在 LSM 上也没有存在，所以 parent 迁移的时候就没有数据给他继承把它变成一个实体，这就导致了 child 和 parent 的 location 不一致了。对于完全不一致的场景，我们已经直接把这种空 child 直接 refresh 到和 parent 一样。但是这个只有局部不一致，没有触发这个机制；
+ \3. 他们相同的位置刚好坏了盘，盘被没剔除的时候 extent 就一直在 io error 状态，没有被 GC 不可以重建，导致 sync 的时候 2 个副本一个缺少 origin， 一个 IO error，从而导致无法 recover；
+ \4. 剔除了异常之后， IO error 因为 extent 被彻底回收了，可以正常重建了，所以恢复就自然结束了。
 
 
 
