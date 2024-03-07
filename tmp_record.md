@@ -8,7 +8,19 @@
     
     2. chunk table 的修改
     
-        AddPextent/DeletePextent 中对 prioritized 的处理。
+        1. 用到 GetStoragePoolSpace 的地方换成 GetSpHealthySpace，比如 RemoveChunkFromStoragePool
+    
+        2. 如果想在 ChunkTableEntry::UpdateSpaceInfo() 中加上以下断言，那么需要：
+    
+           ```c++
+           DCHECK_EQ(cap_pids.Size(), cap_thick_pids.Size() + cap_thin_pids_with_origin.size() + cap_thin_pids_without_origin.size());
+           
+           DCHECK_EQ(perf_pids.Size(), perf_thick_pids.Size() + perf_thin_pids_with_origin.size() + perf_thin_pids_without_origin.size());
+           ```
+    
+           需要修改 TEST_SetChunkSpaceInfoWithTiering，可以把这个断言弄成一个独立的函数，只用 DCHECK
+    
+           过一遍 ChunkTableTest 和 PExtentAllocatorTest，补上该有的单测 perf thick。
     
     3. prior pextent allocation
     
@@ -859,7 +871,7 @@ prioritized_rx_pids 是 perf_rx_pids 的子集，一定被包含在 perf_rx_pids
 
 
 
-cap_pids，除了 allocating / repositioning  的 cap 层 pids 都会被记入 cap_pids，cap_pids 还一定包含 cap_tx_pids 和 cap_recover_src_pids（但不是仅由他们两组成的），一定不包含 cap_rx_pids ，与cap_reserved_pids 可能会有交集（取决于是否调用了 GetLeaseForRefreshLocation rpc，没调用的话是不会有交集的），也因此，求的 allocated_data_space 可能是略大的，因为有可能某个 pid 既在 cap_pids 又在 cap_reserved_pids。
+cap_pids，除了 allocating / repositioning  的其他属于 cap 层的 pid 都会被记入 cap_pids，cap_pids 还一定包含 cap_tx_pids 和 cap_recover_src_pids（但不是仅由他们两组成的），一定不包含 cap_rx_pids ，与cap_reserved_pids 可能会有交集（取决于是否调用了 GetLeaseForRefreshLocation rpc，没调用的话是不会有交集的），也因此，求的 allocated_data_space 可能是略大的，因为有可能某个 pid 既在 cap_pids 又在 cap_reserved_pids。
 
 cap_thick_pids，在 cap 层的 thcik pids；
 
