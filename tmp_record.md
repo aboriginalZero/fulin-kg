@@ -6,21 +6,19 @@
 
     1. chunk table 的修改
     
-        1. 如果想在 ChunkTableEntry::UpdateSpaceInfo() 中加上以下断言，那么需要：
+        1. HasSpaceForTemporaryReplica 和 HasSpaceForCow 的修改
     
+        1. 如果想在 ChunkTableEntry::UpdateSpaceInfo() 中加上以下断言，那么需要：
+        
            ```c++
            DCHECK_EQ(cap_pids.Size(), cap_thick_pids.Size() + cap_thin_pids_with_origin.size() + cap_thin_pids_without_origin.size());
            
-           DCHECK_EQ(perf_pids.Size(), perf_thick_pids.Size() + perf_thin_pids_with_origin.size() + perf_thin_pids_without_origin.size());
+       DCHECK_EQ(perf_pids.Size(), perf_thick_pids.Size() + perf_thin_pids_with_origin.size() + perf_thin_pids_without_origin.size());
            ```
     
            需要修改 TEST_SetChunkSpaceInfoWithTiering，可以把这个断言弄成一个独立的函数，只用 DCHECK
     
            过一遍 ChunkTableTest 和 PExtentAllocatorTest，补上该有的单测 perf thick。
-    
-        2. 用到 GetStoragePoolSpace 的地方换成 GetSpHealthySpace，比如 RemoveChunkFromStoragePool
-    
-        3. HasSpaceForTemporaryReplica 和 HasSpaceForCow 的修改
     
     2. prior pextent allocation
     
@@ -39,13 +37,22 @@
         先做一个把 prior 替换掉，把 prior 相关单测调对的代码。然后再去调 AllocRecoverCap/PerfExtents 的逻辑
     
         1. recover manager 中 calculate remain space 要换成 perf thick / thin / cap，用上 pk 的概念，remain_prior_space_map 换掉；
-        2. AllocRecoverCap/PerfExtents 中只需要传入 is_thick，去掉 is_prioritized
+    
+        2. AllocRecoverCap/PerfExtents 中只需要传入 is_thick，去掉 is_prioritized；
+    
+        3. recover / removing chunk dst 允许选 isolated ？允许，为了尽快恢复/迁出；
+    
+        4. 把 avail cmd slots 提前算好放 exclude_cids；
+    
+        5. GenerateMigrateCmdsForRemovingChunk 中 migrate_generate_used_cmd_slots 对 src / dst 的判断应该传入 AllocRecoverCap/PerfExtents；
+    
+           传入会有点麻烦，可能出现 removing chunk 的时候总是选某个 src / dst cid，但那个 dst cid 可生成的余额不足，还一直选他。但是影响最大也就造成一次 generate 过程中只选 1 个 src cid，用满他的 256 的配额，所以先不修复。
     
         这部分代码可以写到 recover manager，另外也可以总结出一个 recover 和 alloc 虽然大部分相同，但是存在的细微差别。
     
         prior recover 如果 recover dst prior space 空间不足时不允许写到 perf thin space。
     
-        agile recover 和 special recover 回头处理。
+        agile recover 和 special recover 回头处理，都是利用到临时副本的，入口是 remove replica
     
     4. prior migrate
     
@@ -98,17 +105,7 @@
 
 4. 根据最新 lsm 设计文档大致了解 lsm2 
 
-5. meta 层面的 reposition auto mode 要在 560 中做起来，要自适应调节 generate limit；
-
-6. 副本分配时，如果集群是中负载，不用遵循局部化分配，现有代码是除了高负载，都要遵循，有可能造成刚分配完就要迁移的现象
-
-     副本分配的代码里有对 expected localization loc 中如果有 isolated cid 的特殊处理
-
-7. GenerateMigrateCmdsForRemovingChunk 中 migrate_generate_used_cmd_slots 对 src / dst 的判断应该传入 AllocRecoverCap/PerfExtents；
-
-     传入会有点麻烦，可能出现 removing chunk 的时候总是选某个 src / dst cid，但那个 dst cid 可生成的余额不足，还一直选他。但是影响最大也就造成一次 generate 过程中只选 1 个 src cid，用满他的 256 的配额，所以先不修复。
-
-8. recover / removing chunk dst 允许选 isolated ？允许，为了尽快迁出。
+6. meta 层面的 reposition auto mode 要在 560 中做起来，要自适应调节 generate limit；
 
 9. 补一个同时有多个 removing cid 的单测；
 
@@ -131,10 +128,6 @@
 12. 在 migrate for prior extent 中引入 remain space map 来正确计算（不一定需要，目前看他好像没啥问题）；
 
       目前 migrate 中的逻辑是每次获取一个 pid 的 entry 都要通过 GetPhysicalExtentTableEntry 调用一次锁，但在 prior  extent 的迁移中，可以批量获取 diff_pids 中所有的 pentry，因此可以相应做优化。
-
-13. recover / migrate for removing chunk 用到的函数，是否可以拿回 recover_manager.cc 中？
-
-       不至于出现跨线程用协程锁的问题，yutian 建议暂时不需要。
 
 
 
@@ -181,8 +174,6 @@
     往 UpdatableRecoverParams 中增加 2 个字段，start hour  end_hour。同时，通过这个 patch 改 recover 的触发策略，IsNeedRecover。
 
     单测要写在 function_test 中
-    
-6. 需要一个 rpc 来排序给出 chunk ratio，even pids nums？感觉没必要，但是测试的时候可以先加着
 
 
 
@@ -192,22 +183,24 @@ ZBS-20993，允许 RPC 产生恢复/迁移命令，可以指定源和目的地�
 
 
 
-1. 把 avail cmd slots 提前算好放 exclude_cids
-2. 让 cli 可以看到 avail cmd slots
-3. 把 distributeRecoverCmds 中的生成部分函数抽出来
-1. concurrency params 用起来
-2. 自动调节 recover / migrate 变速，智能模式中，值变化的时候添加 log
-3. summary recover perf 
+
+
+
+
+1. 让 cli 可以看到 avail cmd slots
+2. 把 distributeRecoverCmds 中的生成部分函数抽出来
+3. concurrency params 用起来
+4. 自动调节 recover / migrate 变速，智能模式中，值变化的时候添加 log
+5. summary recover perf 
 6. io metrics 调整
     1. LocalIOHandler 中的 ctx->sw.Start() 应该放在所有会执行 LocalIODone 前？
     2. METRIC_INITIALIZE 中的 args 是怎么用起来的呢？
     2. 目前 Acccess IO Stats 中的统计不做区分，统计的是 app + recover io 的流量，在 access handler 的调节中，后续要考虑 sink io，先不用做 recover io metrics；
     2. 在 access io handler 中做的 UpdateIOStats，对外展示有好处，但实际上没有流量，自动调节的话，可以忽略这部分。
-5.  io 分成 app io, recover io 和 sink io 共 3 种，粗略理解，sink io 保性能，recover io 保安全，然后他们在不同场景下的优先级应该不一样：
+7. io 分成 app io, recover io 和 sink io 共 3 种，粗略理解，sink io 保性能，recover io 保安全，然后他们在不同场景下的优先级应该不一样：
     1. 比如 app io 流量小的话，应该让 recover io 高，sink io 小一些；
     2. 比如 app io 流量大的话，或许是可以允许 sink io 高，但是 recover io 得小一些这样的
-6. 分层之后，cap 层还可以统计盘的数量，perf 层需要统计的是 perf space used rate
-7. 需要拿到 sink io metrics 的统计
+8. 分层之后，cap 层还可以统计盘的数量，perf 层需要统计的是 perf space used rate
 
 
 
@@ -366,15 +359,7 @@ LOG(INFO) << "prefer_zone_idx " << prefer_zone_idx;
 
 4 个 ticket 4 件事
 
-1. 冷热数据识别（梳理 lsm 侧的需求给到 lsm 同学做，识别冷热数据）
-
-   recover src 读的热数据要写到 recover dst 上的 cache，冷数据直接写到 recover dst 上的 partition，避免恢复导致的缓存击穿
-
-   需要修改 data channel 中的 message 中 max_message_id 的语义，换成 usercode，然后就可以带上返回的数据是否冷热的 flag
-
-   参考 patch ZBS-21288
-
-2. recover 每台 chunk 上执行的并发度默认 32，根据 recover extent 完成情况向上向下调节（auto mode）
+1. recover 每台 chunk 上执行的并发度默认 32，根据 recover extent 完成情况向上向下调节（auto mode）
 
    并发度最小应该是 2 4，而不是 1，就 1 个通道的容错率太差了
 
@@ -384,7 +369,7 @@ LOG(INFO) << "prefer_zone_idx " << prefer_zone_idx;
 
    ZBS-25386 有描述一个当 lsm 读取速度过慢时，会导致大部分迁移命令超时的问题，因此并发度也可以根据 lsm 读取速率来调节
 
-3. recover cmd slot 默认 128，根据 extent 的稀疏情况以及 recover extent 的完成情况向上向下调节（auto mode）
+2. recover cmd slot 默认 128，根据 extent 的稀疏情况以及 recover extent 的完成情况向上向下调节（auto mode）
 
    怎么判断 extent 的稀疏情况？lsm 上报的心跳中有 thin pid 的信息
 
@@ -473,7 +458,7 @@ xx 1. 不开分层的 replica ，2. 开分层后的 cap replica，3. 开分层�
 
 如果节点上的 replica 发生 cow 的话，direct_prs 会瞬间减小而导致写入因为等待空闲 cache 而阻塞，也需要预先下刷以避免阻塞
 
-pin 的 allocation 中的空间计算方式，以及初次写的 lease，怎么传递 prioritized 给 lsm
+pin 中初次写的 lease，怎么传递 prioritized 给 lsm
 
 
 
@@ -513,10 +498,38 @@ gtest系列之事件机制
        1. must not be dst;
        2. should not be src/replace in ec migrate;
        3. should not be src, should be replace in replica migrate;
-   2. src select 是共有的
-   3. 介绍 src / dst / replace 通用的选择策略，然后再分别介绍各个部分中独有的
-   4. EnqueueCmd 的时候会将 migrate src_cid 设置成 lease owner，所以以上选到的 mgirate src 不一定就是最后给到 access 时的 src
-   4. 在介绍副本恢复策略时，可以着重介绍 recover dst 黑名单机制
+       
+   2. EnqueueCmd 的时候会将 migrate src_cid 设置成 lease owner，所以以上选到的 mgirate src 不一定就是最后给到 access 时的 src
+   
+   3. 在介绍副本恢复策略时，可以着重介绍：
+   
+       1. recover src 和 dst 的选取规则；
+   
+       2. recover dst 黑名单机制；
+   
+       3. recover cmd 下发优先级；
+   
+           recover cmd 之间的优先级通过待修复 pextent 两两比较规则来体现：
+   
+           1. 若二者活跃副本冗余度不相等，优选最小的，否则执行下一步；
+           2. 若二者活跃副本冗余度都不等于 0 并且其中有一个的副本在维护模式节点上，优选不在维护模式节点上的，否则执行下一步；
+           3. 若二者有一个是 prior，优选它，否则执行下一步；
+           4. 若二者有效副本冗余度不相等，优选最小的，否则执行下一步；
+           5. 若二者期望副本冗余度不相等，优选最大的，否则执行下一步；
+           6. 若二者活跃副本冗余度都等于 0 并且其中有一个的副本在维护模式节点上，优选不在维护模式节点上的，否则执行下一步；
+           7. 选 pid 最小的。
+   
+           其中（活跃/有效/期望）副本冗余度根据冗余类型不同，计算方式如下：
+   
+           1. replica： (alive_segment_num / segment_num / expected_segment_num) - 1；
+           2. ec shard： (alive_segment_num / segment_num / expected_segment_num) - k，k 是数据块个数；
+   
+   4. 在介绍副本分配策略时，可以介绍：
+   
+       1. thick / thin 分配，结合 transaction，什么时候分配 pid，location，预留空间；
+       2. chunk space 计算方式、字段含义；
+
+
 
 
 
