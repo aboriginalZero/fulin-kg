@@ -6,19 +6,18 @@
 
     1. chunk table 的修改
     
-        1. HasSpaceForTemporaryReplica 和 HasSpaceForCow 的修改
+       1. HasSpaceForTemporaryReplica 和 HasSpaceForCow 的修改
     
-        1. 如果想在 ChunkTableEntry::UpdateSpaceInfo() 中加上以下断言，那么需要：
-        
-           ```c++
-           DCHECK_EQ(cap_pids.Size(), cap_thick_pids.Size() + cap_thin_pids_with_origin.size() + cap_thin_pids_without_origin.size());
-           
-       DCHECK_EQ(perf_pids.Size(), perf_thick_pids.Size() + perf_thin_pids_with_origin.size() + perf_thin_pids_without_origin.size());
-           ```
+       1. 如果想在 ChunkTableEntry::UpdateSpaceInfo() 中加上以下断言，那么需要：
     
-           需要修改 TEST_SetChunkSpaceInfoWithTiering，可以把这个断言弄成一个独立的函数，只用 DCHECK
-    
-           过一遍 ChunkTableTest 和 PExtentAllocatorTest，补上该有的单测 perf thick。
+          ```c++
+          DCHECK_EQ(cap_pids.Size(), cap_thick_pids.Size() + cap_thin_pids_with_origin.size() + cap_thin_pids_without_origin.size());
+          DCHECK_EQ(perf_pids.Size(), perf_thick_pids.Size() + perf_thin_pids_with_origin.size() + perf_thin_pids_without_origin.size());
+          ```
+          
+          需要修改 TEST_SetChunkSpaceInfoWithTiering，可以把这个断言弄成一个独立的函数，只用 DCHECK
+          
+          过一遍 ChunkTableTest 和 PExtentAllocatorTest，补上该有的单测 perf thick。
     
     2. prior pextent allocation
     
@@ -47,6 +46,19 @@
         5. GenerateMigrateCmdsForRemovingChunk 中 migrate_generate_used_cmd_slots 对 src / dst 的判断应该传入 AllocRecoverCap/PerfExtents；
     
            传入会有点麻烦，可能出现 removing chunk 的时候总是选某个 src / dst cid，但那个 dst cid 可生成的余额不足，还一直选他。但是影响最大也就造成一次 generate 过程中只选 1 个 src cid，用满他的 256 的配额，所以先不修复。
+           
+        6. 空间充足可以先过滤，但是尽量不选 isolated 和双活需要 2 ：1 的特性需要特别考虑。
+    
+           先用 prefer local 选出 expected localized loc，从中选出不在 alive loc 的。
+    
+           假设就 1 个，如果
+    
+           * 双活下的副本
+               * 假设就缺 1 个
+               * 假设就缺 2 个
+           * 非双活副本
+               * 
+           * 非双活 ec
     
         这部分代码可以写到 recover manager，另外也可以总结出一个 recover 和 alloc 虽然大部分相同，但是存在的细微差别。
     
@@ -524,12 +536,21 @@ gtest系列之事件机制
            1. replica： (alive_segment_num / segment_num / expected_segment_num) - 1；
            2. ec shard： (alive_segment_num / segment_num / expected_segment_num) - k，k 是数据块个数；
    
-   4. 在介绍副本分配策略时，可以介绍：
+   4. 在介绍 reposition 时，可以介绍：
+   
+       1. 扫描、生成、下发命令参数
+           1. 单轮扫描命令上限；
+           2. 单轮生成命令上限、单轮每个 chunk 生成命令数上限；
+           3. 单轮下发命令上限、单轮每个 chunk 下发命令数上限；
+       2. repostion stale cmd 的判定；
+       3. reposition lease owner 的选取规则（replica 和 ec 不同）；
+           1. 先 src 再 dst；
+           2. ChooseOwnerForReposition；
+       
+   5. 在介绍副本分配策略时，可以介绍：
    
        1. thick / thin 分配，结合 transaction，什么时候分配 pid，location，预留空间；
        2. chunk space 计算方式、字段含义；
-
-
 
 
 
