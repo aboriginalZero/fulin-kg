@@ -57,15 +57,14 @@
                * 假设就缺 1 个
                * 假设就缺 2 个
            * 非双活副本
-               * 
            * 非双活 ec
-    
+        
         这部分代码可以写到 recover manager，另外也可以总结出一个 recover 和 alloc 虽然大部分相同，但是存在的细微差别。
-    
+        
         prior recover 如果 recover dst prior space 空间不足时不允许写到 perf thin space。
-    
+        
         agile recover 和 special recover 回头处理，都是利用到临时副本的，入口是 remove replica
-    
+        
     4. prior migrate
     
        只有 replica 才会分配临时副本，所以 ec 不会有 agile recover
@@ -892,10 +891,12 @@ COW 之后，child alive loc 不一定等于 parent alive loc。实际上，COW 
 
 4. cap_cache_capacity = total_cache_capacity - perf_planned_space
 
-   默认等于 0.9 * total_cache_capacity - min(perf_allocated_data_space, (0.7 * total_cache_capacity))，未在 ChunkSpaceInfo 中提供
+   算的是 cap cache 理论可占用容量上限，默认等于 0.9 * total_cache_capacity - min(perf_allocated_data_space, (0.7 * total_cache_capacity))，未在 ChunkSpaceInfo 中提供
 
    1. 当 perf 实际使用空间为 0 时，容量层读缓存空间取得最大值，0.9 * total_cache_capacity；
    2. 当 perf 实际使用空间超过 0.7 * total_cache_capacity 时，容量层读缓存空间取得最小值，0.2 * total_cache_capacity；
+
+   cap cache 理论可占用容量上限不会低于 20%，但 cap cache 实际可能只占用 10%，那么此时可以用 used_cache_space - perf_used_data_space 得到这个实际占用容量。据此，也可以得到实际 cap read cache 使用率等于 dirty_cache_space / (used_cache_space - perf_used_data_space)。
 
 5. planned_prioritized_space = prio_space_percentage * perf_valid_data_space
 
