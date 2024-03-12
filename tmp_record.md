@@ -1,4 +1,6 @@
-zbs-iscsi lun show zbs-iscsi-datastore-1710222435766f 199
+1. 界面上创建的磁盘，点击详情，里面的存储对象，iscsi://iqn.2016-02.com.smartx:system:zbs-iscsi-datastore-1710222435766f/167；
+2. 通过 zbs-iscsi lun show zbs-iscsi-datastore-1710222435766f 167 查看它的 volume id 14fd95fb-9a32-4a5a-97cb-c2761db5ced1；
+3. 然后通过 zbs-meta volume show_by_id 14fd95fb-9a32-4a5a-97cb-c2761db5ced1 --show_pextents 查看副本分布。
 
 
 
