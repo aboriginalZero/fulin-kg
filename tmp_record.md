@@ -1,3 +1,9 @@
+zbs-iscsi lun show zbs-iscsi-datastore-1710222435766f 199
+
+
+
+1. 
+
 1. zbs-meta  volume show_by_id 9b0b248f-7c06-4a44-9f31-9d8292e14bdd --show_pextents
 
     可区分展示 perf 或 cap 的，目前默认只是展示 perf
@@ -70,6 +76,8 @@
        只有 replica 才会分配临时副本，所以 ec 不会有 agile recover
     
        临时副本载 perf layer 中一定是 thin 的，临时副本一定分配上
+       
+       有很多代码适合 pick 到 55x，但在 56x 中直接被删除了
     
 3. 明确以下分层之后，转换/克隆出一个普通卷的流程，包括 lextent, pextent 分配等，CloneVolumeTransaction/CowLExtentTransaction。
 
