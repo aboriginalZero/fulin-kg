@@ -1,10 +1,7 @@
-1. 界面上创建的磁盘，点击详情，里面的存储对象，iscsi://iqn.2016-02.com.smartx:system:zbs-iscsi-datastore-1710222435766f/167；
-2. 通过 zbs-iscsi lun show zbs-iscsi-datastore-1710222435766f 167 查看它的 volume id 14fd95fb-9a32-4a5a-97cb-c2761db5ced1；
-3. 然后通过 zbs-meta volume show_by_id 14fd95fb-9a32-4a5a-97cb-c2761db5ced1 --show_pextents 查看副本分布。
-
-
-
 1. 
+2. 先搞 migrate
+
+
 
 1. zbs-meta  volume show_by_id 9b0b248f-7c06-4a44-9f31-9d8292e14bdd --show_pextents
 
@@ -41,6 +38,8 @@
     
     3. piror recover
     
+        先把 recover 关于 prior 的部分做完，等有空再考虑把 topo distance 做好，zbs4
+    
         先做一个把 prior 替换掉，把 prior 相关单测调对的代码。然后再去调 AllocRecoverCap/PerfExtents 的逻辑
     
         1. recover manager 中 calculate remain space 要换成 perf thick / thin / cap，用上 pk 的概念，remain_prior_space_map 换掉；
@@ -52,7 +51,7 @@
         4. 把 avail cmd slots 提前算好放 exclude_cids；
     
         5. GenerateMigrateCmdsForRemovingChunk 中 migrate_generate_used_cmd_slots 对 src / dst 的判断应该传入 AllocRecoverCap/PerfExtents；
-    
+        
            传入会有点麻烦，可能出现 removing chunk 的时候总是选某个 src / dst cid，但那个 dst cid 可生成的余额不足，还一直选他。但是影响最大也就造成一次 generate 过程中只选 1 个 src cid，用满他的 256 的配额，所以先不修复。
            
         6. 空间充足可以先过滤，但是尽量不选 isolated 和双活需要 2 ：1 的特性需要特别考虑。
@@ -60,7 +59,7 @@
            先用 prefer local 选出 expected localized loc，从中选出不在 alive loc 的。
     
            假设就 1 个，如果
-    
+        
            * 双活下的副本
                * 假设就缺 1 个
                * 假设就缺 2 个
@@ -75,8 +74,11 @@
         
     4. prior migrate
     
+       1. dst not isolated，2 个节点一个 isolated，1 个不是
+       2. 
+       
        只有 replica 才会分配临时副本，所以 ec 不会有 agile recover
-    
+       
        临时副本载 perf layer 中一定是 thin 的，临时副本一定分配上
        
        有很多代码适合 pick 到 55x，但在 56x 中直接被删除了
@@ -682,8 +684,6 @@ vscode 中用 vim 插件，这样可以按区域替换代码
 一个遗留问题是，单测里面想要触发两次 recover cmd，怎么让 entry 的 GetLocation() 得到及时更新，试了 sleep(9) 不行，可能不止需要一个心跳周期，还有其他条件没触发。
 
 以一个 functional test 单测为例子展开看 zbs 系统的启动流程。
-
-
 
 ### access point
 

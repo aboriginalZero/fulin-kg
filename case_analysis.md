@@ -1,3 +1,63 @@
+### 问题 2
+
+1. 抓包，明确通过 port-storage 接口，目的端口是 10100，源或目的主机是 10.10.51.75，抓 1000 个包自动结束，多次抓包主动删除文件。
+
+    tcpdump -i port-storage dst port 10100 and host 10.10.51.75 -c 1000 -w /tmp/2.pcap
+
+2. 查看新增磁盘数据块信息
+
+    1. 界面上创建的磁盘，点击详情，里面的存储对象，iscsi://iqn.2016-02.com.smartx:system:zbs-iscsi-datastore-1710222435766f/167；
+    2. 通过 zbs-iscsi lun show zbs-iscsi-datastore-1710222435766f 167 查看它的 volume id 14fd95fb-9a32-4a5a-97cb-c2761db5ced1；
+    3. 然后通过 zbs-meta volume show_by_id 14fd95fb-9a32-4a5a-97cb-c2761db5ced1 --show_pextents 查看副本分布。
+
+3. fio 也可以远程运行，只要在该节点上运行 fui --server，然后通过 fio --client=192.168.61.110 firstwrite.cfg 来运行，其中 filename 可以替换到刚刚新增磁盘的路径，size 改成对应磁盘大小
+
+    ```
+    [root@localhost fioconfig]# cat firstwrite.cfg
+    [global]
+    ioengine=libaio
+    direct=1
+    thread=1
+    norandommap=1
+    randrepeat=0
+    ##runtime=1h
+    ramp_time=0
+    size=30g
+    filename=/dev/vdc
+    
+    [write1m-seq]
+    ###time_based
+    stonewall
+    group_reporting
+    bs=256k
+    rw=write
+    numjobs=1
+    iodepth=128
+    ```
+
+4. 以二进制方式打印 header 和 buffer，与抓包内容比对。
+
+    ```shell
+    auto func = [](const char* data, int len) {
+    	std::ostringstream oss;
+    	for (int i = 0; i < len; i ++) {
+    		oss << std::hex << std::setfill('0') << std::setw(2) << static_cast<int>(data[i]) << " ";
+    	}
+    	oss << std::dec << std::endl;
+    	return oss.str();
+    };
+    
+    # RpcServer::OnRead 服务端接收到的包
+    LOG(INFO) << "yiwu [RPC] header: {" << " error_code: " << header->error_code << " service: " << sd->name() << " method: " << md_name << " timeout_ms: " << header->timeout_ms << " message_id: " << header->message_id << " message_len: " << header->buf_len << "}," << " request: {" << request->ShortDebugString() << "}" << " socket local addr: " << socket->GetLocalAddr() << " peer addr: " << socket->GetPeerAddr() << " header: " << func(reinterpret_cast<char*>(header), sizeof(RpcHeader)) << " context: " <<  func(context->GetBuffer().get(), header->buf_len);
+    
+    # CoAsyncRpcClient::CallMethod 客户端发送
+    LOG(INFO) << "yiwu CoAsyncRpcClient::CallMethod request " << request->ShortDebugString() << " rpc client header " << req_hdr.DebugString() << " rpc client header " << func(reinterpret_cast<char*>(&req_hdr), sizeof(RpcHeader)) << " rpc client buffer " << func(req_buf, message_len);
+    ```
+
+
+
+### 问题 1
+
 1. 卷 08e2d668-098d-4e30-b411-c55d1866353a，dd if=/dev/zero of=c.txt bs=1G seek=100 count=0
 
     刚创建时 alive location = location，过一会儿就变成 0（确认一下是不是 10 分钟，13:51:35）， ever exist 全程等于 false，

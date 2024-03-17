@@ -25,6 +25,8 @@ zrt zbs3 FunctionalTest.WriteResize
 
 ### docker 使用
 
+用 docker 能比较好解决
+
 ```shell
 # 首次编译/子模块如 spdk 更新，需要删除 build 目录，进到 Docker 内部执行
 docker run --rm --privileged=true -it -v /home/code/zbs3:/zbs -w /zbs registry.smtx.io/zbs/zbs-buildtime:el7-x86_64
@@ -138,6 +140,7 @@ zbs-meta snapshot list target2 1a8df188-6d4d-4ed5-8759-6324b2dacc98
 
 ```shell
 zbs-tool service set_priority --force meta 10.0.0.222:10100:2
+zbs-tool service set_priority meta ""
 ```
 
 根据 pid 查 volume，elf 或 server san 都可以。对于 VMware 环境，由 pid 关联的 volume 可以找到 nfs file，文件名即对应 VM，所以没有提供额外的命令行查询

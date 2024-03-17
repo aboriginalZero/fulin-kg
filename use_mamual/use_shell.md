@@ -8,20 +8,29 @@ shell 执行流程
 
 ## 文本/文件
 
+### less 查看文件
+
+* gg 到开头，G 到末尾；
+* 按下 / 键后回车，n / N 来向下/上搜索；
+* 输入行号 n 并回车，以当前屏幕中的第一行为起点，跳转到第 n 行（跟用 vi 打开的第 n 行不同）；
+* F：实时跟踪文件变化，类似于 tail -f 命令；
+* =：显示当前文件的统计信息，包括行数、字节数等；
+* &pattern：仅显示匹配某个模式的行，例如 &error 将只显示包含 "error" 的行；
+
 ### grep 查找特定文本的文件
 
 grep 用来查找包含特定文本模式的文件，一般范式是 grep pattern file。
 
-* -i 忽略 pattern 大小写；-w 精准匹配；-r 递归搜索；-e 支持正则表达式，可使用多个 pattern;
-
-* -l  只打印匹配的文件名；-n 打印行号；-v 打印不匹配行；-C 3 打印匹配结果前后各 3 行
+* -i 忽略 pattern 大小写；-w 精准匹配；-r 递归搜索；-e 支持正则表达式，可使用多个 pattern；
+* -l  只打印匹配的文件名；-n 打印行号；-v 打印不匹配行；-C 3 打印匹配结果前后各 3 行；
+* 用 '' 就可以搜索带 "" 的关键字。
 
 常见方式
 
-* 使用 zgrep 会搜索包括压缩文件在内的所有文件
+* 使用 zgrep 会搜索包括压缩文件在内的所有文件，通过正则表达式搜索同时包含 key1 和 key2 的行
 
     ```shell
-    zgrep "ctx" /var/log/zbs/zbs-chunkd.log.2023*
+    zgrep 'key1.*key2\|key2.*key1' /var/log/zbs/zbs-chunkd.log.2023*
     ```
 
 * ^ 匹配行首，$ 匹配行尾，搜索只有字符 ctx 的行
@@ -33,7 +42,7 @@ grep 用来查找包含特定文本模式的文件，一般范式是 grep patter
 * 搜索指定字符并打印后三行，忽略匹配串大小写并带行号
 
     ```shell
-    grep -i "LIBMETA ADDR UPDATE" zbs_test.INFO -A 3 -n
+    grep -n -i 'LIBMETA ADDR UPDATE' zbs_test.INFO -A 3
     ```
 
 * --include 指定或 --exclude 排除某些文件
@@ -42,7 +51,7 @@ grep 用来查找包含特定文本模式的文件，一般范式是 grep patter
     grep "main()" . -r --include *.{h, cc}
     ```
 
-* 编写脚本时，可以用 -q 设置静默，返回值 0表示匹配成功，其他表示失败
+* 编写脚本时，可以用 -q 设置静默，返回值 0 表示匹配成功，其他表示失败
 
     ```shell
     grep -q "$pat" $file		# 等价于 grep "$pat" $file &> /dev/null
