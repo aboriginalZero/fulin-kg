@@ -74,8 +74,16 @@
         
     4. prior migrate
     
-       1. dst not isolated，2 个节点一个 isolated，1 个不是
-       2. 
+       1. dst not isolated
+           1. 总共 4 个节点，2 副本，目前副本在 1 2，3 isolated，4 normal，期望到 3；
+           2. 总共 4 个节点，2 副本，目前副本在 1 2，3 isolated，4 isolated，期望 cmds empty；
+       2. migrate for localization
+       3. migrate for rebalance，所有节点都高负载，也会从高到低；
+       4. migrate for rebalance，不能迁移到 perf thick 不足，但 perf thin 有剩余的节点；
+       5. migrate for repair topo，中负载；
+       6. migrate for repair topo，高负载；
+       7. migrate for rebalance，不会迁移到 topo 更差的节点，即使他空间有剩余；
+       8. 
        
        只有 replica 才会分配临时副本，所以 ec 不会有 agile recover
        
