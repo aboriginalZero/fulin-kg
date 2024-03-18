@@ -1,80 +1,52 @@
+1. meta 层面的 reposition auto mode 要在 560 中做起来，要自适应调节 generate limit；
+
 1. zbs-meta  volume show_by_id 9b0b248f-7c06-4a44-9f31-9d8292e14bdd --show_pextents
 
     可区分展示 perf 或 cap 的，目前默认只是展示 perf
     
-1. 拆分 prior migrate 任务
+1. 从 transaction 传个 prior 的 force_intact 字段用来表示：
 
-    1. chunk table 的修改
+    1. create volume 的时候严格检查副本创建；
+    2. IO 路径上放松检查副本创建（成功一个副本就算成功）；
     
-       1. HasSpaceForTemporaryReplica 和 HasSpaceForCow 的修改
-    
-       1. 如果想在 ChunkTableEntry::UpdateSpaceInfo() 中加上以下断言，那么需要：
-    
-          ```c++
-          DCHECK_EQ(cap_pids.Size(), cap_thick_pids.Size() + cap_thin_pids_with_origin.size() + cap_thin_pids_without_origin.size());
-          DCHECK_EQ(perf_pids.Size(), perf_thick_pids.Size() + perf_thin_pids_with_origin.size() + perf_thin_pids_without_origin.size());
-          ```
-          
-          需要修改 TEST_SetChunkSpaceInfoWithTiering，可以把这个断言弄成一个独立的函数，只用 DCHECK
-          
-          过一遍 ChunkTableTest 和 PExtentAllocatorTest，补上该有的单测 perf thick。
-    
-    2. prior pextent allocation
-    
+4. HasSpaceForTemporaryReplica 和 HasSpaceForCow 的修改，顺便把对 CowLExtentTransaction 的理解补充上
+
+    1. prior pextent allocation
+
        升级到 560，但没有开启之前，不允许创建 prior pextent 的代码在哪里？
-    
+
        replica_capacity_only 模式允许创建 prior pextent 吗？
-    
+
        改动之后，可能的坑点：
-    
+
        1. thick 有个最高 99%；
        2. temp pid 有个最高 95%；
        3. pid 分配 location 除了 ec 之外，并不会随机打乱 cid 在 loc 中的位置；
-    
-    3. piror recover
-    
-        先把 recover 关于 prior 的部分做完，等有空再考虑把 topo distance 做好，zbs4
-    
-        先做一个把 prior 替换掉，把 prior 相关单测调对的代码。然后再去调 AllocRecoverCap/PerfExtents 的逻辑
-    
-        1. recover manager 中 calculate remain space 要换成 perf thick / thin / cap，用上 pk 的概念，remain_prior_space_map 换掉；
-    
-        2. AllocRecoverCap/PerfExtents 中只需要传入 is_thick，去掉 is_prioritized；
-    
-        3. recover / removing chunk dst 允许选 isolated ？允许，为了尽快恢复/迁出；
-    
-        4. 把 avail cmd slots 提前算好放 exclude_cids；
-    
-        5. GenerateMigrateCmdsForRemovingChunk 中 migrate_generate_used_cmd_slots 对 src / dst 的判断应该传入 AllocRecoverCap/PerfExtents；
-        
+
+    2. piror recover
+
+        先把 recover 关于 prior 的部分做完，等有空再考虑把 topo distance 做好，zbs4，另外，空间充足可以先过滤，但是尽量不选 isolated 和双活需要 2 ：1 的特性需要特别考虑。
+
+        1. recover / removing chunk dst 允许选 isolated ？允许，为了尽快恢复/迁出；
+
+        2. 把 avail cmd slots 提前算好放 exclude_cids；
+
+        3. GenerateMigrateCmdsForRemovingChunk 中 migrate_generate_used_cmd_slots 对 src / dst 的判断应该传入 AllocRecoverCap/PerfExtents；
+
            传入会有点麻烦，可能出现 removing chunk 的时候总是选某个 src / dst cid，但那个 dst cid 可生成的余额不足，还一直选他。但是影响最大也就造成一次 generate 过程中只选 1 个 src cid，用满他的 256 的配额，所以先不修复。
-           
-        6. 空间充足可以先过滤，但是尽量不选 isolated 和双活需要 2 ：1 的特性需要特别考虑。
-    
-           先用 prefer local 选出 expected localized loc，从中选出不在 alive loc 的。
-    
-           假设就 1 个，如果
-        
-           * 双活下的副本
-               * 假设就缺 1 个
-               * 假设就缺 2 个
-           * 非双活副本
-           * 非双活 ec
-        
+
         这部分代码可以写到 recover manager，另外也可以总结出一个 recover 和 alloc 虽然大部分相同，但是存在的细微差别。
-        
-        prior recover 如果 recover dst prior space 空间不足时不允许写到 perf thin space。
-        
+
         agile recover 和 special recover 回头处理，都是利用到临时副本的，入口是 remove replica
-        
-    4. prior migrate
-    
+
+    3. prior migrate
+
        只有 replica 才会分配临时副本，所以 ec 不会有 agile recover
-       
+
        临时副本载 perf layer 中一定是 thin 的，临时副本一定分配上
-       
+
        有很多代码适合 pick 到 55x，但在 56x 中直接被删除了
-       
+
        ```
        for (const auto& [cid, info] : healthy_chunks_map) {
        LOG(INFO) << "yiwu cid " << cid << " perf thick allocated "
@@ -88,10 +60,8 @@
        
        LOG(INFO) << "yiwu sp_load " << sp_load << " pk " << pk;
        ```
-       
-       
-    
-3. 明确以下分层之后，转换/克隆出一个普通卷的流程，包括 lextent, pextent 分配等，CloneVolumeTransaction/CowLExtentTransaction。
+
+5. 明确以下分层之后，转换/克隆出一个普通卷的流程，包括 lextent, pextent 分配等，CloneVolumeTransaction/CowLExtentTransaction。
 
     vtable 放在哪里？
 
@@ -132,15 +102,13 @@
 
         待补充
 
-3. 对于仅被 thin volume / snapshot 引用的 capacity pextent，其 provision 将在 gc 扫描时被更新为 thin，随心跳下发给 lsm，如果有 pextent 被 thick volume 引用，那其 provision 将被更新为 thick，随心跳下发给 lsm，[ZBS-15094](http://jira.smartx.com/browse/ZBS-15094)。
+6. 对于仅被 thin volume / snapshot 引用的 capacity pextent，其 provision 将在 gc 扫描时被更新为 thin，随心跳下发给 lsm，如果有 pextent 被 thick volume 引用，那其 provision 将被更新为 thick，随心跳下发给 lsm，[ZBS-15094](http://jira.smartx.com/browse/ZBS-15094)。
 
-4. 根据最新 lsm 设计文档大致了解 lsm2 
+7. 根据最新 lsm 设计文档大致了解 lsm2 
 
-6. meta 层面的 reposition auto mode 要在 560 中做起来，要自适应调节 generate limit；
+8. 补一个同时有多个 removing cid 的单测；
 
-9. 补一个同时有多个 removing cid 的单测；
-
-10. refactor migrate for repair topo，从 GenerateMigrateCmdsForRepairTopo 开始改；
+9. refactor migrate for repair topo，从 GenerateMigrateCmdsForRepairTopo 开始改；
 
     1. 待做 [ZBS-13401](http://jira.smartx.com/browse/ZBS-13401)，让中高负载的容量均衡策略都要保证 prefer local 本地的副本不会被迁移，且如果 prefer local 变了，那么也要让他所在的 chunk 有一个本地副本（有个上限是保留归保留，但如果超过 95%，超过的 部分不考虑 prefer local 一定有对应的副本）
 
@@ -154,11 +122,7 @@
 
         migrate for ec repair topo 中对 ec src 的选择过于宽松了，其实还可以选到更好的 src，但是目前不做处理，目前只根据 replace 来选 src
 
-11. MgirateFilter 可以改成 allow, deny 都允许的，如果没要求，就传入 std::nullopt
-
-12. 在 migrate for prior extent 中引入 remain space map 来正确计算（不一定需要，目前看他好像没啥问题）；
-
-      目前 migrate 中的逻辑是每次获取一个 pid 的 entry 都要通过 GetPhysicalExtentTableEntry 调用一次锁，但在 prior  extent 的迁移中，可以批量获取 diff_pids 中所有的 pentry，因此可以相应做优化。
+10. MgirateFilter 可以改成 allow, deny 都允许的，如果没要求，就传入 std::nullopt
 
 
 
@@ -216,21 +180,9 @@ ZBS-20993，允许 RPC 产生恢复/迁移命令，可以指定源和目的地�
 
 
 
-
-
 1. 让 cli 可以看到 avail cmd slots
 2. 把 distributeRecoverCmds 中的生成部分函数抽出来
-3. concurrency params 用起来
 4. 自动调节 recover / migrate 变速，智能模式中，值变化的时候添加 log
-5. summary recover perf 
-6. io metrics 调整
-    1. LocalIOHandler 中的 ctx->sw.Start() 应该放在所有会执行 LocalIODone 前？
-    2. METRIC_INITIALIZE 中的 args 是怎么用起来的呢？
-    2. 目前 Acccess IO Stats 中的统计不做区分，统计的是 app + recover io 的流量，在 access handler 的调节中，后续要考虑 sink io，先不用做 recover io metrics；
-    2. 在 access io handler 中做的 UpdateIOStats，对外展示有好处，但实际上没有流量，自动调节的话，可以忽略这部分。
-7. io 分成 app io, recover io 和 sink io 共 3 种，粗略理解，sink io 保性能，recover io 保安全，然后他们在不同场景下的优先级应该不一样：
-    1. 比如 app io 流量小的话，应该让 recover io 高，sink io 小一些；
-    2. 比如 app io 流量大的话，或许是可以允许 sink io 高，但是 recover io 得小一些这样的
 8. 分层之后，cap 层还可以统计盘的数量，perf 层需要统计的是 perf space used rate
 
 
@@ -249,13 +201,6 @@ total_bandwidth > limit.normal_io_busy_bps_throttle
 recover_handler_.migrate_throughput_in_last_duration() > 
 migrate_speed_limit * kRepositionIOPercentThrottle
 ```
-
-recover > sink > migrate
-
-分层之后，io 分成 app io, recover io 和 sink io 共 3 种。其中，app io 优先级最高，sink io 保其它副本的性能，recover io 保副本安全，在不同场景下的优先级应该不一样
-
-1. 若 app io 流量较小，此时业务不应该让 recover io；
-2. recover 的默认值是上限的 0.2，migrate 是 0.1；
 
 
 
@@ -468,6 +413,8 @@ recover manager 中 recover 和 migrate 的不同之处：
 
   migrate for over load prior extent / balance / even volume balance
 
+做 migrate for repair topo 和 rebalance 时，需要考虑以 chunk 为粒度的遍历，其他的考虑以 pid 为粒度遍历就好。
+
 
 
 剔副本的 4 种情况：
@@ -476,14 +423,6 @@ recover manager 中 recover 和 migrate 的不同之处：
 2. recover handler 在 SetupRecover 时遇到 lease 提供的 loc 中已经包含 dst cid 且 src cid 的 gen 是安全的；
 3. access io handler 在 write replica done 时会剔除写失败的副本；
 4. 临时副本重放完会被剔除。
-
-
-
-做 migrate for repair topo 和 rebalance 时，需要考虑以 chunk 为粒度的遍历，其他的考虑以 pid 为粒度遍历就好。
-
-xx 1. 不开分层的 replica ，2. 开分层后的 cap replica，3. 开分层后的 perf replica，4. 开分层后的 cap ec，他们的单测不适合合起来，因为如果之后 cap / perf 策略不同的话，还是得拆出来。
-
-涉及到容量均衡的才要区分是否双活，比如 even / prior / normal rebalance
 
 
 
