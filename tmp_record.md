@@ -1,8 +1,3 @@
-1. 
-2. 先搞 migrate
-
-
-
 1. zbs-meta  volume show_by_id 9b0b248f-7c06-4a44-9f31-9d8292e14bdd --show_pextents
 
     可区分展示 perf 或 cap 的，目前默认只是展示 perf
@@ -74,22 +69,27 @@
         
     4. prior migrate
     
-       1. dst not isolated
-           1. 总共 4 个节点，2 副本，目前副本在 1 2，3 isolated，4 normal，期望到 3；
-           2. 总共 4 个节点，2 副本，目前副本在 1 2，3 isolated，4 isolated，期望 cmds empty；
-       2. migrate for localization
-       3. migrate for rebalance，所有节点都高负载，也会从高到低；
-       4. migrate for rebalance，不能迁移到 perf thick 不足，但 perf thin 有剩余的节点；
-       5. migrate for repair topo，中负载；
-       6. migrate for repair topo，高负载；
-       7. migrate for rebalance，不会迁移到 topo 更差的节点，即使他空间有剩余；
-       8. 
-       
        只有 replica 才会分配临时副本，所以 ec 不会有 agile recover
        
        临时副本载 perf layer 中一定是 thin 的，临时副本一定分配上
        
        有很多代码适合 pick 到 55x，但在 56x 中直接被删除了
+       
+       ```
+       for (const auto& [cid, info] : healthy_chunks_map) {
+       LOG(INFO) << "yiwu cid " << cid << " perf thick allocated "
+       << GetAllocatedSpace(info, PK_PERF_THICK) / kExtentSize << " perf thick valid "
+       << GetValidSpace(info, PK_PERF_THICK) / kExtentSize << " perf thin allocated "
+       << GetAllocatedSpace(info, PK_PERF_THIN) / kExtentSize << " perf thin valid "
+       << GetValidSpace(info, PK_PERF_THIN) / kExtentSize << " cap allocated "
+       << GetAllocatedSpace(info, PK_CAP) / kExtentSize << " cap valid "
+       << GetValidSpace(info, PK_CAP) / kExtentSize;
+       }
+       
+       LOG(INFO) << "yiwu sp_load " << sp_load << " pk " << pk;
+       ```
+       
+       
     
 3. 明确以下分层之后，转换/克隆出一个普通卷的流程，包括 lextent, pextent 分配等，CloneVolumeTransaction/CowLExtentTransaction。
 
