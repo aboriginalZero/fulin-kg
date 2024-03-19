@@ -45,7 +45,7 @@
 
        临时副本载 perf layer 中一定是 thin 的，临时副本一定分配上
 
-       有很多代码适合 pick 到 55x，但在 56x 中直接被删除了
+       有很多代码适合 pick 到 55x，但在 56x 中直接被删除了，见 [ZBS-27109](http://jira.smartx.com/browse/ZBS-27109)
 
        ```
        for (const auto& [cid, info] : healthy_chunks_map) {
@@ -807,6 +807,10 @@ access 从 meta 拿到的 lease 中的 location 是 loc 而不是 alive loc，�
 敏捷恢复设计文档，https://docs.google.com/document/d/1JZ6trjE_D1ewfWbaSuewPoFzUksbfno8AyS1wj2Lkio/edit
 
 ### thin/thick 分配
+
+transaction 中，判断 thin/thick 的依据，cap 用 thin_provision_ ，perf 用 prioritized_ ，因为一个 transaction 中既可能分配 perf 也可能分配 cap，他们的 thin 和 thick 可能不一样。
+
+
 
 分配一个 thick pextent，会马上分配 pid 的 location（此时的第一副本会挑选为分配时集群空间比例最小的节点，其他副本位置再按照局部化原则选择），然后在 transaction 的 Commit 中会让 location 上每个 replica 的 last_report_ms = now_ms，所以此时也马上会有 alive_location = location。
 
