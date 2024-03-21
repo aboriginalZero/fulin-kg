@@ -349,10 +349,8 @@ LOG(INFO) << "prefer_zone_idx " << prefer_zone_idx;
 
    怎么判断 extent 的稀疏情况？lsm 上报的心跳中有 thin pid 的信息
 
-   recover extent 的完成情况可以是 meta 侧统计的下发出去的命令在单位时间内的完成数量
-
-   如果满足上一轮的 recover cmd queue 是满的，且当前这轮是空的，那么在下一个 4s 就触发扫描，而不需要等 5 分钟，这样来保证能喂满 chunk
    
+
    生成的自动调节机制
    
    1. 缓存队列不为空，那么下一个 1min 才生成下发；
@@ -364,39 +362,11 @@ LOG(INFO) << "prefer_zone_idx " << prefer_zone_idx;
    
    调节可允许下发命令的窗口大小，这个需要到 chunk 粒度（lease owner），目前是一个值作用到所有 chunk 上，但 auto mode 要能让各个 chunk 变动的值。
    
-   能够拿到 chu
-   
-   决定多发少发的依据是 recover cmd 的完成情况，完成的够快，且
-   
-   细粒度到 chunk 级别，只要还有剩余槽位，就要下发
-   
-   记录关于每个 chunk 的完成情况，如果完成的好，
-   
-   下发的窗口不用管，只要不是特别小，都
-   
-   1. 发多了容易超时，因为计时是从 meta 给 access 开始计时的；
-   2. 发少了容易饿死，access 侧完成的快；
    
    
-   
-   设成 generate migrate limit per round 一个足够大的数（4096），并且探测如果缓存队列首次为空，那么立马生成，而缓存队列有值，或者不是首次为空，那么等下一个 1h / min 周期才生成命令。
-   
-   如果某个节点完成的很快，但其他节点很慢，缓存队列中还是有命令，
-   
-   src 和 dst 可能得分开处理，因为 tcp 全双工，作为发送方和作为接收方的带宽和延迟可能不同
-   
-   slot 是 src 和 dst 都会用到，可以分开处理。
-   
-   智能调节只需调整各 chunk 的 slot 上限，而这是由该 recover cmd 的完成情况来决定的。
+   cmd slot 从 cid -> uint32 到 cmd -> pid set，能够被快速完成的 pid 如 ever exist = false 且 origin = 0 的不算在内
    
    
-   
-   不同于 access 可以用单个 block 的完成情况估算整个 extent 是否会超时，meta 只能从 pextent table 感知 dst chunk 上是否有副本来判断 cmd 是否 finished，用 now_ms - cmd.start_ms 来感知命令执行了多久。
-   
-   在动态模式下支持对各个 chunk 独立调节的 cmd slot limit，可以在每 4s 一次的 CleanTimeoutAndFinishedCmd 中执行以下调节机制：
-   
-   1. 若连续 10 次在 distributed_cmds 中都有某个 chunk 的 cmd，且这些 cmd 一个都没有完成，认为它 recover 完成的慢，调低它的 cmd slots limit；
-   2. 若连续 10 次在 distributed_cmds 中都有某个 chunk 的 cmd，且这些 cmd 都完成了，认为它 recover 完成的快，调高它的 cmd slots limit；
    
    被 access 标记为超时的单独拎出来：
    
@@ -404,59 +374,7 @@ LOG(INFO) << "prefer_zone_idx " << prefer_zone_idx;
    2. 在每一个 block read/write 之间，都有可能判断到 EShutDown，ELeaseExpired，ETimedOut，ECancelled，其中 ETimedOut 指的是超过 17 min 的。
    3. 在 agile recover 中发现 ECGenerationNotMatch 或者 ELeaseExpired
    
-   这些里面，lease 过期、被 cancel 之类的不该影响到下发个数。
-   
-   针对超时单独汇报？
-
-
-
-meta 侧的弹性恢复自动调节，我想了想，还想跟你一起讨论下。我的想法大概是：
-
-在每 4s 一次的 Recover Scan 时，可以加上一个逻辑：
-
-1. 若 cmd 缓存队列不为空，表明还有可以下发的命令，那么不生成命令直接下发；
-2. 若 cmd 缓存队列首次为空，认为可能是 access 执行能力强，立马尝试生成新命令并下发，而不是等固定的 1 h / 1min 周期；
-3. 若 cmd 缓存队列连续 2 次为空，认为集群副本都是安全的，不需要尝试生成命令，也不会下发命令。
-
-这样可以保证不会因为生成的过慢导致 access 饿死，而如果生成的过快，也可以依赖 cmd slots 来限制下发的数量，毕竟 cmd 计时是从下发开始算起的，这样就只需要动态调节一个地方：命令下发时用到的 cmd slots。
-
-在动态模式下支持对各个 chunk 独立调节 cmd slot limit，在每 4s 一次的 CleanTimeoutAndFinishedCmd 中执行以下调节机制：
-
-1. 若 cmd 已下发队列中某个 chunk 的 cmd 全部被标记为超时，将该 chunk 的 cmd slot limit 减少 1 / 2；
-2. 若 cmd 已下发队列中某个 chunk 的 cmd 都被标记为完成，且用满槽位，将该 chunk 的 cmd；
-3. 如果都是在 1min 内完成，且已经超过；
-
-同一批下发的 cmd 全部被
-
-
-
-在动态模式下支持对各个 chunk 独立调节的 cmd slot limit，可以在每 4s 一次的 CleanTimeoutAndFinishedCmd 中执行以下调节机制：
-若 distributed_cmds 中存在某个 chunk 的 cmd，这些 cmd 都没有完成并且执行时间已经超过 18 min，那么调低
-连续 10 次在 distributed_cmds 中都有某个 chunk 的 cmd，且这些 cmd 一个都没有完成，认为它 recover 完成的慢，调低它的 cmd slots limit；
-若连续 10 次在 distributed_cmds 中都有某个 chunk 的 cmd，且 cmd 数量达到上限，这些 cmd 都完成了，认为它 recover 完成的快，调高它的 cmd slots limit；
-
-
-
-完成的定义是 dst chunk 上有副本，cmd is finished，不包含被设置成 invalid 的 cmd
-调高/调低条件相对来说都挺严格的，期望大部分情况下应该是保持原值，如果要变化，就要变化的大一些。
-
-cmd slots limit 的调高/调低可以是 new_limit = 0.5 * old_limit 这样简单乘一个系数的做法，最大值可以拍脑袋给一个，比如 512，最小值应该可以取 access 的当前 recover 并发度。
-
-下降可以掉半，上升可以递增上升，access 需要单独汇报一个因为超时导致的 recover cmd 失败。
-
-调节依据变成这个节点的超时很多，才调低，
-
-大部分情况下，都不应该上升下降。
-
-如果发了很多 recover cmd，但是 access 没法完成，会怎么样
-
-
-
-
-
-
-
-
+   这些里面，lease 过期、被 cancel 之类的不该影响到下发个数，针对超时单独汇报。
 
 
 
