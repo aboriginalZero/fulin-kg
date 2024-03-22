@@ -1,6 +1,4 @@
-1. 过去一段时间 reposition 完成的好，
-
-1. meta 层面的 reposition auto mode 要在 560 中做起来，要自适应调节 generate limit；
+1. 一个单测：不用 scan_immediate 也能先生成一次，然后下发，如果生成超过 1024 个，会分两次下发，然后如果生成一次，是 0 条，后续不会再生成。
 
 1. zbs-meta  volume show_by_id 9b0b248f-7c06-4a44-9f31-9d8292e14bdd --show_pextents
 
