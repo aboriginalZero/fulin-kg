@@ -1,7 +1,3 @@
-1. 过去一段时间 reposition 完成的好，
-
-1. meta 层面的 reposition auto mode 要在 560 中做起来，要自适应调节 generate limit；
-
 1. zbs-meta  volume show_by_id 9b0b248f-7c06-4a44-9f31-9d8292e14bdd --show_pextents
 
     可区分展示 perf 或 cap 的，目前默认只是展示 perf
@@ -184,25 +180,7 @@ ZBS-20993，允许 RPC 产生恢复/迁移命令，可以指定源和目的地�
 
 1. 让 cli 可以看到 avail cmd slots
 2. 把 distributeRecoverCmds 中的生成部分函数抽出来
-4. 自动调节 recover / migrate 变速，智能模式中，值变化的时候添加 log
 8. 分层之后，cap 层还可以统计盘的数量，perf 层需要统计的是 perf space used rate
-
-
-
-recover 自动限速调整
-
-```c++
-// 并发数提升条件：
-
-// 用 app io metrics 比较
-// 升速条件：
-total_iops > limit.normal_io_busy_iops_throttle || 
-total_bandwidth > limit.normal_io_busy_bps_throttle
-
-// 降速条件：
-recover_handler_.migrate_throughput_in_last_duration() > 
-migrate_speed_limit * kRepositionIOPercentThrottle
-```
 
 
 
