@@ -191,7 +191,7 @@ pick 到非 master 分支如 v5.4.x 时
 
 1. 在 master 分支上 git pull && git submodule update --init --recursive
 
-2. 拉取远端最新代码 git checkout remotes/origin/v5.4.x -B v5.4.x
+2. 拉取远端最新代码 gc remotes/origin/v5.4.x -B v5.4.x
 
    > 拉取远程 tag，gc v5.1.2-rc10 -B v5.1.2-rc10
 

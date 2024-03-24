@@ -238,6 +238,37 @@ zbs-nvmf subsystem create <name>
 zbs-nvmf ns create <subsystem_name> <ns_id_0-256> <Gib_size>
 ```
 
+### IO Reroute 使用
+
+1. hypervisor 命令 
+
+    ```shell
+    # 查看虚拟机进程
+    esxcli vm process list
+    # 类比 htop
+    esxtop
+    ```
+
+    杀死对应进程
+
+    1. 按 C 切换到 CPU 资源利用率屏幕。
+    2. 按 Shift+V 将视图限定为虚拟机。这样会更容易在步骤 7 中找到 Leader World ID。
+    3. 按 F 显示字段列表。
+    4. 按 C 添加 Leader World ID 列。
+    5. 通过目标虚拟机的名称和领导者域 ID (`LWID`) 来标识目标虚拟机。
+    6. 按 K。
+    7. 在 `World to kill` 提示符处，键入步骤 7 中获取的 Leader World ID，然后按 Enter。
+    8. 等待 30 秒后验证该进程是否已不再列出。
+
+2. 删除
+
+    ```shell
+    # xen 中删除 reroute 进程
+    ps -ef | grep scvm_failure_loop.sh  |grep -v grep | grep -v vi | awk '{print $2}' | xargs /bin/kill
+    # esxi 中删除 reroute 进程
+    ps -c| grep scvm_failure_loop.sh | grep -v grep | grep -v vi | awk '{print $1}' | xargs /bin/kill
+    ```
+
 ### NFS 使用
 
 1. 在嵌套集群中使用 zbs-nfs export 命令创建一个 NFS export，例如 zbs-nfs export create my-export；

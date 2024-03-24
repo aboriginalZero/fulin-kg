@@ -34,6 +34,8 @@ alias gr='git review'
 alias gs='git status'
 alias gsu='git submodule update --init --recursive'
 alias gp='git pull'
+alias gcp='git cherry-pick'
+alias gri='git rebase -i'
 
 zbs_compile_prepare() {
 cd /home/code/$1 && rm -rf build/ && mkdir build && cd build && cmake3 -DBUILD_MOLD_LINKER=ON -G Ninja ..
@@ -51,6 +53,20 @@ cd /home/code/$1/build/src && ./zbs_test --gtest_filter="*$2*" $3
 }
 alias zrt=zbs_run_test
 ```
+
+#### SSH 配置免密
+
+
+
+```shell
+# 安装 sshpass
+cd /Users/abori/Downloads && wget https://sourceforge.net/projects/sshpass/files/sshpass/1.06/sshpass-1.06.tar.gz 
+tar -xzf sshpass-1.06.tar.gz && cd sshpass-1.06 && ./configure 
+sudo -i
+cd /Users/abori/Downloads && make && make install
+```
+
+创建 ~/.ssh/smartx_passwd 并输入密码，后续通过 sshpass -f ~/.ssh/smartx_passwd ssh smartx@172.20.134.173 登陆
 
 #### Iterms2
 

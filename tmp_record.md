@@ -1,7 +1,18 @@
+
+1. 编译换回 docker、git cherry-pick 等命令的快捷键、免密 ssh 登陆、vscode 配置能够全部显示、下载 sshpass，https://www.chengzz.com/1033.html
+
+1. journalctl -uf zbs-metad、journalctl -f /usr/sbin/crond，https://blog.51cto.com/lizexiong/5561113
+
+1. https://mp.weixin.qq.com/s/BDilNoNW1y8UQdYyFc9B3g
+
+1. https://mp.weixin.qq.com/s/yZU1uUrWp2VcGKVc4_cM7g
+
+1. https://mp.weixin.qq.com/s/GohdojyjXtYrx3oheI9uRw
+
 1. zbs-meta  volume show_by_id 9b0b248f-7c06-4a44-9f31-9d8292e14bdd --show_pextents
 
     可区分展示 perf 或 cap 的，目前默认只是展示 perf
-    
+
 1. 从 transaction 传个 prior 的 force_intact 字段用来表示：
 
     1. create volume 的时候严格检查副本创建；
