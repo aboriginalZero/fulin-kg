@@ -669,6 +669,14 @@ cat bigfile.txt | parallel --pipe sed s/old/new/g
 
 ## 系统资源
 
+### 实用
+
+1. 查看最近 20 条日志： journalctl -n 20 -u zbs-metad；
+2. 实时显示最新日志： journalctl -f /usr/sbin/crond；
+3. 查看内核日志： journalctl -k，等同于 dmesg -T；
+4. 查看 CPU 使用：没有 htop 时使用 mpstat -P ALL 1 可以看各 CPU 的负载情况；
+5. 
+
 ### 硬件环境
 
 * CPU： `lscpu`，如 Intel(R) Core(TM) i7-7820X CPU @ 3.60GHz

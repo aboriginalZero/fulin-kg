@@ -1,13 +1,5 @@
 
-1. 编译换回 docker、git cherry-pick 等命令的快捷键、免密 ssh 登陆、vscode 配置能够全部显示、下载 sshpass，https://www.chengzz.com/1033.html
-
-1. journalctl -uf zbs-metad、journalctl -f /usr/sbin/crond，https://blog.51cto.com/lizexiong/5561113
-
-1. https://mp.weixin.qq.com/s/BDilNoNW1y8UQdYyFc9B3g
-
-1. https://mp.weixin.qq.com/s/yZU1uUrWp2VcGKVc4_cM7g
-
-1. https://mp.weixin.qq.com/s/GohdojyjXtYrx3oheI9uRw
+1. 编译换回 docker、vscode 配置能够全部显示
 
 1. zbs-meta  volume show_by_id 9b0b248f-7c06-4a44-9f31-9d8292e14bdd --show_pextents
 

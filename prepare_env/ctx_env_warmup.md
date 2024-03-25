@@ -56,8 +56,6 @@ alias zrt=zbs_run_test
 
 #### SSH 配置免密
 
-
-
 ```shell
 # 安装 sshpass
 cd /Users/abori/Downloads && wget https://sourceforge.net/projects/sshpass/files/sshpass/1.06/sshpass-1.06.tar.gz 
@@ -67,6 +65,28 @@ cd /Users/abori/Downloads && make && make install
 ```
 
 创建 ~/.ssh/smartx_passwd 并输入密码，后续通过 sshpass -f ~/.ssh/smartx_passwd ssh smartx@172.20.134.173 登陆
+
+```
+function pssh () {
+    passwd=('HC!r0cks' 'abc123' 'abcd1234' 'abcd_1234' 'smartx@2022')
+    user=('smartx' 'root' 'smtxauto')
+    for p in "${passwd[@]}";do
+    	for u in "${user[@]}";do
+            sshpass -p ${p} /usr/bin/ssh -o "StrictHostKeyChecking no"  -o "UserKnownHostsFile /dev/null" -t ${u}@"$1" "sudo su - root";
+            #echo "ret: $?"
+            [ $? -eq 0 ] && echo "$p, $u " && return
+        done
+    done
+}
+
+ssh_192_168_node() { pssh 192.168.$1 }
+alias s9=ssh_192_168_node
+
+ssh_172_20_node() { pssh 172.20.$1 }
+alias s7=ssh_172_20_node
+```
+
+
 
 #### Iterms2
 

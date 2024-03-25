@@ -209,6 +209,15 @@ promethus prometheus HC!r0cks ，http://meta_leader_mgt_ip:9090
 
 3. 访问 smartos 在eth0 / eth1 上分配的 IPv4，进入 web 控制台开始配置集群
 
+通过 impi 部署 hypervisor
+
+```
+17.20 机器上，root HC!r0cks
+locate zbs-5.5.0 会有路径，替换路径过去
+这个节点为想要安装的节点
+iso-uploader2 --server_addr 192.168.17.110 SMTXZBS-5.5.0-zhaokai-el7-2307121646-x86_64.iso
+```
+
 ### 搭建嵌套集群
 
 1. 在 tower.smartx.com 的 MLAG 或 SKS 中选择内存 / CPU 使用少的物理节点。主要是根据 CPU 架构如 intel_x86 kunpeng_aarch64 hygon_x86 和指令集不同选不同的集群。
@@ -262,6 +271,7 @@ promethus prometheus HC!r0cks ，http://meta_leader_mgt_ip:9090
 7. iSCSI/NFS 网络在 xen 环境下绑定的虚拟网卡必须是 disconnected，33.1 的下一跳如果是 33.2 不希望他从物理网卡发包出去；
 8. 要通过 mac 地址，而不是 ip 来验证网络配置是否正确；
 9. 在引导部署分布式系统前，要保证所有的 scvm 之间、所有 scvm 和 esxi 之间的 data ip 在同一网段且能互 ping，mgt ip 同理，否则部署一定会出错。mgt ip 的掩码可能是 255.255.240.0 也可能是 255.255.128.0；
+9. xen io reroute 脚本没有清空 33.2 的下一跳路由。
 
 ---
 
