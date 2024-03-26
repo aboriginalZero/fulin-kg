@@ -377,11 +377,12 @@ chunk recover 执行的慢可能原因：慢盘、缓存击穿、normal instead 
 
 作用于 chunk 侧 IO 超时相关的 FLAGS
 
-* chunk_recover_io_timeout_ms = 9s，chunk recover io timeout ms，这个参数实际上没用到；
-* local_chunk_io_timeout_ms = 8s，local chunk io timeout ms；
-* remote_chunk_io_timeout_ms = 9s，remote chunk io timeout ms，（ZBS 对网络有限制，如果 ping 大包来回超过 1s，认为网络严重故障，系统不工作）。
+* local_chunk_io_timeout_ms = 8s，local chunk io timeout ms，返回的是 ELSMCanceled
+* chunk_recover_io_timeout_ms = 9s，chunk recover io timeout ms，recover 远程 IO，这个远程指的是 access (pextent io handler) 给到非本地的 lsm (local io handler)。
+* remote_chunk_io_timeout_ms = 9s，remote chunk io timeout ms，非 recover 远程 IO （ZBS 对网络有限制，如果 ping 大包来回超过 1s，认为网络严重故障，系统不工作）。
+* chunk_lsm_recover_timeout_sec = 10 min，在 lsm 侧每 60s 检查一次 recover pextent，如果超过 recover 时间超过 10 min 都没有结束，会将 extent 标记为 EXTENT_STATUS_INVALID，后续跟随 data report  给到 meta，不过 meta 没有对他特别处理。
 
-在 lsm 侧如果超过 chunk_lsm_recover_timeout_sec = 10 min， recover 都没有结束，会主动通过心跳上报给 meta，meta 通过将对应命令的 start_ms 设置为 1 来让该命令超时去除， AccessManager::HandleAccessRequest()
+
 
 
 
