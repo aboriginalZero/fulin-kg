@@ -66,7 +66,7 @@ cd /Users/abori/Downloads && make && make install
 
 创建 ~/.ssh/smartx_passwd 并输入密码，后续通过 sshpass -f ~/.ssh/smartx_passwd ssh smartx@172.20.134.173 登陆
 
-```
+```shell
 function pssh () {
     passwd=('HC!r0cks' 'abc123' 'abcd1234' 'abcd_1234' 'smartx@2022')
     user=('smartx' 'root' 'smtxauto')
@@ -85,8 +85,6 @@ alias s9=ssh_192_168_node
 ssh_172_20_node() { pssh 172.20.$1 }
 alias s7=ssh_172_20_node
 ```
-
-
 
 #### Iterms2
 
