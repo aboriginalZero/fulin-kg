@@ -5,6 +5,8 @@
 
     可区分展示 perf 或 cap 的，目前默认只是展示 perf
 
+1. 限速调整 access handler 正确使用 perf valid space
+
 1. 从 transaction 传个 prior 的 force_intact 字段用来表示：
 
     1. create volume 的时候严格检查副本创建；

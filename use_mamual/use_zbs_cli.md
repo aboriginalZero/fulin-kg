@@ -266,8 +266,10 @@ zbs-nvmf ns create <subsystem_name> <ns_id_0-256> <Gib_size>
     # xen 中删除 reroute 进程
     ps -ef | grep scvm_failure_loop.sh  |grep -v grep | grep -v vi | awk '{print $2}' | xargs /bin/kill
     # esxi 中删除 reroute 进程
-    ps -c| grep scvm_failure_loop.sh | grep -v grep | grep -v vi | awk '{print $1}' | xargs /bin/kill
-    ps -c| grep reroute.py | grep -v grep | grep -v vi | awk '{print $1}' | xargs /bin/kill
+    ps -c | grep scvm_failure_loop.sh | grep -v grep | grep -v vi | awk '{print $1}' | xargs /bin/kill
+    ps -ef | grep scvm_failure_loop.sh |  grep -v grep | grep -v vi | awk '{print $2}' | xargs /bin/kill
+    
+    ps -c | grep reroute.py | grep -v grep | grep -v vi | awk '{print $1}' | xargs /bin/kill
     ```
 
 ### NFS 使用
