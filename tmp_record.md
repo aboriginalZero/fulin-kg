@@ -1,5 +1,9 @@
 
-1. 编译换回 docker、vscode 配置能够全部显示
+1. xen io reroute 环境部署起来，两个版本 io reroute 的代码写好
+
+1. skim 文档，做到有个印象回来找
+
+1. 编译换回 docker
 
 1. zbs-meta  volume show_by_id 9b0b248f-7c06-4a44-9f31-9d8292e14bdd --show_pextents
 
