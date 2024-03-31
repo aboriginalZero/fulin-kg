@@ -1,4 +1,93 @@
-### 问题 2
+### 不在机柜的节点跟在机柜的节点拓扑距离是 0
+
+```c++
+TEST_F(RecoverManagerTest, YIWU) {
+    RecoverManager recover_manager(&(GetMetaContext()));
+
+    ChunkTable* chunk_table = GetMetaContext().chunk_table;
+
+    const int rack_num = 2;
+    TopoObj racks[rack_num];
+    ASSERT_STATUS(meta->CreateTopoObj(RACK, kDefaultZoneId, "rack0", &racks[0], 1, 2, 1, 1, 1, 1));
+    ASSERT_STATUS(meta->CreateTopoObj(RACK, kDefaultZoneId, "rack1", &racks[1], 1, 2, 1, 2, 1, 1));
+    const int brick_num = 2;
+    TopoObj bricks[brick_num];
+    ASSERT_STATUS(meta->CreateTopoObj(BRICK, racks[0].id(), "brick0", &bricks[0], 1, 2, 1, 1, 1, 1));
+    ASSERT_STATUS(meta->CreateTopoObj(BRICK, racks[1].id(), "brick1", &bricks[1], 1, 2, 1, 2, 1, 1));
+
+    uint64_t per_host_num = 100;
+    constexpr int chunk_num = 7;
+    cid_t cids[chunk_num];
+
+    LOOP(chunk_num) {
+        Chunk chunk;
+        RegisterChunk("127.0.0.1", 3401 + i * 10, &chunk);
+        cids[i] = chunk.id();
+        ChunkSpaceInfo info;
+        info.set_valid_data_space(per_host_num * kExtentSize);
+        chunk_table->TEST_SetChunkSpaceInfo(cids[i], info);
+        chunk_table->SetChunkStatus(cids[i], CHUNK_STATUS_CONNECTED_HEALTHY);
+        if (i != 4) {
+            ASSERT_STATUS(meta->MvTopoObj(chunk.topo_id(), (i <= chunk_num / 2 ? bricks[0].id() : bricks[1].id())));
+        }
+    }
+
+    // make brick0 has 50 + 60 + 60 + 60 = 230 pids, brick1 has 96 + 67 + 67 = 230 pids,
+    // and then, avg_ratio = (230 + 230) / (4 + 3) = 65.71.
+    // cid:             1   2   3   4   5   6   7
+    // brick id:        0   0   0   0   1   1   1
+    // allocated pids:  50  60  60  60  96  67  67
+    // valid pids:     100 100 100 100 100 100 100
+
+    PExtentTable* pextent_table = GetMetaContext().pextent_table;
+    IdMap *pid_map = GetMetaContext().pid_map;
+
+    std::vector<cid_t> cap_segments;
+    LOOP(230) {
+        cap_segments.clear();
+        if (i < 50) {
+            cap_segments.push_back(cids[0]);
+        } else if (i < 50 + 60) {
+            cap_segments.push_back(cids[1]);
+        } else if (i < 50 + 60 + 60) {
+            cap_segments.push_back(cids[2]);
+        } else {
+            cap_segments.push_back(cids[3]);
+        }
+        if (i < 96) {
+            cap_segments.push_back(cids[4]);
+        } else if (i < 96 + 67) {
+            cap_segments.push_back(cids[5]);
+        } else {
+            cap_segments.push_back(cids[6]);
+        }
+
+        loc_t loc = 0U;
+        for (auto cid : cap_segments)  {
+            loc = add_replica_to_location(loc, cid);
+        }
+        PExtent pextent;
+        pextent.set_pid(i + 1);
+        pextent.set_location(loc);
+        pextent.set_expected_replica_num(2);
+        pextent.set_ever_exist(false);
+        pextent.set_thin_provision(false);
+        pextent.set_preferred_cid(kInvalidChunkId);
+        pextent_table->SetPExtent(pextent);
+        pid_map->SetId(i + 1);
+    }
+
+    recover_manager.EnableScanMigrateImmediate();
+    recover_manager.DoScan();
+    std::vector<RecoverCmd> cmds;
+    recover_manager.ListMigrateCmds(&cmds);
+    ASSERT_TRUE(cmds.empty());
+}
+```
+
+
+
+### lease owner 分散到各个节点
 
 1. 抓包，明确通过 port-storage 接口，目的端口是 10100，源或目的主机是 10.10.51.75，抓 1000 个包自动结束，多次抓包主动删除文件。
 
@@ -53,8 +142,6 @@
     # CoAsyncRpcClient::CallMethod 客户端发送
     LOG(INFO) << "yiwu CoAsyncRpcClient::CallMethod request " << request->ShortDebugString() << " rpc client header " << req_hdr.DebugString() << " rpc client header " << func(reinterpret_cast<char*>(&req_hdr), sizeof(RpcHeader)) << " rpc client buffer " << func(req_buf, message_len);
     ```
-
-
 
 ### 问题 1
 

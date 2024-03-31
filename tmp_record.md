@@ -1,21 +1,25 @@
 
-1. xen io reroute 环境部署起来，两个版本 io reroute 的代码写好
+1. shell io reroute，一开始 scvm 存储网都 down 的情况下，切到管理网，此时恢复其中一个 scvm 存储网，但就一个本地的 xen 的路由切回存储网，这是符合预期的，因为这个管理网的 session alive sec 正常，shell 版本中不会去选别的存储网。
 
-1. skim 文档，做到有个印象回来找
+    在客户环境上部署的话，记得把 timeout 和 sleep 时间改成 4 和 5，部署之前把 zbs-meta reroute update --enable_secondary_data_channel false
 
 1. 编译换回 docker
 
-1. zbs-meta  volume show_by_id 9b0b248f-7c06-4a44-9f31-9d8292e14bdd --show_pextents
+3. zbs-meta  volume show_by_id 9b0b248f-7c06-4a44-9f31-9d8292e14bdd --show_pextents
 
     可区分展示 perf 或 cap 的，目前默认只是展示 perf
 
-1. 限速调整 access handler 正确使用 perf valid space
+    zbs-chunk extent show pid 这个命令在 560 中看不到数据块在 Chunk 上所属物理盘的设备名
+
+1. 限速调整 access handler 正确使用 perf valid space，调整 zbs cli speed limit 向前兼容。
 
 1. 从 transaction 传个 prior 的 force_intact 字段用来表示：
 
     1. create volume 的时候严格检查副本创建；
     2. IO 路径上放松检查副本创建（成功一个副本就算成功）；
     
+4. 清明期间更新 recover / migrate 文档，看 zbs 已有文档。
+
 4. HasSpaceForTemporaryReplica 和 HasSpaceForCow 的修改，顺便把对 CowLExtentTransaction 的理解补充上
 
     1. prior pextent allocation
@@ -428,15 +432,6 @@ recover manager 中 recover 和 migrate 的不同之处：
 
 
 
-剔副本的 4 种情况：
-
-1. sync gen 失败的副本；
-2. recover handler 在 SetupRecover 时遇到 lease 提供的 loc 中已经包含 dst cid 且 src cid 的 gen 是安全的；
-3. access io handler 在 write replica done 时会剔除写失败的副本；
-4. 临时副本重放完会被剔除。
-
-
-
 如果节点上的 replica 发生 cow 的话，direct_prs 会瞬间减小而导致写入因为等待空闲 cache 而阻塞，也需要预先下刷以避免阻塞
 
 pin 中初次写的 lease，怎么传递 prioritized 给 lsm
@@ -643,6 +638,22 @@ vscode 中用 vim 插件，这样可以按区域替换代码
 
 以一个 functional test 单测为例子展开看 zbs 系统的启动流程。
 
+
+
+### 副本剔除
+
+引发数据恢复一般是副本失联或副本剔除，副本失联可能是 Chunk 服务中断、节点异常（关机/网络隔离）、Chunk 上包含 Extent 的磁盘故障。剔副本的 4 种情况：
+
+1. sync gen 失败的副本，比如突然下电/程序崩溃等现象造成的目标副本 gen 落后于其他副本；
+
+2. recover handler 在 SetupRecover 时遇到 lease 提供的 loc 中已经包含 dst cid 且 src cid 的 gen 是安全的；
+
+3. access io handler 在 write replica done 时会剔除写失败的副本，比如可能是磁盘损坏/拔盘等物理故障引起的副本状态异常，access 与目标 chunk 之间的链路异常；
+
+    对于磁盘异常造成的错误，可以在目标 chunk 的日志中查找对应的 pid ，通常会伴随 local io failed 的日志会显示无法 IO 的原因。可以通过在目标节点上的 /var/log/message 里搜索 Abort Task 来检查是否有物理磁盘 IO 异常的信息。如果有则通常是磁盘损坏或者磁盘固件版本不对，如果多个磁盘均有出现则有可能是 HBA 卡异常或者固件版本不对。
+
+4. 临时副本重放完会被剔除。
+
 ### access point
 
 zbs 当前行为：
@@ -666,6 +677,8 @@ zbs 当前行为：
 https://docs.google.com/document/d/1rcpxCZDNb7YFnEYVIJg-WzZVCzI8rArTFuzLNjJLNhc/edit#heading=h.gye9t51u3igb
 
 
+
+问下 yanlong 如何查看数据接入点。
 
 为 Volume 增加 access point （cid 列表）属性， Extent 增加 Prefer Local （cid）的属性，用于表示数据的访问点。
 

@@ -25,7 +25,7 @@ zrt zbs3 FunctionalTest.WriteResize
 
 ### docker 使用
 
-用 docker 能比较好解决
+用 docker 能比较好解决要切换多个 zbs 版本混跑的问题
 
 ```shell
 # 首次编译/子模块如 spdk 更新，需要删除 build 目录，进到 Docker 内部执行

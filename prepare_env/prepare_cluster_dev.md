@@ -218,6 +218,13 @@ locate zbs-5.5.0 会有路径，替换路径过去
 iso-uploader2 --server_addr 192.168.17.110 SMTXZBS-5.5.0-zhaokai-el7-2307121646-x86_64.iso
 ```
 
+通常 ipmi (不管 html5 版本还是IMPI Viewer）都只允许一个用户使用。如果你能知道谁还打开了一个 session，一般让他关掉就行。如果不知道：
+
+- 对于这种超微四子星机器：网页 maintenance 里有一个 reset ikvm 的选项
+- 对于比较新的 ipmi console，一般可以找到一个 user session，可以强制将它注销掉
+
+没有 UEFI 的话，直接选 IMPI Virtual CDROM 3000，ISO 上传既可以从本地，也可以用 17.20 上的 iso-uploader2
+
 ### 搭建嵌套集群
 
 1. 在 tower.smartx.com 的 MLAG 或 SKS 中选择内存 / CPU 使用少的物理节点。主要是根据 CPU 架构如 intel_x86 kunpeng_aarch64 hygon_x86 和指令集不同选不同的集群。
@@ -248,11 +255,11 @@ iso-uploader2 --server_addr 192.168.17.110 SMTXZBS-5.5.0-zhaokai-el7-2307121646-
 
 8. 若部署失败，清空重新部署
 
-    zbs-deploy-manage clear_deploy_tag，有开 nvmf 需要执行
+    zbs-deploy-manage clear_deploy_tag，有开 nvmf 需要执行，或者早期的 smtxos 4.0.14 也需要
 
     rm -y /etc/zbs/uuid，嵌套集群，有虚拟机克隆的情况需要执行
 
-    systemctl restart zbs-deploy-server nginx，有开 nvmf 需要执行
+    systemctl restart zbs-deploy-server nginx，有开 nvmf 需要执行，或者早期的 smtxos 4.0.14 也需要
 
 9. 若部署成功，在所有机器上关机、打完快照再开始后续操作，便于操作失败回滚
 
@@ -262,11 +269,12 @@ iso-uploader2 --server_addr 192.168.17.110 SMTXZBS-5.5.0-zhaokai-el7-2307121646-
 
 搭 xen 7.0 + scvm smtx 4.0.14 solution v2 的坑
 
+1. 基本只能在早期的超微节点上部署；
 1. xen server 只安装在 SATA dom 上，一般是 sda，因为他的磁盘控制器跟其他磁盘并不一样，方便后续磁盘透传；
 2. 一定要把除 xen server 系统盘以外的所有的磁盘透传给 SCVM，通过 ls -lh /sys/block/* | grep pci 可以看到各个磁盘对应的磁盘控制器；
 3. 通过虚拟键盘按 F11 进入 BIOS，在引导界面通过 tab 或者 e 把 quiet 去掉，就可以看到安装流程了；
 4. NTP 可以从外部获取，选网关那台服务器就行，网关上一般会配 NTP；
-5. 第二套集群只有 2 个物理网口，所以不需要严格做 active-backup bonding（3 个及其上或许可以）；
+5. 第二套集群只有 2 个物理网口，所以不需要严格做 active-backup bonding（3 个及其上或许可以），ab bonding 不强求，客户环境也有单链路使用的；
 6. 网络掩码给定 255.255.240.0 后，10.1.1.2 和 10.1.1.3 不需要指定网关理论上也能互相 ping 通，而管理网需要给定网关，这样方便从集群外部通过 ssh 登陆上去；
 7. iSCSI/NFS 网络在 xen 环境下绑定的虚拟网卡必须是 disconnected，33.1 的下一跳如果是 33.2 不希望他从物理网卡发包出去；
 8. 要通过 mac 地址，而不是 ip 来验证网络配置是否正确；
