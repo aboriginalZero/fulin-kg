@@ -13,26 +13,25 @@
 
 4. 调整 business io 影响内部 IO 的 iops 和 bps 阈值。
 
-
     1. 目前 business io 的 iops 和 bps 阈值的判定是只要有 NVME SSD 就是 500 MiB/s，有 SATA SSD 就是 150 MiB/s，有 HDD 就是 100 MiB/s，只看盘类型，不论盘数量，但这里应该要跟盘数量有关；
 
-    2. 在 auto mode 下，如果有掉盘/新增盘的行为导致 migrate_limit_by_hardware 变化，应该让 current_speed_limit 立马跟随变化而不是逐步调节；
+        limit.normal_io_busy_iops_throttle 应该换用 kBusinessIOPercentThrottle，跟 kInternalIOPercentThrottle 对应起来。
 
-    3. 对 interval io 的判定除了 bps，是否需要把 iops 用起来？recover io 一定是 256 kb ，所以只关注 bps？sink io 有可能是 4k，所以应该关注 iops ？
+    4. 超参数的设定上，HDD 目前是 1000 的 IOPS 和 bps 100 MiB/s；
 
-    4. 超参数的设定上，HDD 目前是 1000 的 IOPS 和 bps 100 MiB/s，这个肯定不符合 jiewei 的测试结论；
-
-        HDD 4k iops 34k，bps 130 MiB/s
-
-        HDD 256k iops 500，bps 130 MiB/s 
+        裸盘 fio 测试中 HDD 4k iops 34k，bps 130 MiB/s。HDD 256k iops 500，bps 130 MiB/s。
 
         zbs 目前能发挥出 SATA SSD 和 HDD 的性能，但无法用满 NVME SSD 的性能。
 
         nvme SSd 4k iops 400 多 k（之前版本，2 块盘 p5620，600k），
 
+    3. 对 interval io 的判定除了 bps，是否需要把 iops 用起来？recover io 一定是 256 kb ，所以只关注 bps？sink io 有可能是 4k，所以应该关注 iops ？
+
+    4. 在 auto mode 下，如果有掉盘/新增盘的行为导致 migrate_limit_by_hardware 变化，应该让 current_speed_limit 立马跟随变化而不是逐步调节；
+
     5. 目前用的是 read / write 的汇总 iops/bps ，是否需要分开处理呢？应该不需要，因为 throttle 自己都没区分。
 
-5. 限速调整 access handler 正确使用 perf valid space，调整 zbs cli speed limit 向前兼容。
+5. 调整 zbs cli speed limit 向前兼容。
 
 6. 从 transaction 传个 prior 的 force_intact 字段用来表示：
 
