@@ -11,16 +11,37 @@
 
     zbs-chunk extent show pid 这个命令在 560 中看不到数据块在 Chunk 上所属物理盘的设备名
 
-1. 限速调整 access handler 正确使用 perf valid space，调整 zbs cli speed limit 向前兼容。
+4. 调整 business io 影响内部 IO 的 iops 和 bps 阈值。
 
-1. 从 transaction 传个 prior 的 force_intact 字段用来表示：
+
+    1. 目前 business io 的 iops 和 bps 阈值的判定是只要有 NVME SSD 就是 500 MiB/s，有 SATA SSD 就是 150 MiB/s，有 HDD 就是 100 MiB/s，只看盘类型，不论盘数量，但这里应该要跟盘数量有关；
+
+    2. 在 auto mode 下，如果有掉盘/新增盘的行为导致 migrate_limit_by_hardware 变化，应该让 current_speed_limit 立马跟随变化而不是逐步调节；
+
+    3. 对 interval io 的判定除了 bps，是否需要把 iops 用起来？recover io 一定是 256 kb ，所以只关注 bps？sink io 有可能是 4k，所以应该关注 iops ？
+
+    4. 超参数的设定上，HDD 目前是 1000 的 IOPS 和 bps 100 MiB/s，这个肯定不符合 jiewei 的测试结论；
+
+        HDD 4k iops 34k，bps 130 MiB/s
+
+        HDD 256k iops 500，bps 130 MiB/s 
+
+        zbs 目前能发挥出 SATA SSD 和 HDD 的性能，但无法用满 NVME SSD 的性能。
+
+        nvme SSd 4k iops 400 多 k（之前版本，2 块盘 p5620，600k），
+
+    5. 目前用的是 read / write 的汇总 iops/bps ，是否需要分开处理呢？应该不需要，因为 throttle 自己都没区分。
+
+5. 限速调整 access handler 正确使用 perf valid space，调整 zbs cli speed limit 向前兼容。
+
+6. 从 transaction 传个 prior 的 force_intact 字段用来表示：
 
     1. create volume 的时候严格检查副本创建；
     2. IO 路径上放松检查副本创建（成功一个副本就算成功）；
-    
-4. 清明期间更新 recover / migrate 文档，看 zbs 已有文档。
 
-4. HasSpaceForTemporaryReplica 和 HasSpaceForCow 的修改，顺便把对 CowLExtentTransaction 的理解补充上
+7. 清明期间更新 recover / migrate 文档，看 zbs 已有文档。
+
+8. HasSpaceForTemporaryReplica 和 HasSpaceForCow 的修改，顺便把对 CowLExtentTransaction 的理解补充上
 
     1. prior pextent allocation
 
@@ -72,7 +93,7 @@
        LOG(INFO) << "yiwu sp_load " << sp_load << " pk " << pk;
        ```
 
-5. 明确以下分层之后，转换/克隆出一个普通卷的流程，包括 lextent, pextent 分配等，CloneVolumeTransaction/CowLExtentTransaction。
+9. 明确以下分层之后，转换/克隆出一个普通卷的流程，包括 lextent, pextent 分配等，CloneVolumeTransaction/CowLExtentTransaction。
 
     vtable 放在哪里？
 
@@ -113,27 +134,27 @@
 
         待补充
 
-6. 对于仅被 thin volume / snapshot 引用的 capacity pextent，其 provision 将在 gc 扫描时被更新为 thin，随心跳下发给 lsm，如果有 pextent 被 thick volume 引用，那其 provision 将被更新为 thick，随心跳下发给 lsm，[ZBS-15094](http://jira.smartx.com/browse/ZBS-15094)。
+10. 对于仅被 thin volume / snapshot 引用的 capacity pextent，其 provision 将在 gc 扫描时被更新为 thin，随心跳下发给 lsm，如果有 pextent 被 thick volume 引用，那其 provision 将被更新为 thick，随心跳下发给 lsm，[ZBS-15094](http://jira.smartx.com/browse/ZBS-15094)。
 
-7. 根据最新 lsm 设计文档大致了解 lsm2 
+11. 根据最新 lsm 设计文档大致了解 lsm2 
 
-8. 补一个同时有多个 removing cid 的单测；
+12. 补一个同时有多个 removing cid 的单测；
 
-9. refactor migrate for repair topo，从 GenerateMigrateCmdsForRepairTopo 开始改；
+13. refactor migrate for repair topo，从 GenerateMigrateCmdsForRepairTopo 开始改；
 
-    1. 待做 [ZBS-13401](http://jira.smartx.com/browse/ZBS-13401)，让中高负载的容量均衡策略都要保证 prefer local 本地的副本不会被迁移，且如果 prefer local 变了，那么也要让他所在的 chunk 有一个本地副本（有个上限是保留归保留，但如果超过 95%，超过的 部分不考虑 prefer local 一定有对应的副本）
+     1. 待做 [ZBS-13401](http://jira.smartx.com/browse/ZBS-13401)，让中高负载的容量均衡策略都要保证 prefer local 本地的副本不会被迁移，且如果 prefer local 变了，那么也要让他所在的 chunk 有一个本地副本（有个上限是保留归保留，但如果超过 95%，超过的 部分不考虑 prefer local 一定有对应的副本）
 
-        怎么判断是否会超过 95% 呢？
+         怎么判断是否会超过 95% 呢？
 
-        如果 volume 的 prefer local 到新 chunk 后（不论是人为运维还是上层虚拟机被迁移到其他节点），现有的迁移策略能让新位置的 prefer local 有副本吗？
+         如果 volume 的 prefer local 到新 chunk 后（不论是人为运维还是上层虚拟机被迁移到其他节点），现有的迁移策略能让新位置的 prefer local 有副本吗？
 
-        如果不能，在 migrate for rebalance 之后，再有一个 migrate for prefer local，他的目的是保证让 prefer local 有副本，
+         如果不能，在 migrate for rebalance 之后，再有一个 migrate for prefer local，他的目的是保证让 prefer local 有副本，
 
-        [ZBS-25949](http://jira.smartx.com/browse/ZBS-25949) 修改后的 migrate for repair topo 能够达到的效果是不会 replace prefer local，在 prefer local 满足 topo rank 不降级的情况下，dst 会优先选 prefer local，貌似能达到这个效果？双活下也可以吗？prefer local 从 prefer zone 迁移到 secondary zone。
+         [ZBS-25949](http://jira.smartx.com/browse/ZBS-25949) 修改后的 migrate for repair topo 能够达到的效果是不会 replace prefer local，在 prefer local 满足 topo rank 不降级的情况下，dst 会优先选 prefer local，貌似能达到这个效果？双活下也可以吗？prefer local 从 prefer zone 迁移到 secondary zone。
 
-        migrate for ec repair topo 中对 ec src 的选择过于宽松了，其实还可以选到更好的 src，但是目前不做处理，目前只根据 replace 来选 src
+         migrate for ec repair topo 中对 ec src 的选择过于宽松了，其实还可以选到更好的 src，但是目前不做处理，目前只根据 replace 来选 src
 
-10. MgirateFilter 可以改成 allow, deny 都允许的，如果没要求，就传入 std::nullopt
+14. MgirateFilter 可以改成 allow, deny 都允许的，如果没要求，就传入 std::nullopt
 
 
 
