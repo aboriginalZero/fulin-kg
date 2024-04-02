@@ -238,6 +238,92 @@ zbs-nvmf subsystem create <name>
 zbs-nvmf ns create <subsystem_name> <ns_id_0-256> <Gib_size>
 ```
 
+### 获取 volume / inode / lun 映射
+
+1. iscsi，通过 volume id 找到对应的 iscsi target id 和 lun id 和 lun name，之后可以用 lun name 在 tower 中搜索就能找到对应的虚拟卷，进而可以看到该卷挂载了哪些虚拟机。
+
+   ```shell
+   [root@hygon-node-19-98 17:57:40 ~]$ zbs-iscsi lun show_target_and_lun_by_uuid 817e39de-41ee-49d5-a9bb-446951d4d607
+   Target:
+   ----------------------  ------------------------------------
+   ID                      c50b577d-98cb-4187-836e-a967937e2d67
+   Name                    zbs-iscsi-datastore-1711160779164l
+   ...
+   ----------------------  ------------------------------------
+   Lun:
+   ------------------  ----------------------------------------
+   LUN Id              52
+   LUN Name            841e69ac-2b1e-4080-8a7e-596de4b9aa43
+   Volume id           817e39de-41ee-49d5-a9bb-446951d4d607
+   ...
+   ------------------  ----------------------------------------
+   ```
+
+2. nfs，volume id 前三节就是 inode id，之后可以用 inode id 在 tower 中搜索就能找到对应的虚拟卷。
+
+3. 通过 tower 界面找 volume id
+
+   iscsi，smtxos 5.0.5 之前，tower 界面上的虚拟卷点开详情，其中的存储对象 "iscsi://iqn.2016-02.com.smartx:system:zbs-iscsi-datastore-1711160779164l/52" 指明 Target name 和 lun id
+
+   ```shell
+   [root@hygon-node-19-98 18:07:08 ~]$ zbs-iscsi lun show zbs-iscsi-datastore-1711160779164l 52
+   ------------------  ------------------------------------
+   LUN Id              52
+   LUN Name            841e69ac-2b1e-4080-8a7e-596de4b9aa43
+   Volume id           817e39de-41ee-49d5-a9bb-446951d4d607
+    ...
+   ------------------  ------------------------------------
+   ```
+
+   iscsi，smtx os 5.0.5 之后，在 tower 界面上的虚拟卷点开详情，其中的 UUID "841e69ac-2b1e-4080-8a7e-596de4b9aa43" 可以用来查看 volume id
+
+   ```shell
+   [root@hygon-node-19-98 18:04:23 ~]$ zbs-tool elf get_zbs_vol_by_elf_vol_uuid 841e69ac-2b1e-4080-8a7e-596de4b9aa43
+   -------------  ------------------------------------
+   Volume UUID    841e69ac-2b1e-4080-8a7e-596de4b9aa43
+   Zbs Volume ID  817e39de-41ee-49d5-a9bb-446951d4d607
+   -------------  ------------------------------------
+   ```
+
+   nfs，在 tower 界面上的文件点开详情，其中的 ID "d9310c3c-c1ad-42f3" 可以用来查看 volume id
+
+   ```shell
+   [root@node51 18:19:59 ~]$zbs-nfs inode show d9310c3c-c1ad-42f3
+   -----------  ------------------------------------
+   id           d9310c3c-c1ad-42f3
+   name         sijie-test-flat.vmdk
+   pool         9667cc1e-67e9-4f67-8bb1-e04792b7670e
+   volume       d9310c3c-c1ad-42f3-8869-6a73c5630456
+   type         FILE
+   ...
+   -----------  ------------------------------------
+   ```
+
+4. 通过 pid 找所有引用他的 volume
+
+   ```shell
+   [root@hygon-node-19-98 21:10:39 ~]$ zbs-meta pextent getref 3662796
+   -----------------------  ------------------------------------
+   Pool Name                zbs-iscsi-datastore-1711160779164l
+   Volume ID                817e39de-41ee-49d5-a9bb-446951d4d607
+   Volume Name              817e39de-41ee-49d5-a9bb-446951d4d607
+   Volume Is Snapshot       False
+   Volume Snapshot Pool ID
+   Snapshot Name
+   -----------------------  ------------------------------------
+   ```
+
+5. iscsi，通过 pid 找所有使用它的虚拟机（从 SMTX OS 5.0.5 ELF 模式开始）
+
+   ```shell
+   [root@hygon-node-19-98 21:10:54 ~]$ zbs-tool elf get_vm_by_pid 3662796
+        ID  Replica    Alive Replica    Temporary Replica    Ever Exist    Is Garbage      Origin PExtent    Expected Replica num     Epoch    Prefer Local  Allocated Space    Affected ZBS Volumes                      Affected ZBS NFS Files    Affected VMs
+   -------  ---------  ---------------  -------------------  ------------  ------------  ----------------  ----------------------  --------  --------------  -----------------  ----------------------------------------  ------------------------  --------------------------------------------------------------------------------------------
+   3662796  [2, 3]     [2, 3]           []                   True          False                        0                       2  41818550               2  512.00 KiB         ['817e39de-41ee-49d5-a9bb-446951d4d607']  []                        ['sfs-fffebc73-46a9-4991-80ee-9cda40c62ff5-0', 'sfs-fffebc73-46a9-4991-80ee-9cda40c62ff5-2']
+   ```
+
+6. nfs，对于 VMware 环境，由 pid 关联的 volume uuid 的前 3 节即 inode id，据此可以找到 inode name 即对应 VM name。
+
 ### IO Reroute 使用
 
 1. hypervisor 命令 
@@ -260,9 +346,14 @@ zbs-nvmf ns create <subsystem_name> <ns_id_0-256> <Gib_size>
     7. 在 `World to kill` 提示符处，键入步骤 7 中获取的 Leader World ID，然后按 Enter。
     8. 等待 30 秒后验证该进程是否已不再列出。
 
-2. 删除
+2. 常用命令
 
     ```shell
+    # esxi 中查看路由 
+    esxcfg-route -l
+    # xen 中查看路由
+    route -n
+    
     # xen 中删除 reroute 进程
     ps -ef | grep scvm_failure_loop.sh  |grep -v grep | grep -v vi | awk '{print $2}' | xargs /bin/kill
     # esxi 中删除 reroute 进程

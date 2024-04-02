@@ -1,4 +1,8 @@
 
+1. 接入点怎么看
+
+1. ZbsClient::CheckVolumeActive 每 1 min 判断一次，如果这个期间内卷的 io count > 3600 并且 io len > 511 * io count，认为该卷需要更新 prefer local，meta leader 只会更新那些 prefer local 不符合预期的数据块。
+
 1. shell io reroute，一开始 scvm 存储网都 down 的情况下，切到管理网，此时恢复其中一个 scvm 存储网，但就一个本地的 xen 的路由切回存储网，这是符合预期的，因为这个管理网的 session alive sec 正常，shell 版本中不会去选别的存储网。
 
     在客户环境上部署的话，记得把 timeout 和 sleep 时间改成 4 和 5，部署之前把 zbs-meta reroute update --enable_secondary_data_channel false
@@ -11,19 +15,21 @@
 
     zbs-chunk extent show pid 这个命令在 560 中看不到数据块在 Chunk 上所属物理盘的设备名
 
-4. 调整 business io 影响内部 IO 的 iops 和 bps 阈值。
+6. 调整 business io 影响内部 IO 的 iops 和 bps 阈值。
 
     1. 目前 business io 的 iops 和 bps 阈值的判定是只要有 NVME SSD 就是 500 MiB/s，有 SATA SSD 就是 150 MiB/s，有 HDD 就是 100 MiB/s，只看盘类型，不论盘数量，但这里应该要跟盘数量有关；
 
         limit.normal_io_busy_iops_throttle 应该换用 kBusinessIOPercentThrottle，跟 kInternalIOPercentThrottle 对应起来。
 
-    4. 超参数的设定上，HDD 目前是 1000 的 IOPS 和 bps 100 MiB/s；
+    2. 超参数的设定上，HDD 目前是 1000 的 IOPS 和 bps 100 MiB/s；
 
         裸盘 fio 测试中 HDD 4k iops 34k，bps 130 MiB/s。HDD 256k iops 500，bps 130 MiB/s。
 
         zbs 目前能发挥出 SATA SSD 和 HDD 的性能，但无法用满 NVME SSD 的性能。
 
-        nvme SSd 4k iops 400 多 k（之前版本，2 块盘 p5620，600k），
+        针对 HDD 需要每个盘算一下 throttle
+
+        nvme SSd 4k iops 400 多 k（之前版本，2 块盘 p5620，600k）
 
     3. 对 interval io 的判定除了 bps，是否需要把 iops 用起来？recover io 一定是 256 kb ，所以只关注 bps？sink io 有可能是 4k，所以应该关注 iops ？
 
