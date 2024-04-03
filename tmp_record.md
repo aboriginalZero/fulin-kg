@@ -1,8 +1,4 @@
 
-1. 接入点怎么看
-
-1. ZbsClient::CheckVolumeActive 每 1 min 判断一次，如果这个期间内卷的 io count > 3600 并且 io len > 511 * io count，认为该卷需要更新 prefer local，meta leader 只会更新那些 prefer local 不符合预期的数据块。
-
 1. shell io reroute，一开始 scvm 存储网都 down 的情况下，切到管理网，此时恢复其中一个 scvm 存储网，但就一个本地的 xen 的路由切回存储网，这是符合预期的，因为这个管理网的 session alive sec 正常，shell 版本中不会去选别的存储网。
 
     在客户环境上部署的话，记得把 timeout 和 sleep 时间改成 4 和 5，部署之前把 zbs-meta reroute update --enable_secondary_data_channel false
@@ -13,9 +9,7 @@
 
     可区分展示 perf 或 cap 的，目前默认只是展示 perf
 
-    zbs-chunk extent show pid 这个命令在 560 中看不到数据块在 Chunk 上所属物理盘的设备名
-
-6. 调整 business io 影响内部 IO 的 iops 和 bps 阈值。
+4. 调整 business io 影响内部 IO 的 iops 和 bps 阈值。
 
     1. 目前 business io 的 iops 和 bps 阈值的判定是只要有 NVME SSD 就是 500 MiB/s，有 SATA SSD 就是 150 MiB/s，有 HDD 就是 100 MiB/s，只看盘类型，不论盘数量，但这里应该要跟盘数量有关；
 
@@ -684,17 +678,15 @@ vscode 中用 vim 插件，这样可以按区域替换代码
 
 zbs 当前行为：
 
-1. zbs chunk 将每小时 io 大于 3600（iops > 1）的 zbs volume 视为 active volume。
-2. zbs chunk 每隔 1h 上报一次 active zbs volume 的信息给 zbs meta，不会上报 inactive volume。
-3. 对于一个 zbs volume，zbs meta 收到 6 次 volume 信息上报后（即 6h 后），会更新其 prefer cid 字段，同时更新其所有 pextent 的 prefer local 字段。
+1. 每 1 min 判断一次，如果这个期间内卷的外部 io count > 3600 （除下来就是 iops 要大于 1）并且 io len > 511 * io count（用以跳过 nfs hearbeat io），那么认为它是 active volume，ZbsClient::CheckVolumeActive。
+2. zbs chunk 每隔 1h 上报一次 active zbs volume 的信息给 zbs meta，不会上报 inactive volume，Meta::ReportVolumeAccess。
+3. 对于一个 zbs volume，zbs meta 收到 6 次 volume 信息上报后（即 6h 后），会更新其 prefer cid 字段，同时更新自身持有的那些 prefer local 不符合预期的数据块，MetaRpcServer::RefreshVolumeAccessPoints。
 
 
 
 允许在 server san 模式下人工指定 access point，融合模式下，接入点总是快速的自动切换至本地，因此对于融合模式下的 Target 执行对应的配置不会产生期望的效果。
 
-根据 access point 去变化 prefer local 的，MetaRpcServer::ReportVolumeAccess
-
-当一个共享卷被大于等于 3 个接入点同时访问时（Xen 平台的 iSCSI DataStore 模式，Xen 将一个 LUN（Volume） 作为一个池，不同节点上的 VM 将仅访问其中的部分数据） 。将不会触发 Local Transfer 事件。相关的 Extent 会保持初次写入时的接入节点作为 prefer local
+当一个共享卷被大于等于 3 个接入点同时访问时（Xen 平台的 iSCSI DataStore 模式，Xen 将一个 LUN（Volume） 作为一个池，不同节点上的 VM 将仅访问其中的部分数据） ，将不会触发 Local Transfer 事件，相关的 Extent 会保持初次写入时的接入节点作为 prefer local。
 
 在副本分配策略 in ZBS 中搜 prefer local。
 
@@ -702,9 +694,13 @@ zbs 当前行为：
 
 https://docs.google.com/document/d/1rcpxCZDNb7YFnEYVIJg-WzZVCzI8rArTFuzLNjJLNhc/edit#heading=h.gye9t51u3igb
 
+从计算端查看数据接入点有两种方式
 
-
-问下 yanlong 如何查看数据接入点。
+```shell
+netstat -antp | grep 3261
+# zbs 中同一 client 连接多个 target 一般会分散在不同节点接入
+iscsiadm -m session -P3 | less
+```
 
 为 Volume 增加 access point （cid 列表）属性， Extent 增加 Prefer Local （cid）的属性，用于表示数据的访问点。
 
