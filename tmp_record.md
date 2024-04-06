@@ -5,11 +5,17 @@
 
 1. 编译换回 docker
 
-3. zbs-meta  volume show_by_id 9b0b248f-7c06-4a44-9f31-9d8292e14bdd --show_pextents
+4. 若已有 lease owner，他可能跟 src/dst cid 不同，如果是由于 src/dst 单点 IO 性能差造成的 auto mode 下缩小 lease owner 命令下发窗口，看起来是误判，实际上这种情况，下一次关于这个 pid 的 cmd 大概率还是会选到这个 lease owner，所以也不算误判。
 
-    可区分展示 perf 或 cap 的，目前默认只是展示 perf
+    若没有 lease owner，新分配的 lease owner 副本模式下大概率是 src cid（除了 lease owner 本身分配优先选 src cid 之外，在下发前也有根据 lease owner 调整 cmd  src cid 的逻辑），较大概率是 dst cid，然后才是其他节点。
 
-4. 调整 business io 影响内部 IO 的 iops 和 bps 阈值。
+    另外，命令下发窗口可能被自动调节的前提是要打满一个窗口，也就是要有满一个窗口大小的命令数大部分都失败才有可能引发窗口收缩，比如 lease owner = 1, src_cid = 2, dst_cid = 3，若集群中只是 cid 2 IO 性能性能差，基本上需要给到 1 的 cmd src 基本都是 2 才满足整个窗口命令基本超时的条件，而此时把 1 的窗口跳调小也算正常，因为后续这些超时 cmd 的 pextent 再生成 cmd 时，lease owner 大概率还是 1。
+
+4. lease owner 大概率是 cmd src cid，
+
+5. 调整 business io 影响内部 IO 的 iops 和 bps 阈值。
+
+    1. 为啥在 nvme 中，speed limit 跟盘数量有关，而 iops/bps busy factor 却无关？还是需要在物理集群上测一下。比如 nvme 2 块盘和 4 块盘提供的 iops/bps 上限可能是相同的？这个 speed limit 其实就是 bps
 
     1. 目前 business io 的 iops 和 bps 阈值的判定是只要有 NVME SSD 就是 500 MiB/s，有 SATA SSD 就是 150 MiB/s，有 HDD 就是 100 MiB/s，只看盘类型，不论盘数量，但这里应该要跟盘数量有关；
 
@@ -25,20 +31,24 @@
 
         nvme SSd 4k iops 400 多 k（之前版本，2 块盘 p5620，600k）
 
-    3. 对 interval io 的判定除了 bps，是否需要把 iops 用起来？recover io 一定是 256 kb ，所以只关注 bps？sink io 有可能是 4k，所以应该关注 iops ？
+    3. 在 auto mode 下，如果有掉盘/新增盘的行为导致 migrate_limit_by_hardware 变化，应该让 current_speed_limit 立马跟随变化而不是逐步调节；
 
-    4. 在 auto mode 下，如果有掉盘/新增盘的行为导致 migrate_limit_by_hardware 变化，应该让 current_speed_limit 立马跟随变化而不是逐步调节；
+    3. 对 interval io 的判定除了 bps，是否需要把 iops 用起来？recover io 一定是 256 kb ，所以只关注 bps？sink io 有可能是 4k，所以应该关注 iops ？
 
     5. 目前用的是 read / write 的汇总 iops/bps ，是否需要分开处理呢？应该不需要，因为 throttle 自己都没区分。
 
 5. 调整 zbs cli speed limit 向前兼容。
+
+7. zbs-meta  volume show_by_id 9b0b248f-7c06-4a44-9f31-9d8292e14bdd --show_pextents
+
+    可区分展示 perf 或 cap 的，目前默认只是展示 perf
 
 6. 从 transaction 传个 prior 的 force_intact 字段用来表示：
 
     1. create volume 的时候严格检查副本创建；
     2. IO 路径上放松检查副本创建（成功一个副本就算成功）；
 
-7. 清明期间更新 recover / migrate 文档，看 zbs 已有文档。
+7. 更新 recover / migrate 文档，看 zbs 已有文档。
 
 8. HasSpaceForTemporaryReplica 和 HasSpaceForCow 的修改，顺便把对 CowLExtentTransaction 的理解补充上
 
@@ -528,6 +538,7 @@ gtest系列之事件机制
            3. 单轮下发命令上限、单轮每个 chunk 下发命令数上限；
        2. repostion stale cmd 的判定；
        3. reposition lease owner 的选取规则（replica 和 ec 不同）；
+           1. 若已有 lease owner，沿用之前的 lease owner，否则
            1. 先 src 再 dst；
            2. ChooseOwnerForReposition；
        
