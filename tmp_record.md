@@ -1,12 +1,9 @@
 
 1. SetBitmap() 只在 2 个地方被调用，ReplicaIOHandler::SetStagingBlockInfo/UpdateStagingBlockInfo，
-
-
     1. SetStagingBlockInfo()
 
         1. TryRemoveWriteSlowReplicas()，暂时不管
         2. HandleWriteReplicasDone()，记录写失败的副本所在节点
-
     2. UpdateStagingBlockInfo()
 
         1. ReplicaIOHandler::UpdateDone()
@@ -15,8 +12,6 @@
 
                 1. ReplicaIOHandler::DoUpdateAndTemporaryReplica
                 2. ReplicaIOHandler::UpdateInternal()
-
-    3. 
 
 2. shell io reroute，一开始 scvm 存储网都 down 的情况下，切到管理网，此时恢复其中一个 scvm 存储网，但就一个本地的 xen 的路由切回存储网，这是符合预期的，因为这个管理网的 session alive sec 正常，shell 版本中不会去选别的存储网。
 
