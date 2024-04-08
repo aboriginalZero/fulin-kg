@@ -13,8 +13,6 @@
                 1. ReplicaIOHandler::DoUpdateAndTemporaryReplica
                 2. ReplicaIOHandler::UpdateInternal()
 
-2. shell io reroute，一开始 scvm 存储网都 down 的情况下，切到管理网，此时恢复其中一个 scvm 存储网，但就一个本地的 xen 的路由切回存储网，这是符合预期的，因为这个管理网的 session alive sec 正常，shell 版本中不会去选别的存储网。
-
 3. 编译换回 docker
 
 4. 若已有 lease owner，他可能跟 src/dst cid 不同，如果是由于 src/dst 单点 IO 性能差造成的 auto mode 下缩小 lease owner 命令下发窗口，看起来是误判，实际上这种情况，下一次关于这个 pid 的 cmd 大概率还是会选到这个 lease owner，所以也不算误判。
@@ -22,8 +20,6 @@
     若没有 lease owner，新分配的 lease owner 副本模式下大概率是 src cid（除了 lease owner 本身分配优先选 src cid 之外，在下发前也有根据 lease owner 调整 cmd  src cid 的逻辑），较大概率是 dst cid，然后才是其他节点。
 
     另外，命令下发窗口可能被自动调节的前提是要打满一个窗口，也就是要有满一个窗口大小的命令数大部分都失败才有可能引发窗口收缩，比如 lease owner = 1, src_cid = 2, dst_cid = 3，若集群中只是 cid 2 IO 性能性能差，基本上需要给到 1 的 cmd src 基本都是 2 才满足整个窗口命令基本超时的条件，而此时把 1 的窗口跳调小也算正常，因为后续这些超时 cmd 的 pextent 再生成 cmd 时，lease owner 大概率还是 1。
-
-5. lease owner 大概率是 cmd src cid，
 
 6. 调整 business io 影响内部 IO 的 iops 和 bps 阈值。
 
@@ -49,8 +45,6 @@
 
     5. 目前用的是 read / write 的汇总 iops/bps ，是否需要分开处理呢？应该不需要，因为 throttle 自己都没区分。
 
-7. 调整 zbs cli speed limit 向前兼容。
-
 8. zbs-meta  volume show_by_id 9b0b248f-7c06-4a44-9f31-9d8292e14bdd --show_pextents
 
     可区分展示 perf 或 cap 的，目前默认只是展示 perf
@@ -60,9 +54,15 @@
     1. create volume 的时候严格检查副本创建；
     2. IO 路径上放松检查副本创建（成功一个副本就算成功）；
 
-10. 更新 recover / migrate 文档，看 zbs 已有文档。
+9. 分配临时副本空间检查适配 pinperf in tiering，[ZBS-27272](http://jira.smartx.com/browse/ZBS-27272)
 
-11. HasSpaceForTemporaryReplica 和 HasSpaceForCow 的修改，顺便把对 CowLExtentTransaction 的理解补充上
+9. 数据恢复时调整拓扑，出现相同 pid 下发 2 次 recover cmd，并在后续无法成功执行，[ZBS-27207](http://jira.smartx.com/browse/ZBS-27207)
+
+10. 调整 zbs cli speed limit 向前兼容，[ZBS-27162](http://jira.smartx.com/browse/ZBS-27162)
+
+10. 更新 recover / migrate 文档，看 zbs 已有临时副本相关文档。
+
+11. HasSpaceForTemporaryReplica 的修改，顺便把对 CowLExtentTransaction 的理解补充上
 
      1. prior pextent allocation
 

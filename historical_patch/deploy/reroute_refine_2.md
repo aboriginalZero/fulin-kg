@@ -1,3 +1,7 @@
+shell io reroute，一开始 scvm 存储网都 down 的情况下，切到管理网，此时恢复其中一个 scvm 存储网，但就一个本地的 xen 的路由切回存储网，这是符合预期的，因为这个管理网的 session alive sec 正常，shell 版本中不会去选别的存储网。
+
+
+
 xen io reroute 获取/更新 session 的方式从 ssh 改成 wget 的安装包，操作步骤：
 
 1. 下载补丁包到各个 scvm 的 /tmp 目录，其 md5sum = 71c440126f7e6176b80326e06b555a7c
