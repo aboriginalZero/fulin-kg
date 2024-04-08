@@ -49,10 +49,12 @@
 
     可区分展示 perf 或 cap 的，目前默认只是展示 perf
 
-9. 从 transaction 传个 prior 的 force_intact 字段用来表示：
+6. 从 transaction 传个 prior 的 force_intact 字段用来表示：
 
     1. create volume 的时候严格检查副本创建；
     2. IO 路径上放松检查副本创建（成功一个副本就算成功）；
+
+    构造一个单测把 COW/rollback/resize 等各种情况涵盖进去
 
 9. 分配临时副本空间检查适配 pinperf in tiering，[ZBS-27272](http://jira.smartx.com/browse/ZBS-27272)
 
