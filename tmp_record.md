@@ -49,12 +49,7 @@
 
     可区分展示 perf 或 cap 的，目前默认只是展示 perf
 
-6. 从 transaction 传个 prior 的 force_intact 字段用来表示：
-
-    1. create volume 的时候严格检查副本创建；
-    2. IO 路径上放松检查副本创建（成功一个副本就算成功）；
-
-    构造一个单测把 COW/rollback/resize 等各种情况涵盖进去
+9. 命令行显示三种 space 负载信息。
 
 9. 分配临时副本空间检查适配 pinperf in tiering，[ZBS-27272](http://jira.smartx.com/browse/ZBS-27272)
 
@@ -115,47 +110,6 @@
         
         LOG(INFO) << "yiwu sp_load " << sp_load << " pk " << pk;
         ```
-
-12. 明确以下分层之后，转换/克隆出一个普通卷的流程，包括 lextent, pextent 分配等，CloneVolumeTransaction/CowLExtentTransaction。
-
-     vtable 放在哪里？
-
-     追踪克隆一个普通卷的流程
-
-     lsm 现在上报 pextent info 的时候，如果 pextent 在 perf layer，不论 thick/thin，都会将 prioritized 字段设为 true，所以会出现单测创建 perf thin 之后，出现 FOUND REPLICA NEEDS CHANGE PERFHINT，但 LSMProxy::SetExtentsPriority 目前是个空方法，所以没啥影响。
-
-     分层之后，创建一个 volume：
-
-     1. 在 CreateVolume rpc 中先做各类参数校验，通过后执行 CreateVolumeTransaction
-
-         1. cap pextent：不论是否开启分层，不论是什么类型的 volume 都会马上分配 cap pid，但只有 prior 或 thick 才会马上分配 cap location；
-
-             > 如果 thick volume 的 lextent 的 cap pextent 不马上分配 location 来预留空间的话，没法保证有足够的下沉空间。
-
-         2. perf pextent：开启分层并且是 prior volume 才会马上同时分配 perf pid 和 location。
-
-     2. 在 CloneVolume 时，CloneVolumeTransaction 根据源卷是快照或普通卷有不同行为
-
-         1. src volume 是快照 
-             1. 从 meta db 中拿到 src volume 的 vtable 并拷贝一份给 dst volume ；
-             2. 设置 dst volume 的 origin id 为 src volume id；
-         2. src volume 是普通卷
-             1. 加锁
-             2. 从 metadb 中拿到 src volume 的 vtable；
-             3. revoke src volume 的 vtable lease；
-             4. 将 src vtable 上各个 vextent cow flag 设置为 true，
-             5. 解锁
-             6. 清空目的卷的 origin id
-
-         二者共同操作包含：
-
-         1. 将目的卷标记成不是快照；
-         2. 从 src volume 复制一份 vtable 给 dst volume；
-         3. 若 dst volume 尺寸大于 src volume，按照 CreateVolume 中的原则分配新的 cap/perf pextent，这些新的 vextent 对应的 vextent 上 cow flag = false。
-
-     3. CowLExtentTransaction
-
-         待补充
 
 13. 对于仅被 thin volume / snapshot 引用的 capacity pextent，其 provision 将在 gc 扫描时被更新为 thin，随心跳下发给 lsm，如果有 pextent 被 thick volume 引用，那其 provision 将被更新为 thick，随心跳下发给 lsm，[ZBS-15094](http://jira.smartx.com/browse/ZBS-15094)。
 
@@ -895,11 +849,65 @@ transaction 中，判断 thin/thick 的依据，cap 用 thin_provision_ ，perf 
 
 分层之后，创建一个 lextent 时，会马上分配 perf / cap pextent，一定会给 perf 分配 location，如果 cap 的 origin pid 是 0，而且是 thick pextent，也要为 cap 分配 location，否则不分配
 
-### COW 内容
+### Clone, Snapshot, COW
 
-快照会将 VTable 复制一份，Vtable 的内容就是若干个 VExtent，里面只有 3 个字段，vextent_id，location，alive_location，第一个字段是 volume 的 offset 与 pextent 的对应关系，后两个字段就是对应 pextent 的 location 和 alive_location。（vtable 看起来好像也是从 ptable 中复制来的？MetaRpcServer::GetVTable）
+假设 A 的 origin id = B，发生快照/克隆后 origin id 的变更情况（MetaRpcServer::CreateSnapshot / CloneVolumeTransaction）：
 
-我们的 COW PEXTENT 的触发时机是 GetVExtentLease rpc，如果 access/chunk 那里 lease 没有 expire，也就不会调用 GetVExtentLease，所以需要通过 revoke 主动让他 expire。COW 是先 revoke，然后打快照，保证了快照后，extent 无法写入的语意，如果不 revoke lease，快照只读假设将被打破。
+1. 从 A 克隆出 C，当 A 是快照，那么 C 的 origin id = A，A 的 origin id = B；
+2. 从 A 克隆出 C，当 A 是卷，那么 C 的 origin id = 0，A 的 origin id = B；
+3. 从 A 快照出 C，不区分 A 是快照/卷，C 的 origin id = B，A 的 origin id = C；
+4. 从 A 回滚到 C，不区分 A 是快照/卷，C 的 origin id 不变，A 的 origin id = C；
+
+
+
+明确以下分层之后，转换/克隆出一个普通卷的流程，包括 lextent, pextent 分配等。 
+
+追踪克隆一个普通卷的流程
+
+ lsm 现在上报 pextent info 的时候，如果 pextent 在 perf layer，不论 thick/thin，都会将 prioritized 字段设为 true，所以会出现单测创建 perf thin 之后，出现 FOUND REPLICA NEEDS CHANGE PERFHINT，但 LSMProxy::SetExtentsPriority 目前是个空方法，所以没啥影响。
+
+ 分层之后，创建一个 volume：
+
+ 1. 在 CreateVolume rpc 中先做各类参数校验，通过后执行 CreateVolumeTransaction
+
+    1. cap pextent：不论是否开启分层，不论是什么类型的 volume 都会马上分配 cap pid，但只有 prior 或 thick 才会马上分配 cap location；
+
+       > 如果 thick volume 的 lextent 的 cap pextent 不马上分配 location 来预留空间的话，没法保证有足够的下沉空间。
+
+    2. perf pextent：开启分层并且是 prior volume 才会马上同时分配 perf pid 和 location。
+
+ 2. 在 CloneVolume 时，CloneVolumeTransaction 根据源卷是快照或普通卷有不同行为
+
+    1. src volume 是快照 
+       1. 从 meta db 中拿到 src volume 的 vtable 并拷贝一份给 dst volume ；
+       2. 设置 dst volume 的 origin id 为 src volume id；
+    2. src volume 是普通卷
+       1. 加锁
+       2. 从 metadb 中拿到 src volume 的 vtable；
+       3. revoke src volume 的 vtable lease；
+       4. 将 src vtable 上各个 vextent cow flag 设置为 true，
+       5. 解锁
+       6. 清空目的卷的 origin id（因此源卷是普通卷，很快就有新的写数据，那就跟 dst volume 不一样了）
+
+    二者共同操作包含：
+
+    1. 将目的卷标记成不是快照；
+    2. 从 src volume 复制一份 vtable 给 dst volume；
+    3. 若 dst volume 尺寸大于 src volume，按照 CreateVolume 中的原则分配新的 cap/perf pextent，这些新的 vextent 对应的 vextent 上 cow flag = false。
+
+ 3. CowLExtentTransaction
+
+    待补充
+
+在分层之后，更新一个 Volume：
+
+
+
+
+
+快照会将 VTable 复制一份，Vtable 的内容就是若干个 VExtent，里面只有 3 个字段，vextent_id，location，alive_location，第一个字段是 volume 的 offset 与 pextent 的对应关系，后两个字段就是对应 pextent 的 location 和 alive_location。（vtable 看起来好像也是从 ptable 中复制来的？MetaRpcServer::GetVTable。vtable 放在哪里？）
+
+COW PEXTENT 的触发时机是 GetVExtentLease rpc，如果 access/chunk 那里 lease 没有 expire，也就不会调用 GetVExtentLease，所以需要通过 revoke 主动让他 expire。COW 是先 revoke，然后打快照，保证了快照后，extent 无法写入的语意，如果不 revoke lease，快照只读假设将被打破。
 
 COW 之后，child alive loc 不一定等于 parent alive loc。实际上，COW 在 Transaction Prepare 的 CowPExtent 时只会只会复制 parent 的 loc，然后在 Commit -> PersistExtents -> UpdateMetaContextWhenSuccess -> SetPExtents 时会将 loc 上的每一个副本的 last_report_ms 设为当前时间，所以 child alive loc = child loc = parent loc，但是不一定等于 parent alive loc。
 
