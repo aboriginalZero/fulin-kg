@@ -45,21 +45,19 @@
 
     5. 目前用的是 read / write 的汇总 iops/bps ，是否需要分开处理呢？应该不需要，因为 throttle 自己都没区分。
 
-8. zbs-meta  volume show_by_id 9b0b248f-7c06-4a44-9f31-9d8292e14bdd --show_pextents
+5. 数据恢复时调整拓扑，出现相同 pid 下发 2 次 recover cmd，并在后续无法成功执行，[ZBS-27207](http://jira.smartx.com/browse/ZBS-27207)
 
-    可区分展示 perf 或 cap 的，目前默认只是展示 perf
+    ClearSessionCmd/RevokeRepositionCmds
 
-9. 命令行显示三种 space 负载信息。
+    已经下发的就算了，在待发队列中的要清空。
 
-9. 分配临时副本空间检查适配 pinperf in tiering，[ZBS-27272](http://jira.smartx.com/browse/ZBS-27272)
+10. 调整 space load of cluster 展示，调整 zbs cli speed limit 向前兼容，[ZBS-27162](http://jira.smartx.com/browse/ZBS-27162)
 
-9. 数据恢复时调整拓扑，出现相同 pid 下发 2 次 recover cmd，并在后续无法成功执行，[ZBS-27207](http://jira.smartx.com/browse/ZBS-27207)
-
-10. 调整 zbs cli speed limit 向前兼容，[ZBS-27162](http://jira.smartx.com/browse/ZBS-27162)
+10. sink 是怎么选 dst 的，能保证 topo 安全吗？会不会 sink 一次后，需要 migrate
 
 10. 更新 recover / migrate 文档，看 zbs 已有临时副本相关文档。
 
-11. HasSpaceForTemporaryReplica 的修改，顺便把对 CowLExtentTransaction 的理解补充上
+11. 分配临时副本空间检查适配 pinperf in tiering，[ZBS-27272](http://jira.smartx.com/browse/ZBS-27272)，HasSpaceForTemporaryReplica 的修改，顺便把对 CowLExtentTransaction 的理解补充上
 
      1. prior pextent allocation
 
@@ -93,7 +91,7 @@
 
         只有 replica 才会分配临时副本，所以 ec 不会有 agile recover
 
-        临时副本载 perf layer 中一定是 thin 的，临时副本一定分配上
+        临时副本在 perf layer 中一定是 thin 的，临时副本一定分配上
 
         有很多代码适合 pick 到 55x，但在 56x 中直接被删除了，见 [ZBS-27109](http://jira.smartx.com/browse/ZBS-27109)
 
@@ -187,11 +185,8 @@ ZBS-20993，允许 RPC 产生恢复/迁移命令，可以指定源和目的地�
 
 
 
-
-
 1. 让 cli 可以看到 avail cmd slots
 2. 把 distributeRecoverCmds 中的生成部分函数抽出来
-8. 分层之后，cap 层还可以统计盘的数量，perf 层需要统计的是 perf space used rate
 
 
 
