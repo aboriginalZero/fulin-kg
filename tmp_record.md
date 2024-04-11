@@ -1,18 +1,45 @@
 
+1. 从一个  volume 可以拿到所有 vextent id，据此可以拿到 lid，接着
+    
+    ```c++
+    Volume volume;
+    // vextent table 直接存入 meta db，并不在内存里常驻，vextent no 中带有是否 cow 的信息
+    vextent_id = volume.vextent_id(i);
+    lid = to_pextent_id(vextent_id);
+    
+    // vextent 的 location 就是 cap extent 的 location
+    std::vector<VExtent> vextents;
+    meta->GetVTable(pool_name, volume_name, &vextents);
+    
+    // 从 lextent table 中获取 lextent 的 cap/perf pid 信息
+    LExtent lextent;
+    meta->GetLextent(lid, &lextent);
+    
+    // 从 pextent table 中获取 pextent 的 location/preferred_cid/thin_provision 信息
+    PExtent cap_pextent;
+    meta->GetPExtent(lextent.cap_pid(), &cap_pextent);
+    PExtent perf_pextent;
+    meta->GetPExtent(lextent.cap_pid(), &perf_pextent);
+    
+    ```
+    
+    创建大量 volume 并删除后，pid 被消耗殆尽，
+    
 1. SetBitmap() 只在 2 个地方被调用，ReplicaIOHandler::SetStagingBlockInfo/UpdateStagingBlockInfo，
+    
     1. SetStagingBlockInfo()
-
+    
         1. TryRemoveWriteSlowReplicas()，暂时不管
         2. HandleWriteReplicasDone()，记录写失败的副本所在节点
     2. UpdateStagingBlockInfo()
-
+    
         1. ReplicaIOHandler::UpdateDone()
-
+    
             1. ReplicaIOHandler::DoUpdate()
-
+    
                 1. ReplicaIOHandler::DoUpdateAndTemporaryReplica
                 2. ReplicaIOHandler::UpdateInternal()
-
+    
 3. 编译换回 docker
 
 4. 若已有 lease owner，他可能跟 src/dst cid 不同，如果是由于 src/dst 单点 IO 性能差造成的 auto mode 下缩小 lease owner 命令下发窗口，看起来是误判，实际上这种情况，下一次关于这个 pid 的 cmd 大概率还是会选到这个 lease owner，所以也不算误判。
@@ -45,15 +72,7 @@
 
     5. 目前用的是 read / write 的汇总 iops/bps ，是否需要分开处理呢？应该不需要，因为 throttle 自己都没区分。
 
-5. 数据恢复时调整拓扑，出现相同 pid 下发 2 次 recover cmd，并在后续无法成功执行，[ZBS-27207](http://jira.smartx.com/browse/ZBS-27207)
-
-    ClearSessionCmd/RevokeRepositionCmds
-
-    已经下发的就算了，在待发队列中的要清空。
-
 10. 调整 space load of cluster 展示，调整 zbs cli speed limit 向前兼容，[ZBS-27162](http://jira.smartx.com/browse/ZBS-27162)
-
-10. sink 是怎么选 dst 的，能保证 topo 安全吗？会不会 sink 一次后，需要 migrate
 
 10. 更新 recover / migrate 文档，看 zbs 已有临时副本相关文档。
 
@@ -900,7 +919,7 @@ transaction 中，判断 thin/thick 的依据，cap 用 thin_provision_ ，perf 
 
 
 
-快照会将 VTable 复制一份，Vtable 的内容就是若干个 VExtent，里面只有 3 个字段，vextent_id，location，alive_location，第一个字段是 volume 的 offset 与 pextent 的对应关系，后两个字段就是对应 pextent 的 location 和 alive_location。（vtable 看起来好像也是从 ptable 中复制来的？MetaRpcServer::GetVTable。vtable 放在哪里？）
+快照会将 VTable 复制一份，Vtable 的内容就是若干个 VExtent，里面只有 3 个字段，vextent_id，location，alive_location，第一个字段是 volume 的 offset 与 pextent 的对应关系，后两个字段就是对应 cap pextent 的 location 和 alive_location，不同于 pextent table 常驻内存，vextent table 常驻 meta db，需要时从 meta db 中读。
 
 COW PEXTENT 的触发时机是 GetVExtentLease rpc，如果 access/chunk 那里 lease 没有 expire，也就不会调用 GetVExtentLease，所以需要通过 revoke 主动让他 expire。COW 是先 revoke，然后打快照，保证了快照后，extent 无法写入的语意，如果不 revoke lease，快照只读假设将被打破。
 
