@@ -25,6 +25,8 @@
     
     创建大量 volume 并删除后，pid 被消耗殆尽，
     
+    打快照只是 SetCow，快照的 origin_id 是源卷的 origin_id
+    
 1. SetBitmap() 只在 2 个地方被调用，ReplicaIOHandler::SetStagingBlockInfo/UpdateStagingBlockInfo，
     
     1. SetStagingBlockInfo()
@@ -74,7 +76,7 @@
 
 10. 调整 space load of cluster 展示，调整 zbs cli speed limit 向前兼容，[ZBS-27162](http://jira.smartx.com/browse/ZBS-27162)
 
-10. 更新 recover / migrate 文档，看 zbs 已有临时副本相关文档。
+10. 更新 recover / migrate 文档，看 zbs 已有临时副本相关文档，把 meta 的业务逻辑看懂之后，要看 zk 和 dbcluster 相关逻辑，access session 的建立/断开连接逻辑，看 meta2 文档，看 sink manager 和 drain manager 的区别。
 
 11. 分配临时副本空间检查适配 pinperf in tiering，[ZBS-27272](http://jira.smartx.com/browse/ZBS-27272)，HasSpaceForTemporaryReplica 的修改，顺便把对 CowLExtentTransaction 的理解补充上
 
@@ -912,6 +914,12 @@ transaction 中，判断 thin/thick 的依据，cap 用 thin_provision_ ，perf 
  3. CowLExtentTransaction
 
     待补充
+
+ 4. AllocPExtentTransaction，已有 lid，且 COW = 0 时被调用
+
+ 5. AllocVExtentTransaction，在  (vextent_no < num_vextents && lid = 0) || (vextent_no >= num_vextents)   时被调用，只会发生在 NFS overflow write 时；
+
+ 6. 
 
 在分层之后，更新一个 Volume：
 
