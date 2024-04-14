@@ -1,6 +1,6 @@
 
 1. 从一个  volume 可以拿到所有 vextent id，据此可以拿到 lid，接着
-    
+   
     ```c++
     Volume volume;
     // vextent table 直接存入 meta db，并不在内存里常驻，vextent no 中带有是否 cow 的信息
@@ -28,7 +28,7 @@
     打快照只是 SetCow，快照的 origin_id 是源卷的 origin_id
     
 1. SetBitmap() 只在 2 个地方被调用，ReplicaIOHandler::SetStagingBlockInfo/UpdateStagingBlockInfo，
-    
+   
     1. SetStagingBlockInfo()
     
         1. TryRemoveWriteSlowReplicas()，暂时不管
