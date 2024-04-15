@@ -27,6 +27,11 @@
     
     打快照只是 SetCow，快照的 origin_id 是源卷的 origin_id
     
+    分层之后，一个只有 cap pextents 的 normal thick volume COW，不仅会分配出新的 cap pextents，还会分配出新的 perf pextents。
+    
+    * 克隆时不指定 thin_provision 的话，不论源卷是否 thin，克隆卷都是 thin 的；
+    * 克隆时不指定 prioritized 的话，不论源卷是否 prioritized，克隆卷都不是 prioritized 的；
+    
 1. SetBitmap() 只在 2 个地方被调用，ReplicaIOHandler::SetStagingBlockInfo/UpdateStagingBlockInfo，
    
     1. SetStagingBlockInfo()
