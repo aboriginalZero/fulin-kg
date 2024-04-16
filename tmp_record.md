@@ -1,4 +1,10 @@
 
+1. ClearAllCachedLease
+   
+    ClearCachedLease
+    
+    ReleaseBadLease
+    
 1. 从一个  volume 可以拿到所有 vextent id，据此可以拿到 lid，接着
    
     ```c++
@@ -30,7 +36,10 @@
     分层之后，一个只有 cap pextents 的 normal thick volume COW，不仅会分配出新的 cap pextents，还会分配出新的 perf pextents。
     
     * 克隆时不指定 thin_provision 的话，不论源卷是否 thin，克隆卷都是 thin 的；
+    
     * 克隆时不指定 prioritized 的话，不论源卷是否 prioritized，克隆卷都不是 prioritized 的；
+    
+      目前创建一个 prior volume 允许指定 thin_provision = true，这会让该 cap pextents 是 thin 的。
     
 1. SetBitmap() 只在 2 个地方被调用，ReplicaIOHandler::SetStagingBlockInfo/UpdateStagingBlockInfo，
    
@@ -79,7 +88,9 @@
 
     5. 目前用的是 read / write 的汇总 iops/bps ，是否需要分开处理呢？应该不需要，因为 throttle 自己都没区分。
 
-10. 调整 space load of cluster 展示，调整 zbs cli speed limit 向前兼容，[ZBS-27162](http://jira.smartx.com/browse/ZBS-27162)
+7. 调整 space load of cluster 展示，调整 zbs cli speed limit 向前兼容，[ZBS-27162](http://jira.smartx.com/browse/ZBS-27162)
+
+    zbs-meta reposition list 来兼容 recover / migrate list
 
 10. 更新 recover / migrate 文档，看 zbs 已有临时副本相关文档，把 meta 的业务逻辑看懂之后，要看 zk 和 dbcluster 相关逻辑，access session 的建立/断开连接逻辑，看 meta2 文档，看 sink manager 和 drain manager 的区别。
 
