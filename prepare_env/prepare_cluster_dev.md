@@ -2,7 +2,7 @@ IMPI  ADMIN ADMIN
 
 fisheye root 111111
 
-promethus prometheus HC!r0cks ，http://meta_leader_mgt_ip:9090
+prometheus prometheus HC!r0cks ，http://meta_leader_mgt_ip:9090
 
 ### 搭建开发机
 

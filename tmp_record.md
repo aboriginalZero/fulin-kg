@@ -82,11 +82,7 @@
 
         nvme SSd 4k iops 400 多 k（之前版本，2 块盘 p5620，600k）
 
-    3. 在 auto mode 下，如果有掉盘/新增盘的行为导致 migrate_limit_by_hardware 变化，应该让 current_speed_limit 立马跟随变化而不是逐步调节；
-
-    3. 对 interval io 的判定除了 bps，是否需要把 iops 用起来？recover io 一定是 256 kb ，所以只关注 bps？sink io 有可能是 4k，所以应该关注 iops ？
-
-    5. 目前用的是 read / write 的汇总 iops/bps ，是否需要分开处理呢？应该不需要，因为 throttle 自己都没区分。
+    4. 对 interval io 的判定除了 bps，是否需要把 iops 用起来？recover io 一定是 256 kb ，所以只关注 bps？sink io 有可能是 4k，所以应该关注 iops ？
 
 7. 调整 space load of cluster 展示，调整 zbs cli speed limit 向前兼容，[ZBS-27162](http://jira.smartx.com/browse/ZBS-27162)
 
@@ -617,22 +613,11 @@ gtest系列之事件机制
 
 
 
-
-
 待整理
 
 整理一下 xen io reroute 中 meta leader 被 kill 的售后处理的流程，zk leader kill 包含 zk session、access session、db cluster 相关的内容。meta in zbs 中关于 db cluster 部分，DBCluster是一个通用的组件，用于各个节点间进行数据的同步。在有数据修改时，DBCluster会首先将journal提交到journal cluster（目前基于zookeeper实现），当提交到journal cluster完成后，数据修改就可以返回了，journal cluster保证修改的持久性，本地的LevelDb会异步的被修改。
 
 下一个 smtxos 开始使用 yq，了解 yq 的用法，https://github.com/mikefarah/yq 
-
-命令行查看指令列，zbs-meta -fjson chunk list | jq '.[] | {"ID", "Used Space", "Data Capacity"}'
-
-```shell
-# json 格式查看所有 chunk 已使用空间
-zbs-meta -fjson chunk list | jq '.[] | {"ID", "Perf Valid Space", "Perf Allocated Space"}'
-# 查看所有的 chunk 的 ring id
-zbs-meta -fjson topo list | jq 'map(select(.type =="NODE")) | .[] | "\(.["description"]), ring id \(.["ring_id"])"'
-```
 
 
 

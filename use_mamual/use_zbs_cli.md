@@ -124,6 +124,15 @@ systemctl restart tuna-rest-server zbs-rest-server
 
 替换 meta leader，先 stripe src/zbs-metad 再 scp，如果 restart 失败，可用通过 journalctl -u zbs-metad.service 找原因
 
+查看指定列
+
+```shell
+# json 格式查看所有 chunk 已使用空间
+zbs-meta -fjson chunk list | jq '.[] | {"ID", "Perf Valid Space", "Perf Allocated Space"}'
+# 查看所有的 chunk 的 ring id
+zbs-meta -fjson topo list | jq 'map(select(.type =="NODE")) | .[] | "\(.["description"]), ring id \(.["ring_id"])"'
+```
+
 查找 even volume
 
 ```shell
