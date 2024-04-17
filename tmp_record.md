@@ -1,9 +1,79 @@
 
-1. ClearAllCachedLease
+1. 
    
-    ClearCachedLease
+    133.173 节点上跑 /dev/sdh，并在这个节点上开个 iostat -xm 1
     
-    ReleaseBadLease
+    hdd 磁盘参数如下
+    
+    ```shell
+    Model Family:     Seagate Constellation.2 (SATA)
+    Device Model:     ST91000640NS
+    User Capacity:    1,000,204,886,016 bytes [1.00 TB]
+    Sector Size:      512 bytes logical/physical
+    Rotation Rate:    7200 rpm
+    Form Factor:      2.5 inches
+    ATA Version is:   ATA8-ACS T13/1699-D revision 4
+    SATA Version is:  SATA 3.0, 6.0 Gb/s (current: 6.0 Gb/s)
+    ```
+    
+    往 /etc/sysconfig/zbs-metad 中追加如下参数并重启，以保证 fio 节点上始终有本地副本
+    
+    ```shell
+    PERF_THIN_MEDIUM_RATIO = 0.997
+    PERF_THIN_HIGH_RATIO = 0.998
+    VERY_HIGH_LOAD_RATIO= 0.999
+    META_DISABLE_RECOVER=true
+    META_DISABLE_MIGRATE=true
+    ```
+    
+    往  /etc/sysconfig/zbs-chunkd 中追加如下参数并重启，以保证不会写到 ssd 盘
+    
+    ```shell
+    ENABLE_IO_CACHE_V2=false
+    CHUNK_LSM2_CACHE_FIXED_RATIO=0
+    ```
+    
+    绑到没被 polling 的 CPU 核心上，10 是 CPU num
+    
+    ```shell
+    cgexec -g cpuset:. taskset -c 10 fio yiwu.fio
+    
+    cat yiwu.fio
+    [global]
+    ioengine=libaio
+    direct=1
+    time_based
+    filename=/dev/sdh
+    
+    [test]
+    rw=randread
+    bs=256k
+    numjobs=1
+    size=10G
+    iodepth=8
+    ```
+    
+    创建一块 10G Lun，
+    
+    直写 4 块 hdd 盘的性能，256k，case id 构成 hdd 盘数量 + rw type + iodepth + bs
+    
+    | Case                 | IOPS | BW(MiB/s) |
+    | -------------------- | ---- | --------- |
+    | randread_8_512       | 435  | 108       |
+    | randread_16_512      | 493  | 123       |
+    | randread_128_512     | 498  | 124       |
+    | write_8_512_fio      |      |           |
+    | write_16_512_fio     |      |           |
+    | write_128_512_fio    |      |           |
+    | 2 块盘的数据         |      |           |
+    | randread_8_512_fio   |      |           |
+    | randread_16_512_fio  |      |           |
+    | randread_128_512_fio |      |           |
+    | write_8_512_fio      |      |           |
+    | write_16_512_fio     |      |           |
+    | write_128_512_fio    |      |           |
+    
+    还需要测一下 2 块盘的情况
     
 1. 从一个  volume 可以拿到所有 vextent id，据此可以拿到 lid，接着
    
@@ -712,6 +782,56 @@ iscsi access point 3 部分策略：iscsi 建立连接、异常重定向、动�
 临时异常回切：对于临时分配到次可用域的接入点，一旦主可用域有一个节点恢复，且该节点对应的 access session 存活超过一定时间（3分钟），则自动平衡检查时应当尝试将其迁移回主可用域。
 
 https://docs.google.com/document/d/1t14uKF6YCaijgXAq-bS-WR_I1SaLhYxbOnKXhspBtlQ/edit#heading=h.iidguj2la1
+
+### zbs 线协程模型
+
+zbs 内部的线程基本都用 ThreadContext 来代替 std::thread 这种裸线程，也就是说
+
+Timer 和 TimerHandle 是有区别的，TimerHandler 是 Coroutine 和 timer 的结合，是具备 co 语义的。
+
+```c++
+void TEST_DoScan() {
+	  // 若调用方没跑在 ThreadContext 中，比如单测使用的没有 zbs co 语义的线程或者
+    if (ThreadContext::Self() == nullptr) {
+        Sync sync;
+        thctx_->Sched(new CoroutineClosure([&]() {
+            DoSomething(); // 业务代码
+            sync.Run();
+        }));
+        sync.WaitAndReset();
+    } else {
+        // 若调用方跑在 ThreadContext，可以通过 ThreadContextGuard 把 co 调度到 thctx_ 所在线程运行
+        ThreadContextGuard tcg(thctx_.get());
+        // 为了避免调度过来的 co 被 yield
+        CoLockGuard l(&co_mutex_);
+        DoSomething();		// 业务代码
+    }	
+}
+```
+
+RWLock 是个线程间的读写锁，如果需要互斥的 2 个线程有 co 语义（ThreadContext），其中一个线程 co 因为拿不到锁而阻塞，那么其内部的 coroutine 也没法调度，可能出现一个 rpc 阻塞着，其他 rpc 也没法响应的情况。
+
+CoM
+
+
+
+SessionExpiredCb 是个 Timer 触发的，不是在一个 co 里，所以它调用的函数里，如果要
+
+```c++
+void RecoverManager::ClearSessionCmd(const std::string& session_id) {
+    Sync sync;
+    thctx_->Sched(new CoroutineClosure([&session_id, &sync, this]() {
+        CoLockGuard guard(&co_mutex_);
+        // 业务代码 ....
+        sync.Run();
+    }));
+    sync.WaitAndReset();
+}
+```
+
+
+
+
 
 ### zbs io 流
 
