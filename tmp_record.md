@@ -53,27 +53,44 @@
     iodepth=8
     ```
     
-    创建一块 10G Lun，
+    创建一块 10G Lun，在集群任一节点上用
     
-    直写 4 块 hdd 盘的性能，256k，case id 构成 hdd 盘数量 + rw type + iodepth + bs
+    zbs-5.6.0-rc25，直写 4 块 hdd 盘的性能，256k，case id 构成 hdd 盘数量 + rw type + iodepth + bs
     
-    | Case                 | IOPS | BW(MiB/s) |
-    | -------------------- | ---- | --------- |
-    | randread_8_512       | 435  | 108       |
-    | randread_16_512      | 493  | 123       |
-    | randread_128_512     | 498  | 124       |
-    | write_8_512_fio      |      |           |
-    | write_16_512_fio     |      |           |
-    | write_128_512_fio    |      |           |
-    | 2 块盘的数据         |      |           |
-    | randread_8_512_fio   |      |           |
-    | randread_16_512_fio  |      |           |
-    | randread_128_512_fio |      |           |
-    | write_8_512_fio      |      |           |
-    | write_16_512_fio     |      |           |
-    | write_128_512_fio    |      |           |
-    
-    还需要测一下 2 块盘的情况
+    | Case                | IOPS | BW         |
+    | ------------------- | ---- | ---------- |
+    | 4_randread_8_256k   | 405  | 103824KB/s |
+    | 4_randread_16_256k  | 469  | 120164KB/s |
+    | 4_randread_32_256k  | 485  | 124299KB/s |
+    | 4_randread_64_256k  | 463  | 118731KB/s |
+    | 4_randread_128_256k | 460  | 117990KB/s |
+    | 4_write_8_256k      | 241  | 61938KB/s  |
+    | 4_write_16_256k     | 253  | 64949KB/s  |
+    | 4_write_32_256k     | 355  | 91038KB/s  |
+    | 4_write_64_256k     | 359  | 92001KB/s  |
+    | 4_write_128_256k    | 372  | 95339KB/s  |
+    | 待测试，3 块盘的    |      |            |
+    | 3_randread_8_256k   | 374  | 95984KB/s  |
+    | 3_randread_16_256k  | 446  | 114412KB/s |
+    | 3_randread_32_256k  | 445  | 114172KB/s |
+    | 3_randread_64_256k  | 422  | 108210KB/s |
+    | 3_randread_128_256k | 415  | 106431KB/s |
+    | 3_write_8_256k      | 495  | 126854KB/s |
+    | 3_write_16_256k     | 554  | 141853KB/s |
+    | 3_write_32_256k     | 539  | 138191KB/s |
+    | 3_write_64_256k     | 491  | 125769KB/s |
+    | 3_write_128_256k    | 528  | 135337KB/s |
+    | 待测试，2 块盘的    |      |            |
+    | 2_randread_8_256k   |      |            |
+    | 2_randread_16_256k  |      |            |
+    | 2_randread_32_256k  |      |            |
+    | 2_randread_64_256k  |      |            |
+    | 2_randread_128_256k |      |            |
+    | 2_write_8_256k      |      |            |
+    | 2_write_16_256k     |      |            |
+    | 2_write_32_256k     |      |            |
+    | 2_write_64_256k     |      |            |
+    | 2_write_128_256k    |      |            |
     
 1. 从一个  volume 可以拿到所有 vextent id，据此可以拿到 lid，接着
    
