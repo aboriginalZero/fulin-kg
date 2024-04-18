@@ -163,26 +163,26 @@
     
     cgexec -g cpuset:. taskset -c 11 fio -ioengine=libaio -invalidate=1 -iodepth=128 -ramp_time=0 -runtime=300  -direct=1 -bs=256k -filename=nvme4n5 -name=write_128_4k_fio -rw=write -randrepeat=0
     
-    | Case                | IOPS | BW       |
+    | Case(hdd num + mode + iodepth + bs) | IOPS | BW       |
     | ------------------- | ---- | -------- |
     | 4_randread_8_256k   | 801  | 200MiB/s |
     | 4_randread_16_256k  | 1081 | 270MiB/s |
     | 4_randread_32_256k  | 1027 | 257MiB/s |
     | 4_randread_64_256k  | 1069 | 267MiB/s |
     | 4_randread_128_256k | 1104 | 276MiB   |
-    |                     |      |          |
+    |                     |      |         |
     | 3_randread_8_256k   | 698 | 175MiB/s |
     | 3_randread_16_256k  | 892 | 223MiB/s |
     | 3_randread_32_256k  | 837 | 209MiB/s |
     | 3_randread_64_256k  | 864 | 216MiB/s |
     | 3_randread_128_256k | 842 | 211MiB/s |
-    |                     |      |          |
-    | 2_randread_8_256k   |      |          |
-    | 2_randread_16_256k  |      |          |
-    | 2_randread_32_256k  |      |          |
-    | 2_randread_64_256k  |      |          |
-    | 2_randread_128_256k |      |          |
-    |                     |      |          |
+    |                     |      |         |
+    | 2_randread_8_256k   | 549 | 137MiB/s |
+    | 2_randread_16_256k  | 661 | 165MiB/s |
+    | 2_randread_32_256k  | 640 | 160MiB/s |
+    | 2_randread_64_256k  | 603 | 151MiB/s |
+    | 2_randread_128_256k | 560 | 140MiB/s |
+    |                     |      |         |
     | 4_write_8_256k      | 2109 | 527MiB/s |
     | 4_write_16_256k     | 1748 | 437MiB/s |
     | 4_write_32_256k     | 1544 | 386MiB/s |
@@ -191,15 +191,15 @@
     |                     |      |          |
     | 3_write_8_256k      | 2088 | 522MiB/s |
     | 3_write_16_256k     | 2144 | 536MiB/s |
-    | 3_write_32_256k  | 1747 | 437MiB/s |
-    | 3_write_64_256k  | 1278 | 320MiB/s |
-    | 3_write_128_256k | 1102 | 276MiB/s |
+    | 3_write_32_256k     | 1747 | 437MiB/s |
+    | 3_write_64_256k     | 1278 | 320MiB/s |
+    | 3_write_128_256k    | 1102 | 276MiB/s |
     |                     |      |          |
-    | 2_write_8_256k   |      |          |
-    | 2_write_16_256k  |      |          |
-    | 2_write_32_256k  |      |          |
-    | 2_write_64_256k  |      |          |
-    | 2_write_128_256k |      |          |
+    | 2_write_8_256k      | 1601 | 400MiB/s |
+    | 2_write_16_256k     | 1581 | 395MiB/s |
+    | 2_write_32_256k     | 1163 | 291MiB/s |
+    | 2_write_64_256k     | 834 | 209MiB/s |
+    | 2_write_128_256k    | 836 | 209MiB/s |
     
     
     
