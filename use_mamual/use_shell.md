@@ -675,7 +675,7 @@ cat bigfile.txt | parallel --pipe sed s/old/new/g
 2. 实时显示最新日志： journalctl -f /usr/sbin/crond；
 3. 查看内核日志： journalctl -k，等同于 dmesg -T；
 4. 查看 CPU 使用：没有 htop 时使用 mpstat -P ALL 1 可以看各 CPU 的负载情况；
-5. 查看磁盘读写情况：iostat -xm 1 每秒打印一次磁盘流量，rMB/s 每秒从设备读取的扇区数，r/s: 每秒完成的合并后读请求次数
+5. 查看磁盘读写情况：iostat -xm 1 每秒打印一次磁盘流量，rMB/s 每秒从设备读取的扇区数（带宽），r/s: 每秒完成的合并后读请求次数（iops）
 6. 查看网卡流量大小：sar -n DEV 1 每秒打印一次网卡流量，rxpck/s: 每秒接收的数据包数量，rxkB/s: 每秒接收的数据量。
 7. 查看 TCP 流量：sar -n TCP,ETCP 1， active/s 每秒本地发起的TCP连接数，passive/s 每秒远端发起的TCP连接数， retrans/s 为每秒重传的包数
 

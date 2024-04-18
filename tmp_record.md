@@ -1,6 +1,17 @@
 
-1. 
+1. 在一个脚本中跑多个 fio 任务，lun 更改之后，计算端怎么感知到，目前是先退出再进去。
    
+    看下 zbs-meta session list_iscsi_conn 给出的 session id 和 cid
+    
+    ```shell
+    [root@Node57-63 17:14:05 ~]$zbs-meta session list_iscsi_conn
+    Initiator                           Initiator IP    Target ID                               Client Port  Session ID                              CID  Transport Type
+    ----------------------------------  --------------  ------------------------------------  -------------  ------------------------------------  -----  ----------------
+    iqn.1994-05.com.redhat:9350c647c49  127.0.0.1       7cac873b-8bbe-464d-9748-74c7cab63698          47466  283bea99-7056-440e-9083-c0a0ca3ef141      3  TCP
+    iqn.1994-05.com.redhat:9350c647c49  127.0.0.1       b34f5079-25f3-460e-a16f-de1b7272fb47          47544  283bea99-7056-440e-9083-c0a0ca3ef141      3  TCP
+    iqn.1994-05.com.redhat:a14f743d372  10.0.57.63      12499d25-24db-46ee-bd11-3c85be84e8e0          57464  6d8747ee-f3c3-43f0-8428-221d096739a8      1  TCP
+    ```
+    
     133.173 节点上跑 /dev/sdh，并在这个节点上开个 iostat -xm 1
     
     hdd 磁盘参数如下
@@ -18,7 +29,11 @@
     
     往 /etc/sysconfig/zbs-metad 中追加如下参数并重启，以保证 fio 节点上始终有本地副本
     
+    若还是没有本地副本（没有感知到 access point），可以 zbs-iscsi lun update target-yiwu 1 --prefer_cid 2 来手动设置。
+    
     ```shell
+    CAP_MEDIUM_RATIO = 0.997
+    CAP_HIGH_RATIO = 0.998
     PERF_THIN_MEDIUM_RATIO = 0.997
     PERF_THIN_HIGH_RATIO = 0.998
     VERY_HIGH_LOAD_RATIO= 0.999
@@ -33,7 +48,7 @@
     CHUNK_LSM2_CACHE_FIXED_RATIO=0
     ```
     
-    绑到没被 polling 的 CPU 核心上，10 是 CPU num
+    在 cat /etc/cgconfig.d/cpuset.conf 中选一个在 group machine.slice 中的 CPU 或者不在任何 group 中的，比如 10，绑到没被 polling 的 CPU 核心上，10 是 CPU num
     
     ```shell
     cgexec -g cpuset:. taskset -c 10 fio yiwu.fio
@@ -53,9 +68,9 @@
     iodepth=8
     ```
     
-    创建一块 10G Lun，在集群任一节点上用
+    创建一块 10G Lun，在集群任一节点上用以上配置跑 fio 
     
-    zbs-5.6.0-rc25，直写 4 块 hdd 盘的性能，256k，case id 构成 hdd 盘数量 + rw type + iodepth + bs
+    zbs-5.6.0-rc25，直写 4 块 hdd 盘的性能，256k，case id 字符串构成：hdd 盘数量 + rw type + iodepth + bs
     
     | Case                | IOPS | BW         |
     | ------------------- | ---- | ---------- |
@@ -96,6 +111,97 @@
     | 2_write_128_256k    | 483  | 123831KB/s |
     
     如果想要批量测试的话，fio 脚本应该怎么写
+    
+    200 G 的 LUN，2 副本都在有 4 块 hdd 的节点上，其中一个是本地副本。
+    
+    在 vi /etc/cgconfig.d/cpuset.conf 把 12 去掉了
+    
+    ```
+    Run status group 0 (all jobs):
+       READ: bw=113MiB/s (119MB/s), 113MiB/s-113MiB/s (119MB/s-119MB/s), io=19.9GiB (21.4GB), run=180022-180022msec
+    
+    Run status group 1 (all jobs):
+       READ: bw=146MiB/s (153MB/s), 146MiB/s-146MiB/s (153MB/s-153MB/s), io=25.6GiB (27.5GB), run=180063-180063msec
+    
+    Run status group 2 (all jobs):
+       READ: bw=145MiB/s (152MB/s), 145MiB/s-145MiB/s (152MB/s-152MB/s), io=25.5GiB (27.4GB), run=180094-180094msec
+    
+    Run status group 3 (all jobs):
+       READ: bw=150MiB/s (157MB/s), 150MiB/s-150MiB/s (157MB/s-157MB/s), io=26.4GiB (28.4GB), run=180119-180119msec
+    
+    Run status group 4 (all jobs):
+       READ: bw=156MiB/s (163MB/s), 156MiB/s-156MiB/s (163MB/s-163MB/s), io=27.4GiB (29.4GB), run=180243-180243msec
+    
+    Run status group 5 (all jobs):
+      WRITE: bw=432MiB/s (453MB/s), 432MiB/s-432MiB/s (453MB/s-453MB/s), io=76.0GiB (81.6GB), run=180006-180006msec
+    
+    Run status group 6 (all jobs):
+      WRITE: bw=423MiB/s (444MB/s), 423MiB/s-423MiB/s (444MB/s-444MB/s), io=74.4GiB (79.8GB), run=180022-180022msec
+    
+    Run status group 7 (all jobs):
+      WRITE: bw=403MiB/s (422MB/s), 403MiB/s-403MiB/s (422MB/s-422MB/s), io=70.8GiB (76.0GB), run=180063-180063msec
+    
+    Run status group 8 (all jobs):
+      WRITE: bw=379MiB/s (398MB/s), 379MiB/s-379MiB/s (398MB/s-398MB/s), io=66.8GiB (71.8GB), run=180446-180446msec
+    
+    Run status group 9 (all jobs):
+      WRITE: bw=332MiB/s (348MB/s), 332MiB/s-332MiB/s (348MB/s-348MB/s), io=58.4GiB (62.7GB), run=180072-180072msec
+    ```
+    
+    57.65
+    iscsi 顺序写190，随机读  224
+    
+    nvmf 顺序写 422MiB/s，随机读 273MiB/s
+    
+    
+    
+    nvmf 
+    
+     zbs-nvmf ns create yiwu-sub1 5 16 --nqn_whitelist="nqn.2014-08.org.nvmexpress:uuid:f97082f5-2092-42f6-a223-14ecdc6996d0" --replica_num=1
+    
+    lsblk | grep nvme4 带后缀 5
+    
+    cgexec -g cpuset:. taskset -c 11 fio -ioengine=libaio -invalidate=1 -iodepth=128 -ramp_time=0 -runtime=300  -direct=1 -bs=256k -filename=nvme4n5 -name=write_128_4k_fio -rw=write -randrepeat=0
+    
+    | Case                | IOPS | BW       |
+    | ------------------- | ---- | -------- |
+    | 4_randread_8_256k   | 801  | 200MiB/s |
+    | 4_randread_16_256k  | 1081 | 270MiB/s |
+    | 4_randread_32_256k  | 1027 | 257MiB/s |
+    | 4_randread_64_256k  | 1069 | 267MiB/s |
+    | 4_randread_128_256k | 1104 | 276MiB   |
+    |                     |      |          |
+    | 3_randread_8_256k   | 698 | 175MiB/s |
+    | 3_randread_16_256k  | 892 | 223MiB/s |
+    | 3_randread_32_256k  | 837 | 209MiB/s |
+    | 3_randread_64_256k  | 864 | 216MiB/s |
+    | 3_randread_128_256k | 842 | 211MiB/s |
+    |                     |      |          |
+    | 2_randread_8_256k   |      |          |
+    | 2_randread_16_256k  |      |          |
+    | 2_randread_32_256k  |      |          |
+    | 2_randread_64_256k  |      |          |
+    | 2_randread_128_256k |      |          |
+    |                     |      |          |
+    | 4_write_8_256k      | 2109 | 527MiB/s |
+    | 4_write_16_256k     | 1748 | 437MiB/s |
+    | 4_write_32_256k     | 1544 | 386MiB/s |
+    | 4_write_64_256k     | 1574 | 394MiB/s |
+    | 4_write_128_256k    | 1577 | 394MiB/s |
+    |                     |      |          |
+    | 3_write_8_256k      | 2088 | 522MiB/s |
+    | 3_write_16_256k     | 2144 | 536MiB/s |
+    | 3_write_32_256k  | 1747 | 437MiB/s |
+    | 3_write_64_256k  | 1278 | 320MiB/s |
+    | 3_write_128_256k | 1102 | 276MiB/s |
+    |                     |      |          |
+    | 2_write_8_256k   |      |          |
+    | 2_write_16_256k  |      |          |
+    | 2_write_32_256k  |      |          |
+    | 2_write_64_256k  |      |          |
+    | 2_write_128_256k |      |          |
+    
+    
     
 1. 从一个  volume 可以拿到所有 vextent id，据此可以拿到 lid，接着
    
@@ -156,6 +262,10 @@
 
     另外，命令下发窗口可能被自动调节的前提是要打满一个窗口，也就是要有满一个窗口大小的命令数大部分都失败才有可能引发窗口收缩，比如 lease owner = 1, src_cid = 2, dst_cid = 3，若集群中只是 cid 2 IO 性能性能差，基本上需要给到 1 的 cmd src 基本都是 2 才满足整个窗口命令基本超时的条件，而此时把 1 的窗口跳调小也算正常，因为后续这些超时 cmd 的 pextent 再生成 cmd 时，lease owner 大概率还是 1。
 
+6. 在 meta rpc server 中拷贝一份 topo cache [ZBS-27232](http://jira.smartx.com/browse/ZBS-27232)
+
+6. 检查 recover/migrate speed 在前端界面和 prometheus 中的数值是否准确，meta 侧跟 chunk 侧的 total speed 和 local speed 和 remote speed
+
 6. 调整 business io 影响内部 IO 的 iops 和 bps 阈值。
 
     1. 为啥在 nvme 中，speed limit 跟盘数量有关，而 iops/bps busy factor 却无关？还是需要在物理集群上测一下。比如 nvme 2 块盘和 4 块盘提供的 iops/bps 上限可能是相同的？这个 speed limit 其实就是 bps
@@ -175,10 +285,6 @@
         nvme SSd 4k iops 400 多 k（之前版本，2 块盘 p5620，600k）
 
     4. 对 interval io 的判定除了 bps，是否需要把 iops 用起来？recover io 一定是 256 kb ，所以只关注 bps？sink io 有可能是 4k，所以应该关注 iops ？
-
-7. 调整 space load of cluster 展示，调整 zbs cli speed limit 向前兼容，[ZBS-27162](http://jira.smartx.com/browse/ZBS-27162)
-
-    zbs-meta reposition list 来兼容 recover / migrate list
 
 10. 更新 recover / migrate 文档，看 zbs 已有临时副本相关文档，把 meta 的业务逻辑看懂之后，要看 zk 和 dbcluster 相关逻辑，access session 的建立/断开连接逻辑，看 meta2 文档，看 sink manager 和 drain manager 的区别。
 
