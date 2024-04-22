@@ -1,8 +1,30 @@
 
-1. 在一个脚本中跑多个 fio 任务，lun 更改之后，计算端怎么感知到，目前是先退出再进去。
+1. 性能统计
    
-    看下 zbs-meta session list_iscsi_conn 给出的 session id 和 cid
     
+    1. StatusServer::CollectMetrics()
+    2. ClusterSummary summary;
+    3. AccessManager::GetClusterPerf(summary.mutable_cluster_perf())
+    4. SummaryChunkPerf(const std::vector< ChunkPerf>& chunk_perfs, ChunkPerf* summary, bool has_cache)，传入的是 ClusterSummary.mutable_cluster_perf()
+    5. SummaryRecoverPerf(const std::vector< const RecoverPerf*>& perfs, RecoverPerf * summary)，传入的是 ClusterSummary.mutable_cluster_perf()->mutable_recover_perf()
+    6. 在 SummaryRecoverPerf 中，把 perfs 数组中的值做了个汇总，累加到 ClusterSummary.mutable_cluster_perf()->mutable_recover_perf() 中，这里为啥可以直接累加？
+    
+    心跳上报到 access mgr 里的 session 的 chunk_perf
+    
+    1. AccessManager::HandleAccessDataReportRequest
+    2. AccessHandler::HandleAccessDataReport()
+    3. AccessHandler::ComposeAccessDataReportRequest(meta::AccessDataReportRequest *request)
+    4. RecoverHandler::ListRecoverAndMigrateInfo(&recover_list, true)，其中 ListRecoverResponse recover_list;
+    5. ComposeRecoverPerf(ListRecoverResponse* recover_list, RecoverPerf* perf)
+    6. 
+    7. 
+    
+    AccessHandler::ComposeAccessPerf(AccessDataReportRequest* request, bool only_summary) 这个统计的是普通 io，ComposeRecoverPerf 统计的 reposition io 相关的。
+    
+2. 在一个脚本中跑多个 fio 任务，lun 更改之后，计算端怎么感知到，目前是先退出再进去。
+
+    看下 zbs-meta session list_iscsi_conn 给出的 session id 和 cid
+
     ```shell
     [root@Node57-63 17:14:05 ~]$zbs-meta session list_iscsi_conn
     Initiator                           Initiator IP    Target ID                               Client Port  Session ID                              CID  Transport Type
@@ -11,11 +33,11 @@
     iqn.1994-05.com.redhat:9350c647c49  127.0.0.1       b34f5079-25f3-460e-a16f-de1b7272fb47          47544  283bea99-7056-440e-9083-c0a0ca3ef141      3  TCP
     iqn.1994-05.com.redhat:a14f743d372  10.0.57.63      12499d25-24db-46ee-bd11-3c85be84e8e0          57464  6d8747ee-f3c3-43f0-8428-221d096739a8      1  TCP
     ```
-    
+
     133.173 节点上跑 /dev/sdh，并在这个节点上开个 iostat -xm 1
-    
+
     hdd 磁盘参数如下
-    
+
     ```shell
     Model Family:     Seagate Constellation.2 (SATA)
     Device Model:     ST91000640NS
@@ -26,11 +48,11 @@
     ATA Version is:   ATA8-ACS T13/1699-D revision 4
     SATA Version is:  SATA 3.0, 6.0 Gb/s (current: 6.0 Gb/s)
     ```
-    
+
     往 /etc/sysconfig/zbs-metad 中追加如下参数并重启，以保证 fio 节点上始终有本地副本
-    
+
     若还是没有本地副本（没有感知到 access point），可以 zbs-iscsi lun update target-yiwu 1 --prefer_cid 2 来手动设置。
-    
+
     ```shell
     CAP_MEDIUM_RATIO = 0.997
     CAP_HIGH_RATIO = 0.998
@@ -40,16 +62,16 @@
     META_DISABLE_RECOVER=true
     META_DISABLE_MIGRATE=true
     ```
-    
+
     往  /etc/sysconfig/zbs-chunkd 中追加如下参数并重启，以保证不会写到 ssd 盘
-    
+
     ```shell
     ENABLE_IO_CACHE_V2=false
     CHUNK_LSM2_CACHE_FIXED_RATIO=0
     ```
-    
+
     在 cat /etc/cgconfig.d/cpuset.conf 中选一个在 group machine.slice 中的 CPU 或者不在任何 group 中的，比如 10，绑到没被 polling 的 CPU 核心上，10 是 CPU num
-    
+
     ```shell
     cgexec -g cpuset:. taskset -c 10 fio yiwu.fio
     
@@ -67,11 +89,11 @@
     size=10G
     iodepth=8
     ```
-    
+
     创建一块 10G Lun，在集群任一节点上用以上配置跑 fio 
-    
+
     zbs-5.6.0-rc25，直写 4 块 hdd 盘的性能，256k，case id 字符串构成：hdd 盘数量 + rw type + iodepth + bs
-    
+
     | Case                | IOPS | BW         |
     | ------------------- | ---- | ---------- |
     | 4_randread_8_256k   | 405  | 103824KB/s |
@@ -109,13 +131,13 @@
     | 2_write_32_256k     | 516  | 132194KB/s |
     | 2_write_64_256k     | 473  | 121241KB/s |
     | 2_write_128_256k    | 483  | 123831KB/s |
-    
+
     如果想要批量测试的话，fio 脚本应该怎么写
-    
+
     200 G 的 LUN，2 副本都在有 4 块 hdd 的节点上，其中一个是本地副本。
-    
+
     在 vi /etc/cgconfig.d/cpuset.conf 把 12 去掉了
-    
+
     ```
     Run status group 0 (all jobs):
        READ: bw=113MiB/s (119MB/s), 113MiB/s-113MiB/s (119MB/s-119MB/s), io=19.9GiB (21.4GB), run=180022-180022msec
@@ -147,22 +169,22 @@
     Run status group 9 (all jobs):
       WRITE: bw=332MiB/s (348MB/s), 332MiB/s-332MiB/s (348MB/s-348MB/s), io=58.4GiB (62.7GB), run=180072-180072msec
     ```
-    
+
     57.65
     iscsi 顺序写190，随机读  224
-    
+
     nvmf 顺序写 422MiB/s，随机读 273MiB/s
+
     
-    
-    
+
     nvmf 
-    
+
      zbs-nvmf ns create yiwu-sub1 5 16 --nqn_whitelist="nqn.2014-08.org.nvmexpress:uuid:f97082f5-2092-42f6-a223-14ecdc6996d0" --replica_num=1
-    
+
     lsblk | grep nvme4 带后缀 5
-    
+
     cgexec -g cpuset:. taskset -c 11 fio -ioengine=libaio -invalidate=1 -iodepth=128 -ramp_time=0 -runtime=300  -direct=1 -bs=256k -filename=nvme4n5 -name=write_128_4k_fio -rw=write -randrepeat=0
-    
+
     | Case(hdd num + mode + iodepth + bs) | IOPS | BW       |
     | ------------------- | ---- | -------- |
     | 4_randread_8_256k   | 801  | 200MiB/s |
@@ -200,11 +222,11 @@
     | 2_write_32_256k     | 1163 | 291MiB/s |
     | 2_write_64_256k     | 834 | 209MiB/s |
     | 2_write_128_256k    | 836 | 209MiB/s |
+
     
-    
-    
-1. 从一个  volume 可以拿到所有 vextent id，据此可以拿到 lid，接着
-   
+
+3. 从一个  volume 可以拿到所有 vextent id，据此可以拿到 lid，接着
+
     ```c++
     Volume volume;
     // vextent table 直接存入 meta db，并不在内存里常驻，vextent no 中带有是否 cow 的信息
@@ -226,141 +248,127 @@
     meta->GetPExtent(lextent.cap_pid(), &perf_pextent);
     
     ```
-    
+
     创建大量 volume 并删除后，pid 被消耗殆尽，
-    
+
     打快照只是 SetCow，快照的 origin_id 是源卷的 origin_id
-    
+
     分层之后，一个只有 cap pextents 的 normal thick volume COW，不仅会分配出新的 cap pextents，还会分配出新的 perf pextents。
-    
+
     * 克隆时不指定 thin_provision 的话，不论源卷是否 thin，克隆卷都是 thin 的；
-    
+
     * 克隆时不指定 prioritized 的话，不论源卷是否 prioritized，克隆卷都不是 prioritized 的；
-    
+
       目前创建一个 prior volume 允许指定 thin_provision = true，这会让该 cap pextents 是 thin 的。
-    
-1. SetBitmap() 只在 2 个地方被调用，ReplicaIOHandler::SetStagingBlockInfo/UpdateStagingBlockInfo，
-   
+
+4. SetBitmap() 只在 2 个地方被调用，ReplicaIOHandler::SetStagingBlockInfo/UpdateStagingBlockInfo，
+
     1. SetStagingBlockInfo()
-    
+
         1. TryRemoveWriteSlowReplicas()，暂时不管
         2. HandleWriteReplicasDone()，记录写失败的副本所在节点
     2. UpdateStagingBlockInfo()
-    
+
         1. ReplicaIOHandler::UpdateDone()
-    
+
             1. ReplicaIOHandler::DoUpdate()
-    
+
                 1. ReplicaIOHandler::DoUpdateAndTemporaryReplica
                 2. ReplicaIOHandler::UpdateInternal()
-    
-3. 编译换回 docker
 
-4. 若已有 lease owner，他可能跟 src/dst cid 不同，如果是由于 src/dst 单点 IO 性能差造成的 auto mode 下缩小 lease owner 命令下发窗口，看起来是误判，实际上这种情况，下一次关于这个 pid 的 cmd 大概率还是会选到这个 lease owner，所以也不算误判。
+5. 编译换回 docker
+
+6. 若已有 lease owner，他可能跟 src/dst cid 不同，如果是由于 src/dst 单点 IO 性能差造成的 auto mode 下缩小 lease owner 命令下发窗口，看起来是误判，实际上这种情况，下一次关于这个 pid 的 cmd 大概率还是会选到这个 lease owner，所以也不算误判。
 
     若没有 lease owner，新分配的 lease owner 副本模式下大概率是 src cid（除了 lease owner 本身分配优先选 src cid 之外，在下发前也有根据 lease owner 调整 cmd  src cid 的逻辑），较大概率是 dst cid，然后才是其他节点。
 
     另外，命令下发窗口可能被自动调节的前提是要打满一个窗口，也就是要有满一个窗口大小的命令数大部分都失败才有可能引发窗口收缩，比如 lease owner = 1, src_cid = 2, dst_cid = 3，若集群中只是 cid 2 IO 性能性能差，基本上需要给到 1 的 cmd src 基本都是 2 才满足整个窗口命令基本超时的条件，而此时把 1 的窗口跳调小也算正常，因为后续这些超时 cmd 的 pextent 再生成 cmd 时，lease owner 大概率还是 1。
 
-6. 在 meta rpc server 中拷贝一份 topo cache [ZBS-27232](http://jira.smartx.com/browse/ZBS-27232)
+7. 在 meta rpc server 中拷贝一份 topo cache [ZBS-27232](http://jira.smartx.com/browse/ZBS-27232)，topo cache 中变更后，主动推送到其他线程。
 
-6. 检查 recover/migrate speed 在前端界面和 prometheus 中的数值是否准确，meta 侧跟 chunk 侧的 total speed 和 local speed 和 remote speed
+8. 检查 recover/migrate speed 在前端界面和 prometheus 中的数值是否准确，meta 侧跟 chunk 侧的 total speed 和 local speed 和 remote speed
 
-6. 调整 business io 影响内部 IO 的 iops 和 bps 阈值。
+9. 调整 business io 影响内部 IO 的 iops 和 bps 阈值。
 
-    1. 为啥在 nvme 中，speed limit 跟盘数量有关，而 iops/bps busy factor 却无关？还是需要在物理集群上测一下。比如 nvme 2 块盘和 4 块盘提供的 iops/bps 上限可能是相同的？这个 speed limit 其实就是 bps
-
-    1. 目前 business io 的 iops 和 bps 阈值的判定是只要有 NVME SSD 就是 500 MiB/s，有 SATA SSD 就是 150 MiB/s，有 HDD 就是 100 MiB/s，只看盘类型，不论盘数量，但这里应该要跟盘数量有关；
-
-        limit.normal_io_busy_iops_throttle 应该换用 kBusinessIOPercentThrottle，跟 kInternalIOPercentThrottle 对应起来。
-
-    2. 超参数的设定上，HDD 目前是 1000 的 IOPS 和 bps 100 MiB/s；
-
-        裸盘 fio 测试中 HDD 4k iops 34k，bps 130 MiB/s。HDD 256k iops 500，bps 130 MiB/s。
-
-        zbs 目前能发挥出 SATA SSD 和 HDD 的性能，但无法用满 NVME SSD 的性能。
-
-        针对 HDD 需要每个盘算一下 throttle
-
-        nvme SSd 4k iops 400 多 k（之前版本，2 块盘 p5620，600k）
-
-    4. 对 interval io 的判定除了 bps，是否需要把 iops 用起来？recover io 一定是 256 kb ，所以只关注 bps？sink io 有可能是 4k，所以应该关注 iops ？
+    1. 理论上我应该拿到所有磁盘类型+数量的上限后，用 GLAGS 去定义能给到 internal io 用的磁盘性能比例（0.5）和网络带宽比例（0.4 / 0.5），并给出 app io busy 的判断准则（比如  0.3 的上限，这样预留 0.2 出来做缓冲）。
+    2. ssd 的限速不能直接跟盘成正比，主要是考虑到 zbs 没法发挥出磁盘性能上限，比如 4 块 nvme ssd 跟 2 块性能差不多。ssd 的 app io busy 先保留目前是一个定值的做法，但应该是一个变化值，综合考虑网络带宽以及磁盘性能，盘多了之后，瓶颈可能在网络带宽上，而网络带宽这事儿没法直接给出 app io busy iops（不管下沉数据，直接用 bps / 256 KiB？）
+    2. 对 interval io 的判定除了 bps，是否需要把 iops 用起来？recover io 一定是 256 kb ，所以只关注 bps？sink io 有可能是 4k，所以应该关注 iops ？
 
 10. 更新 recover / migrate 文档，看 zbs 已有临时副本相关文档，把 meta 的业务逻辑看懂之后，要看 zk 和 dbcluster 相关逻辑，access session 的建立/断开连接逻辑，看 meta2 文档，看 sink manager 和 drain manager 的区别。
 
 11. 分配临时副本空间检查适配 pinperf in tiering，[ZBS-27272](http://jira.smartx.com/browse/ZBS-27272)，HasSpaceForTemporaryReplica 的修改，顺便把对 CowLExtentTransaction 的理解补充上
 
-     1. prior pextent allocation
+      1. prior pextent allocation
 
-        升级到 560，但没有开启之前，不允许创建 prior pextent 的代码在哪里？
+         升级到 560，但没有开启之前，不允许创建 prior pextent 的代码在哪里？
 
-        replica_capacity_only 模式允许创建 prior pextent 吗？
+         replica_capacity_only 模式允许创建 prior pextent 吗？
 
-        改动之后，可能的坑点：
+         改动之后，可能的坑点：
 
-        1. thick 有个最高 99%；
-        2. temp pid 有个最高 95%；
-        3. pid 分配 location 除了 ec 之外，并不会随机打乱 cid 在 loc 中的位置；
+         1. thick 有个最高 99%；
+         2. temp pid 有个最高 95%；
+         3. pid 分配 location 除了 ec 之外，并不会随机打乱 cid 在 loc 中的位置；
 
-     2. piror recover
+      2. piror recover
 
-         先把 recover 关于 prior 的部分做完，等有空再考虑把 topo distance 做好，zbs4，另外，空间充足可以先过滤，但是尽量不选 isolated 和双活需要 2 ：1 的特性需要特别考虑。
+          先把 recover 关于 prior 的部分做完，等有空再考虑把 topo distance 做好，zbs4，另外，空间充足可以先过滤，但是尽量不选 isolated 和双活需要 2 ：1 的特性需要特别考虑。
 
-         1. recover / removing chunk dst 允许选 isolated ？允许，为了尽快恢复/迁出；
+          1. recover / removing chunk dst 允许选 isolated ？允许，为了尽快恢复/迁出；
 
-         2. 把 avail cmd slots 提前算好放 exclude_cids；
+          2. 把 avail cmd slots 提前算好放 exclude_cids；
 
-         3. GenerateMigrateCmdsForRemovingChunk 中 migrate_generate_used_cmd_slots 对 src / dst 的判断应该传入 AllocRecoverCap/PerfExtents；
+          3. GenerateMigrateCmdsForRemovingChunk 中 migrate_generate_used_cmd_slots 对 src / dst 的判断应该传入 AllocRecoverCap/PerfExtents；
 
-            传入会有点麻烦，可能出现 removing chunk 的时候总是选某个 src / dst cid，但那个 dst cid 可生成的余额不足，还一直选他。但是影响最大也就造成一次 generate 过程中只选 1 个 src cid，用满他的 256 的配额，所以先不修复。
+             传入会有点麻烦，可能出现 removing chunk 的时候总是选某个 src / dst cid，但那个 dst cid 可生成的余额不足，还一直选他。但是影响最大也就造成一次 generate 过程中只选 1 个 src cid，用满他的 256 的配额，所以先不修复。
 
-         这部分代码可以写到 recover manager，另外也可以总结出一个 recover 和 alloc 虽然大部分相同，但是存在的细微差别。
+          这部分代码可以写到 recover manager，另外也可以总结出一个 recover 和 alloc 虽然大部分相同，但是存在的细微差别。
 
-         agile recover 和 special recover 回头处理，都是利用到临时副本的，入口是 remove replica
+          agile recover 和 special recover 回头处理，都是利用到临时副本的，入口是 remove replica
 
-     3. prior migrate
+      3. prior migrate
 
-        只有 replica 才会分配临时副本，所以 ec 不会有 agile recover
+         只有 replica 才会分配临时副本，所以 ec 不会有 agile recover
 
-        临时副本在 perf layer 中一定是 thin 的，临时副本一定分配上
+         临时副本在 perf layer 中一定是 thin 的，临时副本一定分配上
 
-        有很多代码适合 pick 到 55x，但在 56x 中直接被删除了，见 [ZBS-27109](http://jira.smartx.com/browse/ZBS-27109)
+         有很多代码适合 pick 到 55x，但在 56x 中直接被删除了，见 [ZBS-27109](http://jira.smartx.com/browse/ZBS-27109)
 
-        ```
-        for (const auto& [cid, info] : healthy_chunks_map) {
-        LOG(INFO) << "yiwu cid " << cid << " perf thick allocated "
-        << GetAllocatedSpace(info, PK_PERF_THICK) / kExtentSize << " perf thick valid "
-        << GetValidSpace(info, PK_PERF_THICK) / kExtentSize << " perf thin allocated "
-        << GetAllocatedSpace(info, PK_PERF_THIN) / kExtentSize << " perf thin valid "
-        << GetValidSpace(info, PK_PERF_THIN) / kExtentSize << " cap allocated "
-        << GetAllocatedSpace(info, PK_CAP) / kExtentSize << " cap valid "
-        << GetValidSpace(info, PK_CAP) / kExtentSize;
-        }
-        
-        LOG(INFO) << "yiwu sp_load " << sp_load << " pk " << pk;
-        ```
+         ```
+         for (const auto& [cid, info] : healthy_chunks_map) {
+         LOG(INFO) << "yiwu cid " << cid << " perf thick allocated "
+         << GetAllocatedSpace(info, PK_PERF_THICK) / kExtentSize << " perf thick valid "
+         << GetValidSpace(info, PK_PERF_THICK) / kExtentSize << " perf thin allocated "
+         << GetAllocatedSpace(info, PK_PERF_THIN) / kExtentSize << " perf thin valid "
+         << GetValidSpace(info, PK_PERF_THIN) / kExtentSize << " cap allocated "
+         << GetAllocatedSpace(info, PK_CAP) / kExtentSize << " cap valid "
+         << GetValidSpace(info, PK_CAP) / kExtentSize;
+         }
+         
+         LOG(INFO) << "yiwu sp_load " << sp_load << " pk " << pk;
+         ```
 
-13. 对于仅被 thin volume / snapshot 引用的 capacity pextent，其 provision 将在 gc 扫描时被更新为 thin，随心跳下发给 lsm，如果有 pextent 被 thick volume 引用，那其 provision 将被更新为 thick，随心跳下发给 lsm，[ZBS-15094](http://jira.smartx.com/browse/ZBS-15094)。
+12. 对于仅被 thin volume / snapshot 引用的 capacity pextent，其 provision 将在 gc 扫描时被更新为 thin，随心跳下发给 lsm，如果有 pextent 被 thick volume 引用，那其 provision 将被更新为 thick，随心跳下发给 lsm，[ZBS-15094](http://jira.smartx.com/browse/ZBS-15094)。
 
-14. 根据最新 lsm 设计文档大致了解 lsm2 
+13. 根据最新 lsm 设计文档大致了解 lsm2 
 
-15. 补一个同时有多个 removing cid 的单测；
+14. 补一个同时有多个 removing cid 的单测；
 
-16. refactor migrate for repair topo，从 GenerateMigrateCmdsForRepairTopo 开始改；
+15. refactor migrate for repair topo，从 GenerateMigrateCmdsForRepairTopo 开始改；
 
-      1. 待做 [ZBS-13401](http://jira.smartx.com/browse/ZBS-13401)，让中高负载的容量均衡策略都要保证 prefer local 本地的副本不会被迁移，且如果 prefer local 变了，那么也要让他所在的 chunk 有一个本地副本（有个上限是保留归保留，但如果超过 95%，超过的 部分不考虑 prefer local 一定有对应的副本）
+       1. 待做 [ZBS-13401](http://jira.smartx.com/browse/ZBS-13401)，让中高负载的容量均衡策略都要保证 prefer local 本地的副本不会被迁移，且如果 prefer local 变了，那么也要让他所在的 chunk 有一个本地副本（有个上限是保留归保留，但如果超过 95%，超过的 部分不考虑 prefer local 一定有对应的副本）
 
-          怎么判断是否会超过 95% 呢？
+           怎么判断是否会超过 95% 呢？
 
-          如果 volume 的 prefer local 到新 chunk 后（不论是人为运维还是上层虚拟机被迁移到其他节点），现有的迁移策略能让新位置的 prefer local 有副本吗？
+           如果 volume 的 prefer local 到新 chunk 后（不论是人为运维还是上层虚拟机被迁移到其他节点），现有的迁移策略能让新位置的 prefer local 有副本吗？
 
-          如果不能，在 migrate for rebalance 之后，再有一个 migrate for prefer local，他的目的是保证让 prefer local 有副本，
+           如果不能，在 migrate for rebalance 之后，再有一个 migrate for prefer local，他的目的是保证让 prefer local 有副本，
 
-          [ZBS-25949](http://jira.smartx.com/browse/ZBS-25949) 修改后的 migrate for repair topo 能够达到的效果是不会 replace prefer local，在 prefer local 满足 topo rank 不降级的情况下，dst 会优先选 prefer local，貌似能达到这个效果？双活下也可以吗？prefer local 从 prefer zone 迁移到 secondary zone。
+           [ZBS-25949](http://jira.smartx.com/browse/ZBS-25949) 修改后的 migrate for repair topo 能够达到的效果是不会 replace prefer local，在 prefer local 满足 topo rank 不降级的情况下，dst 会优先选 prefer local，貌似能达到这个效果？双活下也可以吗？prefer local 从 prefer zone 迁移到 secondary zone。
 
-          migrate for ec repair topo 中对 ec src 的选择过于宽松了，其实还可以选到更好的 src，但是目前不做处理，目前只根据 replace 来选 src
+           migrate for ec repair topo 中对 ec src 的选择过于宽松了，其实还可以选到更好的 src，但是目前不做处理，目前只根据 replace 来选 src
 
-17. MgirateFilter 可以改成 allow, deny 都允许的，如果没要求，就传入 std::nullopt
+16. MgirateFilter 可以改成 allow, deny 都允许的，如果没要求，就传入 std::nullopt
 
 
 
