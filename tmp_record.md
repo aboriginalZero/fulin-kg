@@ -16,12 +16,18 @@
     3. AccessHandler::ComposeAccessDataReportRequest(meta::AccessDataReportRequest *request)
     4. RecoverHandler::ListRecoverAndMigrateInfo(&recover_list, true)，其中 ListRecoverResponse recover_list;
     5. ComposeRecoverPerf(ListRecoverResponse* recover_list, RecoverPerf* perf)
-    6. 
-    7. 
     
     AccessHandler::ComposeAccessPerf(AccessDataReportRequest* request, bool only_summary) 这个统计的是普通 io，ComposeRecoverPerf 统计的 reposition io 相关的。
     
-2. 在一个脚本中跑多个 fio 任务，lun 更改之后，计算端怎么感知到，目前是先退出再进去。
+2. zbs-chunk migrate list 中
+
+    1. 只有 lease owner 上的 Total Migrate Speed 才有值，而这也是会给到 meta 的值，才会有 reposition list，其中 STATE = INIT 的 pid 表示在 recover handler 的 pending 队列中，STATE = READ / WRITE 的 pid 表示正在执行，
+    2. From Local Speed 指的是该节点作为本地
+    3. 在 RecoverInfo 加一个显示 pextent type
+
+    
+
+3. 在一个脚本中跑多个 fio 任务，lun 更改之后，计算端怎么感知到，目前是先退出再进去。
 
     看下 zbs-meta session list_iscsi_conn 给出的 session id 和 cid
 
@@ -225,7 +231,7 @@
 
     
 
-3. 从一个  volume 可以拿到所有 vextent id，据此可以拿到 lid，接着
+4. 从一个  volume 可以拿到所有 vextent id，据此可以拿到 lid，接着
 
     ```c++
     Volume volume;
@@ -261,7 +267,7 @@
 
       目前创建一个 prior volume 允许指定 thin_provision = true，这会让该 cap pextents 是 thin 的。
 
-4. SetBitmap() 只在 2 个地方被调用，ReplicaIOHandler::SetStagingBlockInfo/UpdateStagingBlockInfo，
+5. SetBitmap() 只在 2 个地方被调用，ReplicaIOHandler::SetStagingBlockInfo/UpdateStagingBlockInfo，
 
     1. SetStagingBlockInfo()
 
@@ -276,27 +282,27 @@
                 1. ReplicaIOHandler::DoUpdateAndTemporaryReplica
                 2. ReplicaIOHandler::UpdateInternal()
 
-5. 编译换回 docker
+6. 编译换回 docker
 
-6. 若已有 lease owner，他可能跟 src/dst cid 不同，如果是由于 src/dst 单点 IO 性能差造成的 auto mode 下缩小 lease owner 命令下发窗口，看起来是误判，实际上这种情况，下一次关于这个 pid 的 cmd 大概率还是会选到这个 lease owner，所以也不算误判。
+7. 若已有 lease owner，他可能跟 src/dst cid 不同，如果是由于 src/dst 单点 IO 性能差造成的 auto mode 下缩小 lease owner 命令下发窗口，看起来是误判，实际上这种情况，下一次关于这个 pid 的 cmd 大概率还是会选到这个 lease owner，所以也不算误判。
 
     若没有 lease owner，新分配的 lease owner 副本模式下大概率是 src cid（除了 lease owner 本身分配优先选 src cid 之外，在下发前也有根据 lease owner 调整 cmd  src cid 的逻辑），较大概率是 dst cid，然后才是其他节点。
 
     另外，命令下发窗口可能被自动调节的前提是要打满一个窗口，也就是要有满一个窗口大小的命令数大部分都失败才有可能引发窗口收缩，比如 lease owner = 1, src_cid = 2, dst_cid = 3，若集群中只是 cid 2 IO 性能性能差，基本上需要给到 1 的 cmd src 基本都是 2 才满足整个窗口命令基本超时的条件，而此时把 1 的窗口跳调小也算正常，因为后续这些超时 cmd 的 pextent 再生成 cmd 时，lease owner 大概率还是 1。
 
-7. 在 meta rpc server 中拷贝一份 topo cache [ZBS-27232](http://jira.smartx.com/browse/ZBS-27232)，topo cache 中变更后，主动推送到其他线程。
+8. 在 meta rpc server 中拷贝一份 topo cache [ZBS-27232](http://jira.smartx.com/browse/ZBS-27232)，topo cache 中变更后，主动推送到其他线程。
 
-8. 检查 recover/migrate speed 在前端界面和 prometheus 中的数值是否准确，meta 侧跟 chunk 侧的 total speed 和 local speed 和 remote speed
+9. 检查 recover/migrate speed 在前端界面和 prometheus 中的数值是否准确，meta 侧跟 chunk 侧的 total speed 和 local speed 和 remote speed
 
-9. 调整 business io 影响内部 IO 的 iops 和 bps 阈值。
+10. 调整 business io 影响内部 IO 的 iops 和 bps 阈值。
 
     1. 理论上我应该拿到所有磁盘类型+数量的上限后，用 GLAGS 去定义能给到 internal io 用的磁盘性能比例（0.5）和网络带宽比例（0.4 / 0.5），并给出 app io busy 的判断准则（比如  0.3 的上限，这样预留 0.2 出来做缓冲）。
     2. ssd 的限速不能直接跟盘成正比，主要是考虑到 zbs 没法发挥出磁盘性能上限，比如 4 块 nvme ssd 跟 2 块性能差不多。ssd 的 app io busy 先保留目前是一个定值的做法，但应该是一个变化值，综合考虑网络带宽以及磁盘性能，盘多了之后，瓶颈可能在网络带宽上，而网络带宽这事儿没法直接给出 app io busy iops（不管下沉数据，直接用 bps / 256 KiB？）
     2. 对 interval io 的判定除了 bps，是否需要把 iops 用起来？recover io 一定是 256 kb ，所以只关注 bps？sink io 有可能是 4k，所以应该关注 iops ？
 
-10. 更新 recover / migrate 文档，看 zbs 已有临时副本相关文档，把 meta 的业务逻辑看懂之后，要看 zk 和 dbcluster 相关逻辑，access session 的建立/断开连接逻辑，看 meta2 文档，看 sink manager 和 drain manager 的区别。
+11. 更新 recover / migrate 文档，看 zbs 已有临时副本相关文档，把 meta 的业务逻辑看懂之后，要看 zk 和 dbcluster 相关逻辑，access session 的建立/断开连接逻辑，看 meta2 文档，看 sink manager 和 drain manager 的区别。
 
-11. 分配临时副本空间检查适配 pinperf in tiering，[ZBS-27272](http://jira.smartx.com/browse/ZBS-27272)，HasSpaceForTemporaryReplica 的修改，顺便把对 CowLExtentTransaction 的理解补充上
+12. 分配临时副本空间检查适配 pinperf in tiering，[ZBS-27272](http://jira.smartx.com/browse/ZBS-27272)，HasSpaceForTemporaryReplica 的修改，顺便把对 CowLExtentTransaction 的理解补充上
 
       1. prior pextent allocation
 
@@ -348,13 +354,13 @@
          LOG(INFO) << "yiwu sp_load " << sp_load << " pk " << pk;
          ```
 
-12. 对于仅被 thin volume / snapshot 引用的 capacity pextent，其 provision 将在 gc 扫描时被更新为 thin，随心跳下发给 lsm，如果有 pextent 被 thick volume 引用，那其 provision 将被更新为 thick，随心跳下发给 lsm，[ZBS-15094](http://jira.smartx.com/browse/ZBS-15094)。
+13. 对于仅被 thin volume / snapshot 引用的 capacity pextent，其 provision 将在 gc 扫描时被更新为 thin，随心跳下发给 lsm，如果有 pextent 被 thick volume 引用，那其 provision 将被更新为 thick，随心跳下发给 lsm，[ZBS-15094](http://jira.smartx.com/browse/ZBS-15094)。
 
-13. 根据最新 lsm 设计文档大致了解 lsm2 
+14. 根据最新 lsm 设计文档大致了解 lsm2 
 
-14. 补一个同时有多个 removing cid 的单测；
+15. 补一个同时有多个 removing cid 的单测；
 
-15. refactor migrate for repair topo，从 GenerateMigrateCmdsForRepairTopo 开始改；
+16. refactor migrate for repair topo，从 GenerateMigrateCmdsForRepairTopo 开始改；
 
        1. 待做 [ZBS-13401](http://jira.smartx.com/browse/ZBS-13401)，让中高负载的容量均衡策略都要保证 prefer local 本地的副本不会被迁移，且如果 prefer local 变了，那么也要让他所在的 chunk 有一个本地副本（有个上限是保留归保留，但如果超过 95%，超过的 部分不考虑 prefer local 一定有对应的副本）
 
@@ -368,7 +374,7 @@
 
            migrate for ec repair topo 中对 ec src 的选择过于宽松了，其实还可以选到更好的 src，但是目前不做处理，目前只根据 replace 来选 src
 
-16. MgirateFilter 可以改成 allow, deny 都允许的，如果没要求，就传入 std::nullopt
+17. MgirateFilter 可以改成 allow, deny 都允许的，如果没要求，就传入 std::nullopt
 
 
 
@@ -622,7 +628,7 @@ chunk recover 执行的慢可能原因：慢盘、缓存击穿、normal instead 
 * local_chunk_io_timeout_ms = 8s，local chunk io timeout ms，返回的是 ELSMCanceled
 * chunk_recover_io_timeout_ms = 9s，chunk recover io timeout ms，recover 远程 IO，这个远程指的是 access (pextent io handler) 给到非本地的 lsm (local io handler)。
 * remote_chunk_io_timeout_ms = 9s，remote chunk io timeout ms，非 recover 远程 IO （ZBS 对网络有限制，如果 ping 大包来回超过 1s，认为网络严重故障，系统不工作）。
-* chunk_lsm_recover_timeout_sec = 10 min，在 lsm 侧每 60s 检查一次 recover pextent，如果超过 recover 时间超过 10 min 都没有结束，会将 extent 标记为 EXTENT_STATUS_INVALID，后续跟随 data report  给到 meta，不过 meta 没有对他特别处理。
+* chunk_lsm_recover_timeout_sec = 10 min，在 lsm 侧每 60s 检查一次 recover pextent，如果 recover 时间超过 10 min 都没有结束，会将 extent 标记为 EXTENT_STATUS_INVALID，dst cid 上的这个 pextent inode 会被 lsm gc，之后接着 recover 会抛出 ENotFound（这个 pid 后续跟随 data report  给到 meta，不过 meta 没有对 EXTENT_STATUS_INVALID 特别处理）
 
 
 
