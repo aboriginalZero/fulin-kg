@@ -52,6 +52,14 @@ GDB 是一款可以用来调试 C/C++/Java/Go 的调试工具，在类 Unix 系�
     
     如果将容器所有内容都打印到日志中再去检索倒是不需要这么做。
     
+    gdb 9.2.3 中要用引号
+    
+    ```
+    (gdb) p ('zbs::meta::MetaServer')*0xaaad15a66700
+    ```
+    
+    
+    
 4. 运行 gdb
 
     ```shell
