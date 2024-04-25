@@ -258,6 +258,12 @@ thread apply all bt
    (gdb) print 在这个线程中的变量
    ```
 
+   下载 https://newgh.smartx.com/sijie-sun/smartx-scripts/blob/master/zbs-gdb/mongo_printers.py，并在 gdb 中 source mongo_printers.py 就可以打印 flat_hash_map 类型
+
+   ```
+   (gdb) p (('zbs::meta::MetaServer')*0xaaad15a66700)->context_->recover_manager->next_recover_scan_pid_map_
+   ```
+
 5. 查看特殊类变量
 
    1. 查看 co-list，[对应说明](https://docs.google.com/document/d/1kLfRK0X44sq_8O5hOYIYdZQk8XV5rragK1izof8ZqyI/edit#heading=h.b88mlnz9busr)
@@ -268,8 +274,6 @@ thread apply all bt
       # 执行对应的 C++ 代码 ((detail::ThreadLocalData*)cur_tld)->pid
       gdb.parse_and_eval("((detail::ThreadLocalData*)%s)->pid"%cur_tld.str())
       ```
-
-
 
 [参考1](https://zhuanlan.zhihu.com/p/74897601)，[参考2](https://cloud.tencent.com/developer/article/1142947)
 

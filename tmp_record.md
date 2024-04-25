@@ -18,7 +18,10 @@
 
     4. 进出维护模式，把 migrate cmd 清掉，防止他抢资源，让升级快点结束。进出维护模式的时间应该不长，这段时间内的 migrate 重要吗？
 
-3. recover cmd 快速生成的逻辑在 arm 的环境中貌似没有起作用
+
+3. 补一下 recover manager 下发不成功的 log
+
+3. recover cmd 快速生成的逻辑在 arm 的环境中貌似没有起作用，因为分页 + pid 数量变大的原因，多扫一次的做法提升并不明显了，可能得多扫一轮？
 
 4. 在 meta rpc server 中拷贝一份 topo cache [ZBS-27232](http://jira.smartx.com/browse/ZBS-27232)，topo cache 中变更后，主动推送到其他线程。
 
