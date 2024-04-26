@@ -1,22 +1,59 @@
 
-1. zbs-chunk migrate list 中
 
+esxcfg-route -d 192.168.33.2/32 10.0.0.21; esxcfg-route -a 192.168.33.2/32 10.0.0.22; sleep 3; esxcfg-route -d 192.168.33.2/32 10.0.0.22; esxcfg-route -a 192.168.33.2/32 10.0.0.21; 
+
+
+
+执行以下操作前，需要保证所有 ESXi 上的 192.168.33.2 的下一跳指向本地 SCVM 存储 IP：
+
+在所有 SCVM 节点上执行：
+
+1. 进入 /usr/share/tuna/script/scvm_failure_common 目录，在后面的操作中，不要切换目录。 
+2. 备份已有 io reroute 脚本。命令：mv reroute.py reroute.py.bak
+3. 将新的 reroute.py 脚本复制到同级目录；
+4. 检查新的 reroute.py 脚本 md5sum = 60b0c13cd5680afb4f71c65a4785a07f
+5. 将同级目录中的 rereoute_version 文件中记录的版本号从 2.2 改成 2.2.1；
+
+在任一 SCVM 节点上执行：
+
+1. zbs-deploy-manage update_reroute_version
+
+
+
+
+
+esxcfg-route -a 192.168.33.2/32 10.0.0.22
+
+ 10.0.0.22
+
+esxcfg-route -a 192.168.33.2/32 10.0.0.22
+
+
+
+
+
+
+
+
+1. zbs-chunk migrate list 中
     1. 只有 lease owner 上的 Total Migrate Speed 才有值，而这也是会给到 meta 的值，才会有 reposition list，其中 STATE = INIT 的 pid 表示在 recover handler 的 pending 队列中，STATE = READ / WRITE 的 pid 表示正在执行，
     2. From Local Speed 指的是该节点作为本地
     3. 在 RecoverInfo 加一个显示 pextent type
-
 2. 分开设置 recover 和 migrate 的单次 scan 上限，generate recover cmd 的过程中如果有了 migrate cmd，是可以打断他的。
 
 
     1. 把 recover 的分页跟 Migrate 的独立开来，并改大点。减少还有待恢复数据但却先下发 migrate cmd 把 cmd slot 等资源用满的情况；
-
+    
     2. 如果 generate recover cmd ，可以清空待下发的 migrate cmd 吗？
-
+    
         已下发的 migrate cmd，只要他还没完成，recover handler 收到同一 pid 的 recover cmd 会被直接丢弃，不会执行。
-
+    
     3. recover handler 中的执行队列，可否做成 ever exist = false 且 origin_pid = 0 的 pid 优先执行，其他 pid 按 FIFO 的顺序执行。
-
+    
     4. 进出维护模式，把 migrate cmd 清掉，防止他抢资源，让升级快点结束。进出维护模式的时间应该不长，这段时间内的 migrate 重要吗？
+    
+    4. recover manager 对于没有实际分配的数据会跳过命令下发配额的限制，快速下发给 access，如果这部分数据是从本地读，这个 recover 很快就会完成，但 recover handler 的 pending_recover_cmds_ 是按 FIFO 的顺序进 running_recover_pids_ 执行的，所以后发的符合上述特点的 pid 也没法快速执行，可能被前面执行慢的 pid 拖慢。
+
 
 
 3. 补一下 recover manager 下发不成功的 log
