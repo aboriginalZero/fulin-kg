@@ -1,6 +1,10 @@
 
 
-esxcfg-route -d 192.168.33.2/32 10.0.0.21; esxcfg-route -a 192.168.33.2/32 10.0.0.22; sleep 3; esxcfg-route -d 192.168.33.2/32 10.0.0.22; esxcfg-route -a 192.168.33.2/32 10.0.0.21; 
+fio -ioengine=libaio -invalidate=1 -iodepth=128 -ramp_time=0 -runtime=300000 -time_based -direct=1 -bs=4k -filename=/dev/sdc -name=wrtie_sdc -rw=randwrite;
+
+
+
+esxcfg-route -d 192.168.33.2/32 10.0.0.22; esxcfg-route -a 192.168.33.2/32 10.0.0.21; sleep 3; esxcfg-route -d 192.168.33.2/32 10.0.0.21; esxcfg-route -a 192.168.33.2/32 10.0.0.22; 
 
 
 
@@ -61,6 +65,8 @@ esxcfg-route -a 192.168.33.2/32 10.0.0.22
 3. recover cmd 快速生成的逻辑在 arm 的环境中貌似没有起作用，因为分页 + pid 数量变大的原因，多扫一次的做法提升并不明显了，可能得多扫一轮？
 
 4. 在 meta rpc server 中拷贝一份 topo cache [ZBS-27232](http://jira.smartx.com/browse/ZBS-27232)，topo cache 中变更后，主动推送到其他线程。
+
+5. 拓扑均衡迁移可以允许使用的空间上限是 90%，否则前端会报警
 
 5. 从一个  volume 可以拿到所有 vextent id，据此可以拿到 lid，接着
 

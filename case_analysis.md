@@ -1,3 +1,59 @@
+### 快速切出切回路由出现 IO 重试
+
+SCVM 上的时间线
+
+1. 12:15:25，scvm222 上新建 4 个连接，端口 903，899，900，901；
+2. 路由从 10.22（scvm 222） 切出到 10.21（scvm 111）；
+3. 12:16:27，scvm111 上新建 4 个连接，端口 903，904，905，906；
+4. 12:16:27，scvm222 上关闭 4 个连接，端口 903，899，900，901，端口 903 对应的 socket 开始处于 FIN_WAIT1 的状态直到 12:18:13；
+5. 路由从  10.21（scvm 111） 切回到 10.22（scvm 222）；
+6. 12:16:30，scvm222 上新建 3 个连接，端口 907，908，909；
+7. 12:16:30，scvm111 上关闭 4 个连接，端口 903，904，905，906，端口 903 对应的 socket 开始处于 FIN_WAIT1 的状态直到 12:17:32；
+
+ESXi 上的时间线
+
+1. 12:15:26，存在占用端口 903，899，900，901 的连接；
+2. 12:16:28，存在占用端口 903，904，905，906 的连接；
+3. 12:16:31，存在占用端口 903，907，908，909 的连接，并在这之后，端口 903 对应的连接的 Recv Q 始终有值且在累加，从创建以来就是 ESTABLISHED 状态，直到 12:17:33 该连接断开（此时内核日志中有 VSCSI Reset）。
+
+```shell
+# 抓存储网卡上的 syn 和 rst 包，端口 2049 是 nfs server 监听端口
+tcpdump -i ens224 "tcp[tcpflags] & (tcp-syn|tcp-rst) != 0" and port 2049 -w /tmp/scvm111-yiwu.pcap
+# 读取抓包内容
+tcpdump -r /tmp/scvm111-yiwu.pcap
+# scvm 查看端口连接
+netstat -anl | grep 2049
+# esxi 查看端口连接
+esxcli network ip connection list | grep 2049
+# 在 scvm 上用丢 ping 包的方式模拟切出切回
+while true; do iptables -A INPUT -i ens224 -p icmp --icmp-type echo-request -j DROP; sleep 4; iptables -D INPUT -i ens224 -p icmp --icmp-type echo-request -j DROP; sleep 60; done
+# 查看 iptables 配置
+iptables -L 
+```
+
+查看
+
+```shell
+# 为 volume 注入延迟
+zbs-chunk volume inject_latency bc04f2bc-0558-4781-89be-bf1ecc53272f --readwrite_latency_ms 10000
+# 用以查看有 IO 的 volume
+zbs-perf-tools volume list
+# 查看所有 export
+zbs-nfs export list
+# 查看 export 包含的文件，从 nfs 对应的 volume id 中取前 3 段
+zbs-nfs inode list 8b2ccfaf-00a0-4e34
+# 用 DIR 的 inode id 可以层层往下查看最终的 FILE
+```
+
+esxi 上
+
+```shell
+# 查看所有 datastore，包括本地的和通过 nfs 挂载的
+cd /vmfs/volumes/ 
+```
+
+
+
 ### 不在机柜的节点跟在机柜的节点拓扑距离是 0
 
 ```c++
@@ -143,7 +199,7 @@ TEST_F(RecoverManagerTest, YIWU) {
     LOG(INFO) << "yiwu CoAsyncRpcClient::CallMethod request " << request->ShortDebugString() << " rpc client header " << req_hdr.DebugString() << " rpc client header " << func(reinterpret_cast<char*>(&req_hdr), sizeof(RpcHeader)) << " rpc client buffer " << func(req_buf, message_len);
     ```
 
-### 问题 1
+### ESXi 上添加虚拟磁盘对应的副本分配
 
 1. 卷 08e2d668-098d-4e30-b411-c55d1866353a，dd if=/dev/zero of=c.txt bs=1G seek=100 count=0
 
