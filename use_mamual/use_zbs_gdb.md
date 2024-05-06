@@ -274,6 +274,12 @@ thread apply all bt
       # 执行对应的 C++ 代码 ((detail::ThreadLocalData*)cur_tld)->pid
       gdb.parse_and_eval("((detail::ThreadLocalData*)%s)->pid"%cur_tld.str())
       ```
+      
+   3. 用 gdb 10 可以看 std::unordered_map 类型的变量，且也不需要加载代码
+   
+      ```shell
+      /opt/rh/devtoolset-10/root/bin/gdb -c /home/core/rpc-server.core.3219.1692671991 /usr/sbin/zbs-metad
+      ```
 
 [参考1](https://zhuanlan.zhihu.com/p/74897601)，[参考2](https://cloud.tencent.com/developer/article/1142947)
 
