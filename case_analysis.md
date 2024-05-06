@@ -1,5 +1,9 @@
 ### 快速切出切回路由出现 IO 重试
 
+由于 IOReroute 在无网络故障时有一定概率会发生本地路由快速切出切回以及 ESXi NFS Client 有一定概率会复用之前的端口号导致出现超过 1min 的 IO 中断时间，触发 Oracle rac 虚拟机保护机制，自动重启。
+
+
+
 SCVM 上的时间线
 
 1. 12:15:25，scvm222 上新建 4 个连接，端口 903，899，900，901；
@@ -50,6 +54,10 @@ esxi 上
 ```shell
 # 查看所有 datastore，包括本地的和通过 nfs 挂载的
 cd /vmfs/volumes/ 
+
+tcpdump-uw -i vmk1 "tcp[tcpflags] & (tcp-ack|tcp-syn|tcp-fin) != 0" and host 10.0.0.21  -w /tmp/esxi1-yiwu.pcap
+
+esxcfg-route -d 192.168.33.2/32 10.0.0.21; esxcfg-route -a 192.168.33.2/32 172.20.249.54;
 ```
 
 
