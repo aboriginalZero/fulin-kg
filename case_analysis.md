@@ -35,7 +35,7 @@ while true; do iptables -A INPUT -i ens224 -p icmp --icmp-type echo-request -j D
 iptables -L 
 ```
 
-查看
+scvm 上查看
 
 ```shell
 # 为 volume 注入延迟
@@ -55,9 +55,35 @@ esxi 上
 # 查看所有 datastore，包括本地的和通过 nfs 挂载的
 cd /vmfs/volumes/ 
 
-tcpdump-uw -i vmk1 "tcp[tcpflags] & (tcp-ack|tcp-syn|tcp-fin) != 0" and host 10.0.0.21  -w /tmp/esxi1-yiwu.pcap
+tcpdump-uw -i vmk1 "tcp[tcpflags] & (tcp-ack|tcp-syn|tcp-fin) != 0" and host 10.0.0.21 -nnn -w /tmp/esxi1-yiwu.pcap
 
 esxcfg-route -d 192.168.33.2/32 10.0.0.21; esxcfg-route -a 192.168.33.2/32 172.20.249.54;
+```
+
+fio-test vm
+
+```shell
+fio --name a --filename=/dev/mapper/centos-root --bs=4k --rw=randwrite --ioengine=libaio --direct=1 --iodepth=128 --numjobs=1 --time_based --runtime=300000s
+```
+
+
+
+安装 yum install lz4-devel 失败，可以将 smartx.repo 传过来，另外也可以手动将 rpm 下载到本地，用 rpm -Uvh xxx.rpm 安装
+
+缺失 pmem.h 等包后，可以在编译时 cmake -DBUILD_ENABLE_PMEM=OFF -G Ninja .. 来跳过检查
+
+tcmpdump 抓包，-n 显示 ip 地址，而不是 hostname，-nn 显示端口号而不是协议名，过滤源和目的IP地址以及特定协议
+
+```shell
+tcpdump -i eth0 src host 192.168.1.2 and src port 8080 and dst host 192.168.1.3 and dst port 9090 and not icmp
+```
+
+修改内核参数
+
+```shell
+echo "4" > /proc/sys/net/ipv4/tcp_orphan_retries 
+# 在 /etc/sysctl.conf 中修改 net.ipv4.tcp_orphan_retries=4
+sysctl -a | grep tcp_orphan_retries 查看配置 
 ```
 
 
