@@ -78,6 +78,14 @@ tcmpdump 抓包，-n 显示 ip 地址，而不是 hostname，-nn 显示端口号
 tcpdump -i eth0 src host 192.168.1.2 and src port 8080 and dst host 192.168.1.3 and dst port 9090 and not icmp
 ```
 
+wireshark 过滤 tcp 指定标志位的数据报，syn / ack / fin 同理
+
+```
+tcp.flags.reset == 1
+```
+
+wireshark 关闭相对 TCP 序号，在任一抓包上单点右键，选择协议首选项，然后在弹出菜单中出去 relative seq 前的勾选去掉 relative seq num
+
 修改内核参数
 
 ```shell

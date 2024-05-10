@@ -1,3 +1,31 @@
+有一个 pinghao 报的 recover 问题，待会请 pinghao 描述下，我先讲一下这 2 天处理的 2 个 reroute 问题。
+
+
+
+一个是 tuna 那报的一个问题，从 5.0.3 升级到 5.0.7，有个节点 IO 重路由状态检查失败，上去看了下，有个现象是会删除本地存储 ip，然后又把他添加回来，看了下应该是这个版本里对 session alive 的判断逻辑有问题，当时没有 session alive 字段，他是自己写的一套判断逻辑，应该是有点 bug，还没来得及继续调查，还会出 5.0.8 吗？还需要更细致的调查吗？
+
+
+
+五一期间 ESXi 升级后 SCVM 所在主机的 IO 重路由服务停止工作
+
+8 个节点有 2 个出现问题，看 ESXi 的日志发现这两个节点在 4 月中旬做 scvm 的升级的时候 io reroute 就有问题了，scvm 升级之后，在 io reroute 升级时，scvm 会通过 ssh 的方式在每台 ESXi 上执行多个 cli 用以杀死旧进程，更换最新的 reroute 脚本，使用新的 reroute 文件并更新 crontab。
+
+这个过程中需要获取 reroute 脚本所在的 datastore，这个 ssh 的过程中如果密码/密钥对不上或者网络 Timeout 时会将 datastore_path 认为是 None，然后直接用 None 去拼接路径字符串，填到 crontab 里，导致有问题。
+
+这里没有做好 ssh 异常的处理，是 6 年前就有的问题了，不过现在才暴露，薛总说是这个客户机器物理环境很差，机房非常热，可能是导致 ssh timeout 的原因。
+
+
+
+
+
+SCVM 升级之后，在 IO Reroute 升级时，SCVM 会通过 ssh 的方式在每台 ESXi 上执行多个 cli 用以杀死 reroute 旧进程，更换新版本 reroute 脚本，更新 crontab 中新 reroute 脚本位置并等待唤起新进程。
+
+当 SCVM ssh ESXi Timeout 时，由于没有正确处理异常，会将 datastore_path 认为是 None，路径被拼接成一个错误的 "/vmfs/volumes/None/vmware_scvm_failure/reroute.py" 
+
+crontab 没能正确找到 reroute 脚本所在位置，reroute 进程没起，引发 Tower 报警。
+
+
+
 
 
 fio -ioengine=libaio -invalidate=1 -iodepth=128 -ramp_time=0 -runtime=300000 -time_based -direct=1 -bs=4k -filename=/dev/sdc -name=wrtie_sdc -rw=randwrite;
