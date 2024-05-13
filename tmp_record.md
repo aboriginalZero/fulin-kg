@@ -53,18 +53,6 @@ esxcfg-route -d 192.168.33.2/32 10.0.0.22; esxcfg-route -a 192.168.33.2/32 10.0.
 
 
 
-
-esxcfg-route -a 192.168.33.2/32 10.0.0.22
-
- 10.0.0.22
-
-esxcfg-route -a 192.168.33.2/32 10.0.0.22
-
-
-
-
-
-
 1. zbs-chunk migrate list 中
     1. 只有 lease owner 上的 Total Migrate Speed 才有值，而这也是会给到 meta 的值，才会有 reposition list，其中 STATE = INIT 的 pid 表示在 recover handler 的 pending 队列中，STATE = READ / WRITE 的 pid 表示正在执行，
     2. From Local Speed 指的是该节点作为本地

@@ -110,6 +110,10 @@ LSM 中使用 3 个 LRU 链表管理 Active，Inactive 和 Clean 的数据（LRU
 
 
 
+5.4.x 中，即使 cache 容量还算充足，cache 中很久没被访问的数据也会主动下刷到 partition，iops 500 && bw 50MB/s 是一个分界线，低于这个分界线，下刷到 0.2 就不下刷了，高于这个分界线，下刷到 0.5 就不下刷了。
+
+
+
 LSM 
 
 在 lsm 视角，extent 只是 pblob 的数据集合，实际承担数据的是 256 KiB 的 pblob。prior pblob 的生命周期：
