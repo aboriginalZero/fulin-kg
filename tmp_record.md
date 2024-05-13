@@ -1,3 +1,15 @@
+在 static mode 下也打印限速变化，然后允许不加 mode 设置限速
+
+```shell
+[root@node130-72 16:16:59 ~]$ zbs-meta internal_io update --static_cap_internal_io_speed_limit 120 
+# 下面才生效 
+[root@node130-72 16:17:09 ~]$ zbs-meta internal_io update --static_cap_internal_io_speed_limit 120 --mode 1
+```
+
+
+
+
+
 有一个 pinghao 报的 recover 问题，待会请 pinghao 描述下，我先讲一下这 2 天处理的 2 个 reroute 问题。
 
 
