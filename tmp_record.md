@@ -1,3 +1,11 @@
+拓扑均衡迁移可以允许使用的空间上限是 90%，否则前端会报警
+
+migrate for rebalance 还是有可能因为迁移 prefer local 导致跟 migrate for repair topo 来回迁移
+
+写一个在 90 - 95 期间不允许 migrate for repair topo 的 ut
+
+
+
 在 static mode 下也打印限速变化，然后允许不加 mode 设置限速
 
 ```shell
@@ -86,15 +94,9 @@ esxcfg-route -d 192.168.33.2/32 10.0.0.22; esxcfg-route -a 192.168.33.2/32 10.0.
 
 
 
-3. 补一下 recover manager 下发不成功的 log
-
 3. recover cmd 快速生成的逻辑在 arm 的环境中貌似没有起作用，因为分页 + pid 数量变大的原因，多扫一次的做法提升并不明显了，可能得多扫一轮？
 
-4. 在 meta rpc server 中拷贝一份 topo cache [ZBS-27232](http://jira.smartx.com/browse/ZBS-27232)，topo cache 中变更后，主动推送到其他线程。
-
-5. 拓扑均衡迁移可以允许使用的空间上限是 90%，否则前端会报警
-
-5. 从一个  volume 可以拿到所有 vextent id，据此可以拿到 lid，接着
+4. 从一个  volume 可以拿到所有 vextent id，据此可以拿到 lid，接着
 
     ```c++
     Volume volume;
@@ -130,7 +132,7 @@ esxcfg-route -d 192.168.33.2/32 10.0.0.22; esxcfg-route -a 192.168.33.2/32 10.0.
 
       目前创建一个 prior volume 允许指定 thin_provision = true，这会让该 cap pextents 是 thin 的。
 
-6. SetBitmap() 只在 2 个地方被调用，ReplicaIOHandler::SetStagingBlockInfo/UpdateStagingBlockInfo，
+5. SetBitmap() 只在 2 个地方被调用，ReplicaIOHandler::SetStagingBlockInfo/UpdateStagingBlockInfo，
 
     1. SetStagingBlockInfo()
 
@@ -145,97 +147,97 @@ esxcfg-route -d 192.168.33.2/32 10.0.0.22; esxcfg-route -a 192.168.33.2/32 10.0.
                 1. ReplicaIOHandler::DoUpdateAndTemporaryReplica
                 2. ReplicaIOHandler::UpdateInternal()
 
-7. 编译换回 docker
+6. 编译换回 docker
 
-8. 若已有 lease owner，他可能跟 src/dst cid 不同，如果是由于 src/dst 单点 IO 性能差造成的 auto mode 下缩小 lease owner 命令下发窗口，看起来是误判，实际上这种情况，下一次关于这个 pid 的 cmd 大概率还是会选到这个 lease owner，所以也不算误判。
+7. 若已有 lease owner，他可能跟 src/dst cid 不同，如果是由于 src/dst 单点 IO 性能差造成的 auto mode 下缩小 lease owner 命令下发窗口，看起来是误判，实际上这种情况，下一次关于这个 pid 的 cmd 大概率还是会选到这个 lease owner，所以也不算误判。
 
     若没有 lease owner，新分配的 lease owner 副本模式下大概率是 src cid（除了 lease owner 本身分配优先选 src cid 之外，在下发前也有根据 lease owner 调整 cmd  src cid 的逻辑），较大概率是 dst cid，然后才是其他节点。
 
     另外，命令下发窗口可能被自动调节的前提是要打满一个窗口，也就是要有满一个窗口大小的命令数大部分都失败才有可能引发窗口收缩，比如 lease owner = 1, src_cid = 2, dst_cid = 3，若集群中只是 cid 2 IO 性能性能差，基本上需要给到 1 的 cmd src 基本都是 2 才满足整个窗口命令基本超时的条件，而此时把 1 的窗口跳调小也算正常，因为后续这些超时 cmd 的 pextent 再生成 cmd 时，lease owner 大概率还是 1。
 
-9. 检查 recover/migrate speed 在前端界面和 prometheus 中的数值是否准确，meta 侧跟 chunk 侧的 total speed 和 local speed 和 remote speed
+8. 检查 recover/migrate speed 在前端界面和 prometheus 中的数值是否准确，meta 侧跟 chunk 侧的 total speed 和 local speed 和 remote speed
 
-10. 调整 business io 影响内部 IO 的 iops 和 bps 阈值。
+9. 调整 business io 影响内部 IO 的 iops 和 bps 阈值。
 
     1. 理论上我应该拿到所有磁盘类型+数量的上限后，用 GLAGS 去定义能给到 internal io 用的磁盘性能比例（0.5）和网络带宽比例（0.4 / 0.5），并给出 app io busy 的判断准则（比如  0.3 的上限，这样预留 0.2 出来做缓冲）。
     2. ssd 的限速不能直接跟盘成正比，主要是考虑到 zbs 没法发挥出磁盘性能上限，比如 4 块 nvme ssd 跟 2 块性能差不多。ssd 的 app io busy 先保留目前是一个定值的做法，但应该是一个变化值，综合考虑网络带宽以及磁盘性能，盘多了之后，瓶颈可能在网络带宽上，而网络带宽这事儿没法直接给出 app io busy iops（不管下沉数据，直接用 bps / 256 KiB？）
     2. 对 interval io 的判定除了 bps，是否需要把 iops 用起来？recover io 一定是 256 kb ，所以只关注 bps？sink io 有可能是 4k，所以应该关注 iops ？
 
-11. 更新 recover / migrate 文档，看 zbs 已有临时副本相关文档，把 meta 的业务逻辑看懂之后，要看 zk 和 dbcluster 相关逻辑，access session 的建立/断开连接逻辑，看 meta2 文档，看 sink manager 和 drain manager 的区别。
+10. 更新 recover / migrate 文档，看 zbs 已有临时副本相关文档，把 meta 的业务逻辑看懂之后，要看 zk 和 dbcluster 相关逻辑，access session 的建立/断开连接逻辑，看 meta2 文档，看 sink manager 和 drain manager 的区别。
 
-12. 分配临时副本空间检查适配 pinperf in tiering，[ZBS-27272](http://jira.smartx.com/browse/ZBS-27272)，HasSpaceForTemporaryReplica 的修改，顺便把对 CowLExtentTransaction 的理解补充上
+11. 分配临时副本空间检查适配 pinperf in tiering，[ZBS-27272](http://jira.smartx.com/browse/ZBS-27272)，HasSpaceForTemporaryReplica 的修改，顺便把对 CowLExtentTransaction 的理解补充上
 
-      1. prior pextent allocation
+       1. prior pextent allocation
 
-         升级到 560，但没有开启之前，不允许创建 prior pextent 的代码在哪里？
+          升级到 560，但没有开启之前，不允许创建 prior pextent 的代码在哪里？
 
-         replica_capacity_only 模式允许创建 prior pextent 吗？
+          replica_capacity_only 模式允许创建 prior pextent 吗？
 
-         改动之后，可能的坑点：
+          改动之后，可能的坑点：
 
-         1. thick 有个最高 99%；
-         2. temp pid 有个最高 95%；
-         3. pid 分配 location 除了 ec 之外，并不会随机打乱 cid 在 loc 中的位置；
+          1. thick 有个最高 99%；
+          2. temp pid 有个最高 95%；
+          3. pid 分配 location 除了 ec 之外，并不会随机打乱 cid 在 loc 中的位置；
 
-      2. piror recover
+       2. piror recover
 
-          先把 recover 关于 prior 的部分做完，等有空再考虑把 topo distance 做好，zbs4，另外，空间充足可以先过滤，但是尽量不选 isolated 和双活需要 2 ：1 的特性需要特别考虑。
+           先把 recover 关于 prior 的部分做完，等有空再考虑把 topo distance 做好，zbs4，另外，空间充足可以先过滤，但是尽量不选 isolated 和双活需要 2 ：1 的特性需要特别考虑。
 
-          1. recover / removing chunk dst 允许选 isolated ？允许，为了尽快恢复/迁出；
+           1. recover / removing chunk dst 允许选 isolated ？允许，为了尽快恢复/迁出；
 
-          2. 把 avail cmd slots 提前算好放 exclude_cids；
+           2. 把 avail cmd slots 提前算好放 exclude_cids；
 
-          3. GenerateMigrateCmdsForRemovingChunk 中 migrate_generate_used_cmd_slots 对 src / dst 的判断应该传入 AllocRecoverCap/PerfExtents；
+           3. GenerateMigrateCmdsForRemovingChunk 中 migrate_generate_used_cmd_slots 对 src / dst 的判断应该传入 AllocRecoverCap/PerfExtents；
 
-             传入会有点麻烦，可能出现 removing chunk 的时候总是选某个 src / dst cid，但那个 dst cid 可生成的余额不足，还一直选他。但是影响最大也就造成一次 generate 过程中只选 1 个 src cid，用满他的 256 的配额，所以先不修复。
+              传入会有点麻烦，可能出现 removing chunk 的时候总是选某个 src / dst cid，但那个 dst cid 可生成的余额不足，还一直选他。但是影响最大也就造成一次 generate 过程中只选 1 个 src cid，用满他的 256 的配额，所以先不修复。
 
-          这部分代码可以写到 recover manager，另外也可以总结出一个 recover 和 alloc 虽然大部分相同，但是存在的细微差别。
+           这部分代码可以写到 recover manager，另外也可以总结出一个 recover 和 alloc 虽然大部分相同，但是存在的细微差别。
 
-          agile recover 和 special recover 回头处理，都是利用到临时副本的，入口是 remove replica
+           agile recover 和 special recover 回头处理，都是利用到临时副本的，入口是 remove replica
 
-      3. prior migrate
+       3. prior migrate
 
-         只有 replica 才会分配临时副本，所以 ec 不会有 agile recover
+          只有 replica 才会分配临时副本，所以 ec 不会有 agile recover
 
-         临时副本在 perf layer 中一定是 thin 的，临时副本一定分配上
+          临时副本在 perf layer 中一定是 thin 的，临时副本一定分配上
 
-         有很多代码适合 pick 到 55x，但在 56x 中直接被删除了，见 [ZBS-27109](http://jira.smartx.com/browse/ZBS-27109)
+          有很多代码适合 pick 到 55x，但在 56x 中直接被删除了，见 [ZBS-27109](http://jira.smartx.com/browse/ZBS-27109)
 
-         ```
-         for (const auto& [cid, info] : healthy_chunks_map) {
-         LOG(INFO) << "yiwu cid " << cid << " perf thick allocated "
-         << GetAllocatedSpace(info, PK_PERF_THICK) / kExtentSize << " perf thick valid "
-         << GetValidSpace(info, PK_PERF_THICK) / kExtentSize << " perf thin allocated "
-         << GetAllocatedSpace(info, PK_PERF_THIN) / kExtentSize << " perf thin valid "
-         << GetValidSpace(info, PK_PERF_THIN) / kExtentSize << " cap allocated "
-         << GetAllocatedSpace(info, PK_CAP) / kExtentSize << " cap valid "
-         << GetValidSpace(info, PK_CAP) / kExtentSize;
-         }
-         
-         LOG(INFO) << "yiwu sp_load " << sp_load << " pk " << pk;
-         ```
+          ```
+          for (const auto& [cid, info] : healthy_chunks_map) {
+          LOG(INFO) << "yiwu cid " << cid << " perf thick allocated "
+          << GetAllocatedSpace(info, PK_PERF_THICK) / kExtentSize << " perf thick valid "
+          << GetValidSpace(info, PK_PERF_THICK) / kExtentSize << " perf thin allocated "
+          << GetAllocatedSpace(info, PK_PERF_THIN) / kExtentSize << " perf thin valid "
+          << GetValidSpace(info, PK_PERF_THIN) / kExtentSize << " cap allocated "
+          << GetAllocatedSpace(info, PK_CAP) / kExtentSize << " cap valid "
+          << GetValidSpace(info, PK_CAP) / kExtentSize;
+          }
+          
+          LOG(INFO) << "yiwu sp_load " << sp_load << " pk " << pk;
+          ```
 
-13. 对于仅被 thin volume / snapshot 引用的 capacity pextent，其 provision 将在 gc 扫描时被更新为 thin，随心跳下发给 lsm，如果有 pextent 被 thick volume 引用，那其 provision 将被更新为 thick，随心跳下发给 lsm，[ZBS-15094](http://jira.smartx.com/browse/ZBS-15094)。
+12. 对于仅被 thin volume / snapshot 引用的 capacity pextent，其 provision 将在 gc 扫描时被更新为 thin，随心跳下发给 lsm，如果有 pextent 被 thick volume 引用，那其 provision 将被更新为 thick，随心跳下发给 lsm，[ZBS-15094](http://jira.smartx.com/browse/ZBS-15094)。
 
-14. 根据最新 lsm 设计文档大致了解 lsm2 
+13. 根据最新 lsm 设计文档大致了解 lsm2 
 
-15. 补一个同时有多个 removing cid 的单测；
+14. 补一个同时有多个 removing cid 的单测；
 
-16. refactor migrate for repair topo，从 GenerateMigrateCmdsForRepairTopo 开始改；
+15. refactor migrate for repair topo，从 GenerateMigrateCmdsForRepairTopo 开始改；
 
-       1. 待做 [ZBS-13401](http://jira.smartx.com/browse/ZBS-13401)，让中高负载的容量均衡策略都要保证 prefer local 本地的副本不会被迁移，且如果 prefer local 变了，那么也要让他所在的 chunk 有一个本地副本（有个上限是保留归保留，但如果超过 95%，超过的 部分不考虑 prefer local 一定有对应的副本）
+        1. 待做 [ZBS-13401](http://jira.smartx.com/browse/ZBS-13401)，让中高负载的容量均衡策略都要保证 prefer local 本地的副本不会被迁移，且如果 prefer local 变了，那么也要让他所在的 chunk 有一个本地副本（有个上限是保留归保留，但如果超过 95%，超过的 部分不考虑 prefer local 一定有对应的副本）
 
-           怎么判断是否会超过 95% 呢？
+            怎么判断是否会超过 95% 呢？
 
-           如果 volume 的 prefer local 到新 chunk 后（不论是人为运维还是上层虚拟机被迁移到其他节点），现有的迁移策略能让新位置的 prefer local 有副本吗？
+            如果 volume 的 prefer local 到新 chunk 后（不论是人为运维还是上层虚拟机被迁移到其他节点），现有的迁移策略能让新位置的 prefer local 有副本吗？
 
-           如果不能，在 migrate for rebalance 之后，再有一个 migrate for prefer local，他的目的是保证让 prefer local 有副本，
+            如果不能，在 migrate for rebalance 之后，再有一个 migrate for prefer local，他的目的是保证让 prefer local 有副本，
 
-           [ZBS-25949](http://jira.smartx.com/browse/ZBS-25949) 修改后的 migrate for repair topo 能够达到的效果是不会 replace prefer local，在 prefer local 满足 topo rank 不降级的情况下，dst 会优先选 prefer local，貌似能达到这个效果？双活下也可以吗？prefer local 从 prefer zone 迁移到 secondary zone。
+            [ZBS-25949](http://jira.smartx.com/browse/ZBS-25949) 修改后的 migrate for repair topo 能够达到的效果是不会 replace prefer local，在 prefer local 满足 topo rank 不降级的情况下，dst 会优先选 prefer local，貌似能达到这个效果？双活下也可以吗？prefer local 从 prefer zone 迁移到 secondary zone。
 
-           migrate for ec repair topo 中对 ec src 的选择过于宽松了，其实还可以选到更好的 src，但是目前不做处理，目前只根据 replace 来选 src
+            migrate for ec repair topo 中对 ec src 的选择过于宽松了，其实还可以选到更好的 src，但是目前不做处理，目前只根据 replace 来选 src
 
-17. MgirateFilter 可以改成 allow, deny 都允许的，如果没要求，就传入 std::nullopt
+16. MgirateFilter 可以改成 allow, deny 都允许的，如果没要求，就传入 std::nullopt
 
 
 
