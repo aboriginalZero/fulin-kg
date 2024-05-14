@@ -9,8 +9,8 @@ zcp zbs; zc zbs3
 # 格式化 + 非首次编译
 cd /home/code/zbs3 && ./script/format.sh && cd build && mold -run ninja zbs_test
 
-# 首次编译
-cd /home/code/zbs3 && rm -rf build/ && mkdir build && cd build && cmake -DBUILD_MOLD_LINKER=ON -G Ninja ..
+# 首次编译，默认是 DEBUG 模式，程序运行速率会比较慢（比如影响 load pextent table 的时间）
+cd /home/code/zbs3 && rm -rf build/ && mkdir build && cd build && cmake -DBUILD_MOLD_LINKER=ON -DCMAKE_BUILD_TYPE=RELWITHDEBINFO -G Ninja ..
 mold -run ninja zbs_test zbs-metad
 
 # 清空缓存，显示缓存统计信息
@@ -30,7 +30,7 @@ zrt zbs3 FunctionalTest.WriteResize
 ```shell
 # 首次编译/子模块如 spdk 更新，需要删除 build 目录，进到 Docker 内部执行
 docker run --rm --privileged=true -it -v /home/code/zbs3:/zbs -w /zbs registry.smtx.io/zbs/zbs-buildtime:el7-x86_64
-mkdir build && cd build && source /opt/rh/devtoolset-7/enable && cmake -G Ninja ..
+mkdir build && cd build && source /opt/rh/devtoolset-7/enable && cmake -DBUILD_MOLD_LINKER=ON -DCMAKE_BUILD_TYPE=RELWITHDEBINFO -G Ninja ..
 # 编译时给定参数，比如要同时编译 bench，cmake -DBUILD_BENCHMARKS=ON -G Ninja ..
 ninja zbs_test
 

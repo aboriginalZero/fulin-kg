@@ -1,24 +1,18 @@
 拓扑均衡迁移可以允许使用的空间上限是 90%，否则前端会报警
 
+90% 之后的节点不会作为 migrate for repair topo 的 dst cid
+
+
+
 migrate for rebalance 还是有可能因为迁移 prefer local 导致跟 migrate for repair topo 来回迁移
 
 写一个在 90 - 95 期间不允许 migrate for repair topo 的 ut
 
 
 
-在 static mode 下也打印限速变化，然后允许不加 mode 设置限速
-
-```shell
-[root@node130-72 16:16:59 ~]$ zbs-meta internal_io update --static_cap_internal_io_speed_limit 120 
-# 下面才生效 
-[root@node130-72 16:17:09 ~]$ zbs-meta internal_io update --static_cap_internal_io_speed_limit 120 --mode 1
-```
+set_mode_info  rpc 兼容性处理
 
 
-
-
-
-有一个 pinghao 报的 recover 问题，待会请 pinghao 描述下，我先讲一下这 2 天处理的 2 个 reroute 问题。
 
 
 
@@ -226,15 +220,15 @@ esxcfg-route -d 192.168.33.2/32 10.0.0.22; esxcfg-route -a 192.168.33.2/32 10.0.
 15. refactor migrate for repair topo，从 GenerateMigrateCmdsForRepairTopo 开始改；
 
         1. 待做 [ZBS-13401](http://jira.smartx.com/browse/ZBS-13401)，让中高负载的容量均衡策略都要保证 prefer local 本地的副本不会被迁移，且如果 prefer local 变了，那么也要让他所在的 chunk 有一个本地副本（有个上限是保留归保留，但如果超过 95%，超过的 部分不考虑 prefer local 一定有对应的副本）
-
+    
             怎么判断是否会超过 95% 呢？
-
+    
             如果 volume 的 prefer local 到新 chunk 后（不论是人为运维还是上层虚拟机被迁移到其他节点），现有的迁移策略能让新位置的 prefer local 有副本吗？
-
+    
             如果不能，在 migrate for rebalance 之后，再有一个 migrate for prefer local，他的目的是保证让 prefer local 有副本，
-
+    
             [ZBS-25949](http://jira.smartx.com/browse/ZBS-25949) 修改后的 migrate for repair topo 能够达到的效果是不会 replace prefer local，在 prefer local 满足 topo rank 不降级的情况下，dst 会优先选 prefer local，貌似能达到这个效果？双活下也可以吗？prefer local 从 prefer zone 迁移到 secondary zone。
-
+    
             migrate for ec repair topo 中对 ec src 的选择过于宽松了，其实还可以选到更好的 src，但是目前不做处理，目前只根据 replace 来选 src
 
 16. MgirateFilter 可以改成 allow, deny 都允许的，如果没要求，就传入 std::nullopt
