@@ -1,21 +1,3 @@
-拓扑均衡迁移可以允许使用的空间上限是 90%，否则前端会报警
-
-90% 之后的节点不会作为 migrate for repair topo 的 dst cid
-
-
-
-migrate for rebalance 还是有可能因为迁移 prefer local 导致跟 migrate for repair topo 来回迁移
-
-写一个在 90 - 95 期间不允许 migrate for repair topo 的 ut
-
-
-
-set_mode_info  rpc 兼容性处理
-
-
-
-
-
 一个是 tuna 那报的一个问题，从 5.0.3 升级到 5.0.7，有个节点 IO 重路由状态检查失败，上去看了下，有个现象是会删除本地存储 ip，然后又把他添加回来，看了下应该是这个版本里对 session alive 的判断逻辑有问题，当时没有 session alive 字段，他是自己写的一套判断逻辑，应该是有点 bug，还没来得及继续调查，还会出 5.0.8 吗？还需要更细致的调查吗？
 
 
@@ -70,7 +52,7 @@ esxcfg-route -d 192.168.33.2/32 10.0.0.22; esxcfg-route -a 192.168.33.2/32 10.0.
 1. zbs-chunk migrate list 中
     1. 只有 lease owner 上的 Total Migrate Speed 才有值，而这也是会给到 meta 的值，才会有 reposition list，其中 STATE = INIT 的 pid 表示在 recover handler 的 pending 队列中，STATE = READ / WRITE 的 pid 表示正在执行，
     2. From Local Speed 指的是该节点作为本地
-    3. 在 RecoverInfo 加一个显示 pextent type
+2. set_mode_info  rpc 兼容性处理
 2. 分开设置 recover 和 migrate 的单次 scan 上限，generate recover cmd 的过程中如果有了 migrate cmd，是可以打断他的。
 
 
@@ -85,8 +67,6 @@ esxcfg-route -d 192.168.33.2/32 10.0.0.22; esxcfg-route -a 192.168.33.2/32 10.0.
     4. 进出维护模式，把 migrate cmd 清掉，防止他抢资源，让升级快点结束。进出维护模式的时间应该不长，这段时间内的 migrate 重要吗？
     
     4. recover manager 对于没有实际分配的数据会跳过命令下发配额的限制，快速下发给 access，如果这部分数据是从本地读，这个 recover 很快就会完成，但 recover handler 的 pending_recover_cmds_ 是按 FIFO 的顺序进 running_recover_pids_ 执行的，所以后发的符合上述特点的 pid 也没法快速执行，可能被前面执行慢的 pid 拖慢。
-
-
 
 3. recover cmd 快速生成的逻辑在 arm 的环境中貌似没有起作用，因为分页 + pid 数量变大的原因，多扫一次的做法提升并不明显了，可能得多扫一轮？
 
@@ -220,15 +200,15 @@ esxcfg-route -d 192.168.33.2/32 10.0.0.22; esxcfg-route -a 192.168.33.2/32 10.0.
 15. refactor migrate for repair topo，从 GenerateMigrateCmdsForRepairTopo 开始改；
 
         1. 待做 [ZBS-13401](http://jira.smartx.com/browse/ZBS-13401)，让中高负载的容量均衡策略都要保证 prefer local 本地的副本不会被迁移，且如果 prefer local 变了，那么也要让他所在的 chunk 有一个本地副本（有个上限是保留归保留，但如果超过 95%，超过的 部分不考虑 prefer local 一定有对应的副本）
-    
+        
             怎么判断是否会超过 95% 呢？
-    
+        
             如果 volume 的 prefer local 到新 chunk 后（不论是人为运维还是上层虚拟机被迁移到其他节点），现有的迁移策略能让新位置的 prefer local 有副本吗？
-    
+        
             如果不能，在 migrate for rebalance 之后，再有一个 migrate for prefer local，他的目的是保证让 prefer local 有副本，
-    
+        
             [ZBS-25949](http://jira.smartx.com/browse/ZBS-25949) 修改后的 migrate for repair topo 能够达到的效果是不会 replace prefer local，在 prefer local 满足 topo rank 不降级的情况下，dst 会优先选 prefer local，貌似能达到这个效果？双活下也可以吗？prefer local 从 prefer zone 迁移到 secondary zone。
-    
+        
             migrate for ec repair topo 中对 ec src 的选择过于宽松了，其实还可以选到更好的 src，但是目前不做处理，目前只根据 replace 来选 src
 
 16. MgirateFilter 可以改成 allow, deny 都允许的，如果没要求，就传入 std::nullopt
