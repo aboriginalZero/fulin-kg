@@ -1,3 +1,32 @@
+1. zbs-chunk migrate list 中
+
+   1. 只有 lease owner 上的 Total Migrate Speed 才有值，而这也是会给到 meta 的值，才会有 reposition list，其中 STATE = INIT 的 pid 表示在 recover handler 的 pending 队列中，STATE = READ / WRITE 的 pid 表示正在执行，
+   2. From Local Speed 指的是该节点作为本地
+
+2. set_mode_info  rpc 兼容性处理，要兼容 5.5.x 和 5.4.x 的 zbs-client-py 会调用最新的 meta rpc 的情况。
+
+3. 分开设置 recover 和 migrate 的单次 scan 上限，generate recover cmd 的过程中如果有了 migrate cmd，是可以打断他的。
+
+   1. 把 recover 的分页跟 Migrate 的独立开来，并改大点。减少还有待恢复数据但却先下发 migrate cmd 把 cmd slot 等资源用满的情况；
+
+   2. 如果 generate recover cmd ，可以清空待下发的 migrate cmd 吗？
+
+      已下发的 migrate cmd，只要他还没完成，recover handler 收到同一 pid 的 recover cmd 会被直接丢弃，不会执行。
+
+   3. recover handler 中的执行队列，可否做成 ever exist = false 且 origin_pid = 0 的 pid 优先执行，其他 pid 按 FIFO 的顺序执行。
+
+   4. 进出维护模式，把 migrate cmd 清掉，防止他抢资源，让升级快点结束。进出维护模式的时间应该不长，这段时间内的 migrate 重要吗？
+
+   5. recover manager 对于没有实际分配的数据会跳过命令下发配额的限制，快速下发给 access，如果这部分数据是从本地读，这个 recover 很快就会完成，但 recover handler 的 pending_recover_cmds_ 是按 FIFO 的顺序进 running_recover_pids_ 执行的，所以后发的符合上述特点的 pid 也没法快速执行，可能被前面执行慢的 pid 拖慢。
+
+3. recover cmd 快速生成的逻辑在 arm 的环境中貌似没有起作用，因为分页 + pid 数量变大的原因，多扫一次的做法提升并不明显了，可能得多扫一轮？
+
+
+
+
+
+
+
 一个是 tuna 那报的一个问题，从 5.0.3 升级到 5.0.7，有个节点 IO 重路由状态检查失败，上去看了下，有个现象是会删除本地存储 ip，然后又把他添加回来，看了下应该是这个版本里对 session alive 的判断逻辑有问题，当时没有 session alive 字段，他是自己写的一套判断逻辑，应该是有点 bug，还没来得及继续调查，还会出 5.0.8 吗？还需要更细致的调查吗？
 
 
@@ -47,28 +76,6 @@ esxcfg-route -d 192.168.33.2/32 10.0.0.22; esxcfg-route -a 192.168.33.2/32 10.0.
 1. zbs-deploy-manage update_reroute_version
 
 
-
-
-1. zbs-chunk migrate list 中
-    1. 只有 lease owner 上的 Total Migrate Speed 才有值，而这也是会给到 meta 的值，才会有 reposition list，其中 STATE = INIT 的 pid 表示在 recover handler 的 pending 队列中，STATE = READ / WRITE 的 pid 表示正在执行，
-    2. From Local Speed 指的是该节点作为本地
-2. set_mode_info  rpc 兼容性处理
-2. 分开设置 recover 和 migrate 的单次 scan 上限，generate recover cmd 的过程中如果有了 migrate cmd，是可以打断他的。
-
-
-    1. 把 recover 的分页跟 Migrate 的独立开来，并改大点。减少还有待恢复数据但却先下发 migrate cmd 把 cmd slot 等资源用满的情况；
-    
-    2. 如果 generate recover cmd ，可以清空待下发的 migrate cmd 吗？
-    
-        已下发的 migrate cmd，只要他还没完成，recover handler 收到同一 pid 的 recover cmd 会被直接丢弃，不会执行。
-    
-    3. recover handler 中的执行队列，可否做成 ever exist = false 且 origin_pid = 0 的 pid 优先执行，其他 pid 按 FIFO 的顺序执行。
-    
-    4. 进出维护模式，把 migrate cmd 清掉，防止他抢资源，让升级快点结束。进出维护模式的时间应该不长，这段时间内的 migrate 重要吗？
-    
-    4. recover manager 对于没有实际分配的数据会跳过命令下发配额的限制，快速下发给 access，如果这部分数据是从本地读，这个 recover 很快就会完成，但 recover handler 的 pending_recover_cmds_ 是按 FIFO 的顺序进 running_recover_pids_ 执行的，所以后发的符合上述特点的 pid 也没法快速执行，可能被前面执行慢的 pid 拖慢。
-
-3. recover cmd 快速生成的逻辑在 arm 的环境中貌似没有起作用，因为分页 + pid 数量变大的原因，多扫一次的做法提升并不明显了，可能得多扫一轮？
 
 4. 从一个  volume 可以拿到所有 vextent id，据此可以拿到 lid，接着
 
