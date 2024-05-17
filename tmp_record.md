@@ -1,9 +1,23 @@
-1. zbs-chunk migrate list 中
+
+
+
+
+
+
+
+
+1. corrupt 状态的 pxtent，读它的时候是在 sync 阶段就返回 ECAllReplicaFail 还是等到 read 的时候？
+
+   读的时候会去 sync 吗？
+
+   sync 过一次什么时候会再次 sync？看起来只有在 ENotFoundOrigin 时会 RefreshChildExtentLocation，并主动触发一次重新 sync。
+
+   special recover 不需要 sync 吗？
+
+2. zbs-chunk migrate list 中
 
    1. 只有 lease owner 上的 Total Migrate Speed 才有值，而这也是会给到 meta 的值，才会有 reposition list，其中 STATE = INIT 的 pid 表示在 recover handler 的 pending 队列中，STATE = READ / WRITE 的 pid 表示正在执行，
    2. From Local Speed 指的是该节点作为本地
-
-2. set_mode_info  rpc 兼容性处理，要兼容 5.5.x 和 5.4.x 的 zbs-client-py 会调用最新的 meta rpc 的情况。
 
 3. 分开设置 recover 和 migrate 的单次 scan 上限，generate recover cmd 的过程中如果有了 migrate cmd，是可以打断他的。
 
@@ -20,6 +34,10 @@
    5. recover manager 对于没有实际分配的数据会跳过命令下发配额的限制，快速下发给 access，如果这部分数据是从本地读，这个 recover 很快就会完成，但 recover handler 的 pending_recover_cmds_ 是按 FIFO 的顺序进 running_recover_pids_ 执行的，所以后发的符合上述特点的 pid 也没法快速执行，可能被前面执行慢的 pid 拖慢。
 
 3. recover cmd 快速生成的逻辑在 arm 的环境中貌似没有起作用，因为分页 + pid 数量变大的原因，多扫一次的做法提升并不明显了，可能得多扫一轮？
+
+4. 检查 recover/migrate speed 在前端界面和 prometheus 中的数值是否准确，meta 侧跟 chunk 侧的 total speed 和 local speed 和 remote speed
+
+   排查 reposition 性能问题时应该看哪些指标
 
 
 
@@ -48,8 +66,6 @@ SCVM 升级之后，在 IO Reroute 升级时，SCVM 会通过 ssh 的方式在�
 当 SCVM ssh ESXi Timeout 时，由于没有正确处理异常，会将 datastore_path 认为是 None，路径被拼接成一个错误的 "/vmfs/volumes/None/vmware_scvm_failure/reroute.py" 
 
 crontab 没能正确找到 reroute 脚本所在位置，reroute 进程没起，引发 Tower 报警。
-
-
 
 
 
@@ -136,8 +152,6 @@ esxcfg-route -d 192.168.33.2/32 10.0.0.22; esxcfg-route -a 192.168.33.2/32 10.0.
 
     另外，命令下发窗口可能被自动调节的前提是要打满一个窗口，也就是要有满一个窗口大小的命令数大部分都失败才有可能引发窗口收缩，比如 lease owner = 1, src_cid = 2, dst_cid = 3，若集群中只是 cid 2 IO 性能性能差，基本上需要给到 1 的 cmd src 基本都是 2 才满足整个窗口命令基本超时的条件，而此时把 1 的窗口跳调小也算正常，因为后续这些超时 cmd 的 pextent 再生成 cmd 时，lease owner 大概率还是 1。
 
-8. 检查 recover/migrate speed 在前端界面和 prometheus 中的数值是否准确，meta 侧跟 chunk 侧的 total speed 和 local speed 和 remote speed
-
 9. 调整 business io 影响内部 IO 的 iops 和 bps 阈值。
 
     1. 理论上我应该拿到所有磁盘类型+数量的上限后，用 GLAGS 去定义能给到 internal io 用的磁盘性能比例（0.5）和网络带宽比例（0.4 / 0.5），并给出 app io busy 的判断准则（比如  0.3 的上限，这样预留 0.2 出来做缓冲）。
@@ -146,7 +160,7 @@ esxcfg-route -d 192.168.33.2/32 10.0.0.22; esxcfg-route -a 192.168.33.2/32 10.0.
 
 10. 更新 recover / migrate 文档，看 zbs 已有临时副本相关文档，把 meta 的业务逻辑看懂之后，要看 zk 和 dbcluster 相关逻辑，access session 的建立/断开连接逻辑，看 meta2 文档，看 sink manager 和 drain manager 的区别。
 
-11. 分配临时副本空间检查适配 pinperf in tiering，[ZBS-27272](http://jira.smartx.com/browse/ZBS-27272)，HasSpaceForTemporaryReplica 的修改，顺便把对 CowLExtentTransaction 的理解补充上
+11. 待做
 
        1. prior pextent allocation
 
@@ -206,17 +220,17 @@ esxcfg-route -d 192.168.33.2/32 10.0.0.22; esxcfg-route -a 192.168.33.2/32 10.0.
 
 15. refactor migrate for repair topo，从 GenerateMigrateCmdsForRepairTopo 开始改；
 
-        1. 待做 [ZBS-13401](http://jira.smartx.com/browse/ZBS-13401)，让中高负载的容量均衡策略都要保证 prefer local 本地的副本不会被迁移，且如果 prefer local 变了，那么也要让他所在的 chunk 有一个本地副本（有个上限是保留归保留，但如果超过 95%，超过的 部分不考虑 prefer local 一定有对应的副本）
-        
-            怎么判断是否会超过 95% 呢？
-        
-            如果 volume 的 prefer local 到新 chunk 后（不论是人为运维还是上层虚拟机被迁移到其他节点），现有的迁移策略能让新位置的 prefer local 有副本吗？
-        
-            如果不能，在 migrate for rebalance 之后，再有一个 migrate for prefer local，他的目的是保证让 prefer local 有副本，
-        
-            [ZBS-25949](http://jira.smartx.com/browse/ZBS-25949) 修改后的 migrate for repair topo 能够达到的效果是不会 replace prefer local，在 prefer local 满足 topo rank 不降级的情况下，dst 会优先选 prefer local，貌似能达到这个效果？双活下也可以吗？prefer local 从 prefer zone 迁移到 secondary zone。
-        
-            migrate for ec repair topo 中对 ec src 的选择过于宽松了，其实还可以选到更好的 src，但是目前不做处理，目前只根据 replace 来选 src
+    1. 待做 [ZBS-13401](http://jira.smartx.com/browse/ZBS-13401)，让中高负载的容量均衡策略都要保证 prefer local 本地的副本不会被迁移，且如果 prefer local 变了，那么也要让他所在的 chunk 有一个本地副本（有个上限是保留归保留，但如果超过 95%，超过的 部分不考虑 prefer local 一定有对应的副本）
+    
+        怎么判断是否会超过 95% 呢？
+    
+        如果 volume 的 prefer local 到新 chunk 后（不论是人为运维还是上层虚拟机被迁移到其他节点），现有的迁移策略能让新位置的 prefer local 有副本吗？
+    
+        如果不能，在 migrate for rebalance 之后，再有一个 migrate for prefer local，他的目的是保证让 prefer local 有副本，
+    
+        [ZBS-25949](http://jira.smartx.com/browse/ZBS-25949) 修改后的 migrate for repair topo 能够达到的效果是不会 replace prefer local，在 prefer local 满足 topo rank 不降级的情况下，dst 会优先选 prefer local，貌似能达到这个效果？双活下也可以吗？prefer local 从 prefer zone 迁移到 secondary zone。
+    
+        migrate for ec repair topo 中对 ec src 的选择过于宽松了，其实还可以选到更好的 src，但是目前不做处理，目前只根据 replace 来选 src
 
 16. MgirateFilter 可以改成 allow, deny 都允许的，如果没要求，就传入 std::nullopt
 
