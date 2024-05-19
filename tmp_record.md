@@ -1,8 +1,40 @@
 
 
+thin 临时副本在 data report 之前，认为他的空间是 0，这个感觉不太合理，万一之后想写，可能没空间写了。
+
+临时副本以一个单副本的形式保存了失败副本（通过 RemoveReplica rpc 被剔除的副本）在剔除之后增量 IO，在失败副本恢复可用之后（常见于节点升级、服务重启，网络中断等存储介质本身没有损失的场景），失败副本中的 原始数据和临时副本中的增量数据能够组合成一份完整数据。
+
+在分配临时副本时，会在集群中所有的健康节点中选一个节点
+
+must meet
+
+1. 不是这个 pextent 的其他临时副本所在 chunk；
+2. 不是这个 pextent 的失败副本所在 chunk；
+3. 不是这个 pextent 的 location 中的 chunk；
+4. 已使用空间没有超过 95% 的 chunk
+
+should meet
+
+1. 不是 isolated 节点；
+
+2. 跟这个 pextent 的失败副本所在 chunk 还有 location 中的 chunk 的 topo distance 最远的；
+
+    双活下的规则特殊点：
+
+    1. 健康副本剩余 2 个：若在同一个可用域，则优先选择与当前存活副本相同可用域的节点存放 Temporary Replica，否则优先选择 extent 自身 prefer local 所在可用域的节点存放 Temporary Replica；
+    2. 健康副本剩余 1 个，则优先选择与当前健康副本在同一个可用域内的节点；
+
+3. 正在 reposition 数量最少的；
+
+4. 剩余空间最大的。
+
+meta in zbs 中描述：在分配临时副本时，如果没有可容难的空间，那么把临时副本置为 lossy，有损临时副本不参与 IO，仅可用作恢复（多为有损恢复）。
+
+临时副本的 lossy 属性：集群无法为临时副本分配空间时为 True，已分配的临时副本有 IO 错误时为 True，其他情况为 False。这块还没找到对应代码，关键词 set_lossy(true)。
 
 
 
+agile recover dst 会优选失败副本所在地 failed cid
 
 
 
