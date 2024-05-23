@@ -1,12 +1,31 @@
-空间计算上还是有问题
+需要在 agile recover 单测上手动补一下 GetMetaContext().stretched_stage = StretchedStage::Stretched;
+
+补充一个 2 个 src 都在一个 zone 的用例。
 
 
 
-GetAllocatedSpace 函数需要修改，加上 enable_thick_extent 判断
+空间计算上还是有问题，修正 GetAllocatedSpace 中的使用，GetAllocatedSpace 函数需要修改，加上 enable_thick_extent 判断
+
+
+
+1. 即使 < 95%，也要判断是否能再容纳一个 extentsize。
+2. 如果 ever exist，看的是 alive loc，否则是 loc。
+
+需要补充对应单测
 
 
 
 thin 临时副本在 data report 之前，认为他的空间是 0，这个感觉不太合理，万一之后想写，可能没空间写了。
+
+分配空间不依赖他的值，只是这么做跟正常的 thin 副本的处理不同（先按 256 MiB 来算，等第一次心跳之后更新到实际值）
+
+PExtentInfo 的 used_data_space 字段，代表的是，不论 perf 还是 cap 的 thin 实际占用空间吗？
+
+cap / perf 都会产生临时副本，为啥会用 UNLIKELY
+
+单测 CheckMetaRPCForTemporaryReplicaSummary 不开分层的原因是啥？
+
+
 
 临时副本以一个单副本的形式保存了失败副本（通过 RemoveReplica rpc 被剔除的副本）在剔除之后增量 IO，在失败副本恢复可用之后（常见于节点升级、服务重启，网络中断等存储介质本身没有损失的场景），失败副本中的 原始数据和临时副本中的增量数据能够组合成一份完整数据。
 
