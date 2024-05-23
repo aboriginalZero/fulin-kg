@@ -1,10 +1,16 @@
+空间计算上还是有问题
+
+
+
+GetAllocatedSpace 函数需要修改，加上 enable_thick_extent 判断
+
 
 
 thin 临时副本在 data report 之前，认为他的空间是 0，这个感觉不太合理，万一之后想写，可能没空间写了。
 
 临时副本以一个单副本的形式保存了失败副本（通过 RemoveReplica rpc 被剔除的副本）在剔除之后增量 IO，在失败副本恢复可用之后（常见于节点升级、服务重启，网络中断等存储介质本身没有损失的场景），失败副本中的 原始数据和临时副本中的增量数据能够组合成一份完整数据。
 
-在分配临时副本时，会在集群中所有的健康节点中选一个节点
+在分配临时副本时（AllocTemporaryReplica），会在集群中所有的健康节点中选一个节点（是的，因为是单个副本）
 
 must meet
 
@@ -30,11 +36,40 @@ should meet
 
 meta in zbs 中描述：在分配临时副本时，如果没有可容难的空间，那么把临时副本置为 lossy，有损临时副本不参与 IO，仅可用作恢复（多为有损恢复）。
 
-临时副本的 lossy 属性：集群无法为临时副本分配空间时为 True，已分配的临时副本有 IO 错误时为 True，其他情况为 False。这块还没找到对应代码，关键词 set_lossy(true)。
+临时副本的 lossy 属性：集群无法为临时副本分配空间时为 True，已分配的临时副本有 IO 错误时为 True，其他情况为 False。这块还没找到对应代码
+
+PhysicalExtentTable::RemoveReplica 移除副本时可能也会夹带着移除临时副本，此时会将这些临时副本设为 lossy，只有这个路径会把他设成 true。
+
+分配临时副本时，先默认分配一个 lossy 临时副本，如果空间充足，分配成功了会在 transaction commit 中把它设成 false 的，否则还是分配一个 lossy 临时副本，不会不分配（因为想尽可能保留失败副本，有临时副本的失败副本，不会在 lsm 被 GC）。
+
+在 RemoveReplica rpc 时，如果在 request 里也指定了要移除的临时副本，那么只是把这些临时副本 lossy 设为 true，而不去标记待 gc，这是因为 IO 过程出错的临时副本已经写了一部分数据，想保留这部分数据（临时副本这一功能的核心是尽力保留所有已经写入的数据），不到万不得已不丢弃数据。
+
+失败副本及其临时副本什么时候才认为可以被 gc？比如 3 副本的 extent，降级为 1 副本+ 2 临时副本，等这个 extent 恢复成 2 副本后，调用 ReplaceReplica rpc 告知 meta，其中 request 的 src_chunk 是 recover cmd 中的 replace cid ，这个 rpc 中会调用 RemoveTemporaryReplicaOnReplace 来移除 1 个临时副本（dst cid 上的优先，否则是 lossy 和 ever exist = false 的临时副本，最后才是 gen 最大的那个副本）
 
 
 
-agile recover dst 会优选失败副本所在地 failed cid
+失败副本在写失败时就在 meta 侧设成待 gc 了，但是在 lsm 侧，只有对应的临时副本 gc 后，这个失败副本才会被 gc。
+
+
+
+噢噢，remove replica rpc 时会把那个 cid 从 pentry 中 clear 掉，这样在 PhysicalExtentTableEntry::UpdateReplicaInfo 的返回值就是 False，HandlePExtentInfo 也是 False，等到对应的临时副本先回收，她才回被
+
+meta 认为的要回收的临时副本，会将这个 pentry garbage 设成 true，valid = 0；
+
+等 chunk data report 的时候，对于每个副本，都通过 ReplicaIsValid 检查是否可以删除，
+一个是 lsm 上报所有的副本，这些副本里
+
+失败副本里不会被 found
+
+这两部分经过 ReplicaIsValid 判定后，meta 为其生成对应 gc cmd 下发给 lsm 执行，此时数据真正被丢弃。
+
+
+
+pentry 的 gc 标志，只在 PhysicalExtentTable::AppendGarbagePids 里被用到，gc manager 会调用他。
+
+
+
+pentry 的 rim_cid 只会在 remove replica 的时候被设置。
 
 
 
