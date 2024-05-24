@@ -1,3 +1,19 @@
+在 ssh target 上要执行的命令用单引号包双引号。
+
+可以捕获这些异常类型，from paramiko import SSHException
+
+默认 22 端口，允许修改
+
+smartx_reroute 密钥对实际上能发挥作用吗（esxi 之间、scvm 之间、esxi 和 scvm 间）？
+
+如果 reroute 版本没有及时更新，在前端报警。
+
+https://zhuanlan.zhihu.com/p/313718499
+
+https://docs.paramiko.org/en/2.12/
+
+
+
 需要在 agile recover 单测上手动补一下 GetMetaContext().stretched_stage = StretchedStage::Stretched;
 
 补充一个 2 个 src 都在一个 zone 的用例。
