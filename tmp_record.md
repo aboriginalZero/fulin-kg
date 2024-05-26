@@ -1,3 +1,37 @@
+p1 case zbs 5.2.2 rc16 smtxos 5.0.6
+
+dead pid：232814、239517
+
+
+
+刚刚那个日志显示 pid 239517 recover fail 报错 SYSENODATA
+
+/var/log/message 中搜坏盘 sdg
+
+zbs-chunk datainspector -h
+
+
+
+rpm -qi zbs
+
+cd /var/log/zbs && ll -rth zbs-chunkd.log* 按照日期排序找文件
+
+grep "the" | less
+
+last reboot 看上一次启动时间
+
+
+
+chunk 日志中搜 migrate pblob skip 会显示卸载盘卸不掉的 pblob
+
+
+
+zbs 5.2.2 rc16 smtxos 5.0.6
+
+看到的现象是移除 Node 13 的过程中，Node9 空间超过 90%
+
+
+
 在 ssh target 上要执行的命令用单引号包双引号。
 
 可以捕获这些异常类型，from paramiko import SSHException
@@ -14,32 +48,35 @@ https://docs.paramiko.org/en/2.12/
 
 
 
-需要在 agile recover 单测上手动补一下 GetMetaContext().stretched_stage = StretchedStage::Stretched;
-
-补充一个 2 个 src 都在一个 zone 的用例。
+依赖 GetMetaContext().stretched_stage = StretchedStage::Stretched 的单测都需要在 CreateZone 后加一句
 
 
 
-空间计算上还是有问题，修正 GetAllocatedSpace 中的使用，GetAllocatedSpace 函数需要修改，加上 enable_thick_extent 判断
+把 HasSpaceForExtent 和 HasSpaceForCow 也按照 HasSpaceForTemporaryReplica 的风格调整下，但他这里在 enable_thick_extent = false 的时候要同时判断 provisioned_data_space 和 used_data_space。
+
+cap / perf 都会产生临时副本，为啥会用 UNLIKELY，调整完了。
 
 
 
-1. 即使 < 95%，也要判断是否能再容纳一个 extentsize。
-2. 如果 ever exist，看的是 alive loc，否则是 loc。
-
-需要补充对应单测
+什么时候会 verifyread 而不是普通的 read
 
 
 
-thin 临时副本在 data report 之前，认为他的空间是 0，这个感觉不太合理，万一之后想写，可能没空间写了。
+所有副本都 dead 的时候才允许 special recover rpc 执行
 
-分配空间不依赖他的值，只是这么做跟正常的 thin 副本的处理不同（先按 256 MiB 来算，等第一次心跳之后更新到实际值）
+1. normal special recover like agile recover
+2. force_recover_from_temporary_replica, base on normal special  recover, but we ignore the validity check of  temporary replica 
+3. rollback_failed_replica, just set temporary replica's failed_cid  as pextent's location
 
-PExtentInfo 的 used_data_space 字段，代表的是，不论 perf 还是 cap 的 thin 实际占用空间吗？
 
-cap / perf 都会产生临时副本，为啥会用 UNLIKELY
 
-单测 CheckMetaRPCForTemporaryReplicaSummary 不开分层的原因是啥？
+replica sync gen 的时候，如果发现他有 temporary replica，也会一起 sync gen
+
+
+
+普通读的时候是否会 sync，会的，在 AccessIOHandler::DoReadVExtent() 中调用，像写一样，也会剔除 gen 不符预期的副本、在 sync 失败时清理本地 lease， 读 COW 出来的 pentry 但 parent 不在本地的情况调用一次 RefreshChildExtentLocation rpc
+
+普通读一个 pentry 会避免读正在 recover 的副本
 
 
 
