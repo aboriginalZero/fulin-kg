@@ -1,3 +1,21 @@
+prometheus 里可以从 2 个角度来观察值
+
+1. zbs_chunk_access 开头的，比如 zbs_chunk_access_cap_replica_reposition_read_iops from_chunk 1 to_chunk 2 表示以 1 为 lease owner read 2 上数据的 iops。
+2. zbs_chunk_local_io_from_local 开头的，比如 zbs_chunk_local_io_from_local_cap_ec_app_write_latency_ns 表示这个节点的 local io handler 接受到的从本地 access 来的 ec app write 的延迟
+3. zbs_chunk_local_io_from_remote 开头的，比如 zbs_chunk_local_io_from_remote_cap_replica_reposition_write_speed_bps 表示这个节点的 local io handler 接受到的从远端 access 来的 cap replica write 的带宽
+
+prometheus 中支持多种 IO 类型的 metric 相加，比如二者相加可以观察这个 chunk 收到的所有 cap replica reposition write 的带宽，zbs_chunk_local_io_from_remote_cap_replica_reposition_write_speed_bps + zbs_chunk_local_io_from_local_cap_replica_reposition_write_speed_bps 
+
+
+
+remove replica 和 replace replica 这两个 rpc 很重要，理解形参各个字段的含义、副本被剔除/替换的时机、access 什么时候会调用
+
+
+
+只有在做 special recover 且 rollback_failed_replica 和 force_recover_from_temporary_replica 其中一个为 true 的时候才会在 replace replica request 中设置 reset_location_to_dst 和 reset_generation，那么 meta 会要求这个 pentry 必须所有副本都 dead，把这个 pentry 的 location 设置成只有一个 dst cid， gen 设置成 reset_generation，rim cid 设置成 0，清空这个 pentry 所有的临时副本。
+
+
+
 p1 case zbs 5.2.2 rc16 smtxos 5.0.6
 
 dead pid：232814、239517
@@ -48,17 +66,33 @@ https://docs.paramiko.org/en/2.12/
 
 
 
+对于在被拔盘上的 extent，会读失败，但副本读失败并不会触发 remove replica，由于被拔盘了，所以他也不在 data report 里，meta 不会主动下发 gc cmd，直到 last report ms 超过 10 min 没更新，recover manager 扫描到它 not alive 了，才会下发 recover cmd。
+
+对于在被拔盘上的 extent，会写失败，触发 remove replica，紧接放入待生成 recover cmd 队列中。
+
+
+
 依赖 GetMetaContext().stretched_stage = StretchedStage::Stretched 的单测都需要在 CreateZone 后加一句
 
 
 
-把 HasSpaceForExtent 和 HasSpaceForCow 也按照 HasSpaceForTemporaryReplica 的风格调整下，但他这里在 enable_thick_extent = false 的时候要同时判断 provisioned_data_space 和 used_data_space。
+晚点把临时副本分配失败的 3 个 case 看一下
 
-cap / perf 都会产生临时副本，为啥会用 UNLIKELY，调整完了。
-
-
+cap / perf 都会产生临时副本，为啥会用 UNLIKELY，在 git stash 中
 
 什么时候会 verifyread 而不是普通的 read
+
+
+
+FOREACH_REPLICA(failed_loc, temporary_cid) 改成 failed cid 
+
+
+
+有损临时副本的 temporary_pid 和 temporaray_epoch 都是 0，但他的 failed_cid 是个有意义的值，能保证避免在 failed_cid 上的失败副本被 lsm 回收。
+
+special recover 的 src cid 是（有损）临时副本所在 chunk，dst 是失败副本所在 chunk。
+
+由于允许发起 special recover 的前提是所有副本都 dead，所以 special recover 中的 replace cid 一定会被填充。当使用的临时副本是 lossy 时，必须要让 force_recover_from_temporary_replia 和 rollback_failed_replica 其中一个为 true。
 
 
 
@@ -106,13 +140,9 @@ should meet
 
 4. 剩余空间最大的。
 
-meta in zbs 中描述：在分配临时副本时，如果没有可容难的空间，那么把临时副本置为 lossy，有损临时副本不参与 IO，仅可用作恢复（多为有损恢复）。
-
-临时副本的 lossy 属性：集群无法为临时副本分配空间时为 True，已分配的临时副本有 IO 错误时为 True，其他情况为 False。这块还没找到对应代码
-
-PhysicalExtentTable::RemoveReplica 移除副本时可能也会夹带着移除临时副本，此时会将这些临时副本设为 lossy，只有这个路径会把他设成 true。
-
 分配临时副本时，先默认分配一个 lossy 临时副本，如果空间充足，分配成功了会在 transaction commit 中把它设成 false 的，否则还是分配一个 lossy 临时副本，不会不分配（因为想尽可能保留失败副本，有临时副本的失败副本，不会在 lsm 被 GC）。
+
+除了集群无法为临时副本分配空间时它的 lossy 属性是 True，已分配的临时副本有 IO 错误时为 True（在 RemoveReplica rpc 移除副本时可能也会夹带着移除有 IO 错误的临时副本 ），有损临时副本不参与 IO，仅可用作恢复，多为有损恢复。除开这 2 种情况，临时副本的  lossy 都是 False。
 
 在 RemoveReplica rpc 时，如果在 request 里也指定了要移除的临时副本，那么只是把这些临时副本 lossy 设为 true，而不去标记待 gc，这是因为 IO 过程出错的临时副本已经写了一部分数据，想保留这部分数据（临时副本这一功能的核心是尽力保留所有已经写入的数据），不到万不得已不丢弃数据。
 
@@ -120,11 +150,11 @@ PhysicalExtentTable::RemoveReplica 移除副本时可能也会夹带着移除临
 
 
 
-失败副本在写失败时就在 meta 侧设成待 gc 了，但是在 lsm 侧，只有对应的临时副本 gc 后，这个失败副本才会被 gc。
+失败副本在写失败时就在 meta 侧设成待 gc 了，但是在 lsm 侧，只有对应的临时副本 gc 后，这个失败副本才会被 gc（代码体现在一个副本如果有对应的临时副本，那么 meta 不会下发 gc cmd）。
 
 
 
-噢噢，remove replica rpc 时会把那个 cid 从 pentry 中 clear 掉，这样在 PhysicalExtentTableEntry::UpdateReplicaInfo 的返回值就是 False，HandlePExtentInfo 也是 False，等到对应的临时副本先回收，她才回被
+remove replica rpc 时会把那个 cid 从 pentry 中 clear 掉，这样在 PhysicalExtentTableEntry::UpdateReplicaInfo 的返回值就是 False，HandlePExtentInfo 也是 False，等到对应的临时副本先回收，她才被回收。
 
 meta 认为的要回收的临时副本，会将这个 pentry garbage 设成 true，valid = 0；
 
@@ -137,9 +167,9 @@ meta 认为的要回收的临时副本，会将这个 pentry garbage 设成 true
 
 
 
-pentry 的 gc 标志，只在 PhysicalExtentTable::AppendGarbagePids 里被用到，gc manager 会调用他。
+pentry 的 gc 标志，是 pentry 粒度的是否回收，只在 PhysicalExtentTable::AppendGarbagePids 里被用到，gc manager 会调用他。
 
-
+segment 粒度的是否回收，关注的是 pentry 中这个 cid 的 PExtentReplica 是否有值。
 
 pentry 的 rim_cid 只会在 remove replica 的时候被设置。
 
@@ -290,6 +320,8 @@ esxcfg-route -d 192.168.33.2/32 10.0.0.22; esxcfg-route -a 192.168.33.2/32 10.0.
     若没有 lease owner，新分配的 lease owner 副本模式下大概率是 src cid（除了 lease owner 本身分配优先选 src cid 之外，在下发前也有根据 lease owner 调整 cmd  src cid 的逻辑），较大概率是 dst cid，然后才是其他节点。
 
     另外，命令下发窗口可能被自动调节的前提是要打满一个窗口，也就是要有满一个窗口大小的命令数大部分都失败才有可能引发窗口收缩，比如 lease owner = 1, src_cid = 2, dst_cid = 3，若集群中只是 cid 2 IO 性能性能差，基本上需要给到 1 的 cmd src 基本都是 2 才满足整个窗口命令基本超时的条件，而此时把 1 的窗口跳调小也算正常，因为后续这些超时 cmd 的 pextent 再生成 cmd 时，lease owner 大概率还是 1。
+
+7. meta 侧智能调节可以依赖 access 侧的并发度，比如某个 access 对其他所有 chunk 的并发度中取个最大值，比如 3 节点，access 1 认为自己作为 lease owner 跟 2 的 reposition 并发度是 32，跟 3 的 reposition 并发度是 64，那么可以让 meta 侧给到 access 1 的命令下发窗口是 64。
 
 9. 调整 business io 影响内部 IO 的 iops 和 bps 阈值。
 
