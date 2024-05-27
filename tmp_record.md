@@ -1,19 +1,3 @@
-prometheus 里可以从 2 个角度来观察值
-
-1. zbs_chunk_access 开头的，比如 zbs_chunk_access_cap_replica_reposition_read_iops from_chunk 1 to_chunk 2 表示以 1 为 lease owner read 2 上数据的 iops。
-2. zbs_chunk_local_io_from_local 开头的，比如 zbs_chunk_local_io_from_local_cap_ec_app_write_latency_ns 表示这个节点的 local io handler 接受到的从本地 access 来的 ec app write 的延迟
-3. zbs_chunk_local_io_from_remote 开头的，比如 zbs_chunk_local_io_from_remote_cap_replica_reposition_write_speed_bps 表示这个节点的 local io handler 接受到的从远端 access 来的 cap replica write 的带宽
-
-prometheus 中支持多种 IO 类型的 metric 相加，比如二者相加可以观察这个 chunk 收到的所有 cap replica reposition write 的带宽，zbs_chunk_local_io_from_remote_cap_replica_reposition_write_speed_bps + zbs_chunk_local_io_from_local_cap_replica_reposition_write_speed_bps 
-
-
-
-remove replica 和 replace replica 这两个 rpc 很重要，理解形参各个字段的含义、副本被剔除/替换的时机、access 什么时候会调用
-
-
-
-只有在做 special recover 且 rollback_failed_replica 和 force_recover_from_temporary_replica 其中一个为 true 的时候才会在 replace replica request 中设置 reset_location_to_dst 和 reset_generation，那么 meta 会要求这个 pentry 必须所有副本都 dead，把这个 pentry 的 location 设置成只有一个 dst cid， gen 设置成 reset_generation，rim cid 设置成 0，清空这个 pentry 所有的临时副本。
-
 
 
 p1 case zbs 5.2.2 rc16 smtxos 5.0.6
@@ -76,7 +60,7 @@ https://docs.paramiko.org/en/2.12/
 
 
 
-晚点把临时副本分配失败的 3 个 case 看一下
+晚点把临时副本分配失败的 3 个 case 看一下，SpecialRecoverTemporaryWhenRead，汇总一下临时副本
 
 cap / perf 都会产生临时副本，为啥会用 UNLIKELY，在 git stash 中
 
@@ -84,7 +68,23 @@ cap / perf 都会产生临时副本，为啥会用 UNLIKELY，在 git stash 中
 
 
 
+普通读的时候是否会 sync，会的，在 AccessIOHandler::DoReadVExtent() 中调用，像写一样，也会剔除 gen 不符预期的副本、在 sync 失败时清理本地 lease， 读 COW 出来的 pentry 但 parent 不在本地的情况调用一次 RefreshChildExtentLocation rpc
+
+普通读一个 pentry 会避免读正在 recover 的副本
+
+replica sync gen 的时候，如果发现他有 temporary replica，也会一起 sync gen
+
+
+
 FOREACH_REPLICA(failed_loc, temporary_cid) 改成 failed cid 
+
+
+
+remove replica 和 replace replica 这两个 rpc 很重要，理解形参各个字段的含义、副本被剔除/替换的时机、access 什么时候会调用
+
+
+
+只有在做 special recover 且 rollback_failed_replica 和 force_recover_from_temporary_replica 其中一个为 true 的时候才会在 replace replica request 中设置 reset_location_to_dst 和 reset_generation，那么 meta 会要求这个 pentry 必须所有副本都 dead，把这个 pentry 的 location 设置成只有一个 dst cid， gen 设置成 reset_generation，rim cid 设置成 0，清空这个 pentry 所有的临时副本。
 
 
 
@@ -102,15 +102,7 @@ special recover 的 src cid 是（有损）临时副本所在 chunk，dst 是失
 2. force_recover_from_temporary_replica, base on normal special  recover, but we ignore the validity check of  temporary replica 
 3. rollback_failed_replica, just set temporary replica's failed_cid  as pextent's location
 
-
-
-replica sync gen 的时候，如果发现他有 temporary replica，也会一起 sync gen
-
-
-
-普通读的时候是否会 sync，会的，在 AccessIOHandler::DoReadVExtent() 中调用，像写一样，也会剔除 gen 不符预期的副本、在 sync 失败时清理本地 lease， 读 COW 出来的 pentry 但 parent 不在本地的情况调用一次 RefreshChildExtentLocation rpc
-
-普通读一个 pentry 会避免读正在 recover 的副本
+还是没搞懂 force_recover_from_temporary_replica 和 rollback_failed_replica 的区别。
 
 
 
@@ -210,11 +202,23 @@ pentry 的 rim_cid 只会在 remove replica 的时候被设置。
 
 
 
+prometheus 里可以从 2 个角度来观察值
+
+1. zbs_chunk_access 开头的，比如 zbs_chunk_access_cap_replica_reposition_read_iops from_chunk 1 to_chunk 2 表示以 1 为 lease owner read 2 上数据的 iops。
+2. zbs_chunk_local_io_from_local 开头的，比如 zbs_chunk_local_io_from_local_cap_ec_app_write_latency_ns 表示这个节点的 local io handler 接受到的从本地 access 来的 ec app write 的延迟
+3. zbs_chunk_local_io_from_remote 开头的，比如 zbs_chunk_local_io_from_remote_cap_replica_reposition_write_speed_bps 表示这个节点的 local io handler 接受到的从远端 access 来的 cap replica write 的带宽
+
+prometheus 中支持多种 IO 类型的 metric 相加，比如二者相加可以观察这个 chunk 收到的所有 cap replica reposition write 的带宽，zbs_chunk_local_io_from_remote_cap_replica_reposition_write_speed_bps + zbs_chunk_local_io_from_local_cap_replica_reposition_write_speed_bps 
+
 
 
 
 
 一个是 tuna 那报的一个问题，从 5.0.3 升级到 5.0.7，有个节点 IO 重路由状态检查失败，上去看了下，有个现象是会删除本地存储 ip，然后又把他添加回来，看了下应该是这个版本里对 session alive 的判断逻辑有问题，当时没有 session alive 字段，他是自己写的一套判断逻辑，应该是有点 bug，还没来得及继续调查，还会出 5.0.8 吗？还需要更细致的调查吗？
+
+
+
+smtxos 4.1.0 在 scvm 的 sshd 配置 /etc/ssh/sshd_config 中 ssh PermitRootLogin 默认为 yes，升级到 5.1.2 后会改为 no，这导致旧版本 ioreroute ssh scvm 失败，无法获取 session 信息
 
 
 
