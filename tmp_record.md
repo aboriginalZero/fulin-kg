@@ -1,3 +1,7 @@
+重构一下 AccessManager::ReplicaIsValid，把 update 和判断是否要回收分开来处理。
+
+依赖 GetMetaContext().stretched_stage = StretchedStage::Stretched 的单测都需要在 CreateZone 后加一句
+
 
 
 p1 case zbs 5.2.2 rc16 smtxos 5.0.6
@@ -55,8 +59,6 @@ https://docs.paramiko.org/en/2.12/
 对于在被拔盘上的 extent，会写失败，触发 remove replica，紧接放入待生成 recover cmd 队列中。
 
 
-
-依赖 GetMetaContext().stretched_stage = StretchedStage::Stretched 的单测都需要在 CreateZone 后加一句
 
 
 
