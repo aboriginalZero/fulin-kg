@@ -1,6 +1,11 @@
+
 重构一下 AccessManager::ReplicaIsValid，把 update 和判断是否要回收分开来处理。
 
 依赖 GetMetaContext().stretched_stage = StretchedStage::Stretched 的单测都需要在 CreateZone 后加一句
+
+
+给所有的 ECBadExtentStatus 追加 commit msg
+
 
 
 
@@ -78,10 +83,6 @@ replica sync gen 的时候，如果发现他有 temporary replica，也会一起
 
 
 
-FOREACH_REPLICA(failed_loc, temporary_cid) 改成 failed cid 
-
-
-
 remove replica 和 replace replica 这两个 rpc 很重要，理解形参各个字段的含义、副本被剔除/替换的时机、access 什么时候会调用
 
 
@@ -104,7 +105,13 @@ special recover 的 src cid 是（有损）临时副本所在 chunk，dst 是失
 2. force_recover_from_temporary_replica, base on normal special  recover, but we ignore the validity check of  temporary replica 
 3. rollback_failed_replica, just set temporary replica's failed_cid  as pextent's location
 
-还是没搞懂 force_recover_from_temporary_replica 和 rollback_failed_replica 的区别。
+一般情况下，如果不能直接通过 normal special recover 恢复的，需要分析日志再决定采用强制恢复还是回滚。
+
+force recover from tmeporary replica 直接从临时副本上读数据，不管他的  gen 是多少，然后写入到失败副本，然后把这个副本当成正常副本来用。
+
+rollback_failed_replica 是丢弃临时副本上的数据，直接把失败副本当正常副本来用，rollback 是一种更兜底的做法，大部分情况是在集群因为空间不足没法为临时副本分配副本的时候用的。
+
+
 
 
 
