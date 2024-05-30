@@ -1,25 +1,19 @@
 1. 针对 dst = prefer local 特殊处理，连续 2 次恢复失败才放入 recover dst 黑名单；
+2. recover cmd 被 migrate cmd 占满 slot 导致没法立即生成和下发；
 2. access 在读 COW 出来还没写过的 pextent 时，如果读全部副本都失败，主动 refresh location 去读 parent 上的数据；
-3. recover cmd 被 migrate cmd 占满 slot 导致没法立即生成和下发
-4. 重构一下 AccessManager::ReplicaIsValid，把 update 和判断是否要回收分开来处理；
+4. access reposition 的 Counter 改成 metric，否则影响前端展示、metric 使用
 5. 依赖 GetMetaContext().stretched_stage = StretchedStage::Stretched 的单测都需要在 CreateZone 后加一句
 6. 给所有的 ECBadExtentStatus 追加 commit msg
-7. access reposition 的 Counter 改成 metric，否则影响前端展示、metric 使用
+7. 重构一下 AccessManager::ReplicaIsValid，把 update 和判断是否要回收分开来处理；
+7. 让单测分层默认开启
 
 
-
-
-p1 case zbs 5.2.2 rc16 smtxos 5.0.6
-
-dead pid：232814、239517
 
 
 
 刚刚那个日志显示 pid 239517 recover fail 报错 SYSENODATA
 
 /var/log/message 中搜坏盘 sdg
-
-zbs-chunk datainspector -h
 
 
 
@@ -65,7 +59,7 @@ https://docs.paramiko.org/en/2.12/
 
 
 
-晚点把临时副本分配失败的 3 个 case 看一下，汇总一下临时副本
+汇总一下临时副本，结合文档，https://docs.google.com/document/d/1L1I-_md5jE4GyqPItkioh1TzQXEgRhNFqIHtIwN-43k/edit#heading=h.moqcl2aq3auh
 
 什么时候会 verifyread 而不是普通的 read
 
@@ -245,6 +239,8 @@ smtxos 4.1.0 在 scvm 的 sshd 配置 /etc/ssh/sshd_config 中 ssh PermitRootLog
 
 
 
+整理一下 xen io reroute 中 meta leader 被 kill 的售后处理的流程，zk leader kill 包含 zk session、access session、db cluster 相关的内容。meta in zbs 中关于 db cluster 部分，DBCluster是一个通用的组件，用于各个节点间进行数据的同步。在有数据修改时，DBCluster会首先将journal提交到journal cluster（目前基于zookeeper实现），当提交到journal cluster完成后，数据修改就可以返回了，journal cluster保证修改的持久性，本地的LevelDb会异步的被修改。
+
 
 
 SCVM 升级之后，在 IO Reroute 升级时，SCVM 会通过 ssh 的方式在每台 ESXi 上执行多个 cli 用以杀死 reroute 旧进程，更换新版本 reroute 脚本，更新 crontab 中新 reroute 脚本位置并等待唤起新进程。
@@ -354,7 +350,7 @@ esxcfg-route -d 192.168.33.2/32 10.0.0.22; esxcfg-route -a 192.168.33.2/32 10.0.
 
           升级到 560，但没有开启之前，不允许创建 prior pextent 的代码在哪里？
 
-          replica_capacity_only 模式允许创建 prior pextent 吗？
+          replica_capacity_only 模式允许创建 prior pextent 吗？应该是不允许
 
           改动之后，可能的坑点：
 
@@ -382,8 +378,6 @@ esxcfg-route -d 192.168.33.2/32 10.0.0.22; esxcfg-route -a 192.168.33.2/32 10.0.
 
           只有 replica 才会分配临时副本，所以 ec 不会有 agile recover
 
-          临时副本在 perf layer 中一定是 thin 的，临时副本一定分配上
-
           有很多代码适合 pick 到 55x，但在 56x 中直接被删除了，见 [ZBS-27109](http://jira.smartx.com/browse/ZBS-27109)
 
           ```
@@ -399,26 +393,12 @@ esxcfg-route -d 192.168.33.2/32 10.0.0.22; esxcfg-route -a 192.168.33.2/32 10.0.
           
           LOG(INFO) << "yiwu sp_load " << sp_load << " pk " << pk;
           ```
-
+    
 12. 对于仅被 thin volume / snapshot 引用的 capacity pextent，其 provision 将在 gc 扫描时被更新为 thin，随心跳下发给 lsm，如果有 pextent 被 thick volume 引用，那其 provision 将被更新为 thick，随心跳下发给 lsm，[ZBS-15094](http://jira.smartx.com/browse/ZBS-15094)。
 
 13. 根据最新 lsm 设计文档大致了解 lsm2 
 
 14. 补一个同时有多个 removing cid 的单测；
-
-15. refactor migrate for repair topo，从 GenerateMigrateCmdsForRepairTopo 开始改；
-
-    1. 待做 [ZBS-13401](http://jira.smartx.com/browse/ZBS-13401)，让中高负载的容量均衡策略都要保证 prefer local 本地的副本不会被迁移，且如果 prefer local 变了，那么也要让他所在的 chunk 有一个本地副本（有个上限是保留归保留，但如果超过 95%，超过的 部分不考虑 prefer local 一定有对应的副本）
-    
-        怎么判断是否会超过 95% 呢？
-    
-        如果 volume 的 prefer local 到新 chunk 后（不论是人为运维还是上层虚拟机被迁移到其他节点），现有的迁移策略能让新位置的 prefer local 有副本吗？
-    
-        如果不能，在 migrate for rebalance 之后，再有一个 migrate for prefer local，他的目的是保证让 prefer local 有副本，
-    
-        [ZBS-25949](http://jira.smartx.com/browse/ZBS-25949) 修改后的 migrate for repair topo 能够达到的效果是不会 replace prefer local，在 prefer local 满足 topo rank 不降级的情况下，dst 会优先选 prefer local，貌似能达到这个效果？双活下也可以吗？prefer local 从 prefer zone 迁移到 secondary zone。
-    
-        migrate for ec repair topo 中对 ec src 的选择过于宽松了，其实还可以选到更好的 src，但是目前不做处理，目前只根据 replace 来选 src
 
 16. MgirateFilter 可以改成 allow, deny 都允许的，如果没要求，就传入 std::nullopt
 
@@ -550,36 +530,11 @@ rx_pids -> dst_pids，tx_pids -> replace_cids, recover_src_pids -> src_pids
 
     如果 ReGenerateMigrateForRepairTopo 生成了 cmd，那么只生成这个目标的 cmd，否则试图去生成 ReGenerateMigrateForBalanceInStoragePool 的 cmd。需要对 ReGenerateMigrateForBalanceInStoragePool() 改进，先保证都有本地副本，再去做容量均衡。
 
-    待做 [ZBS-13401](http://jira.smartx.com/browse/ZBS-13401)，让中高负载的容量均衡策略都要保证 prefer local 本地的副本不会被迁移，且如果 prefer local 变了，那么也要让他所在的 chunk 有一个本地副本（有个上限是保留归保留，但如果超过 95%，超过的 部分不考虑 prefero local 一定有对应的副本）。
-
 5. 超高负载
 
     跳过 topo repair 扫描，只做 ReGenerateMigrateForBalanceInStoragePool()
 
-所以，先做
 
-1. ZBS-13401
-
-   目前在高负载情况下，数据不再会遵循本地化分配原则，而是会尽量的均匀分布。这可能会造成部分虚拟机在迁移之后和原来的性能有较大的差异。需要考虑改善这个场景，也许有两个方向需要考虑：
-
-   - 允许用户用命令行触发一个集中策略（向指定的节点聚集一个副本，不需要完整局部化，仅本地化即可），但是不能让指定节点进入超高负载状态（95%）
-
-   - 调整平衡策略，在中高负载集群相对均衡后，尝试本地化聚集（不需要局部化，仅保证一个副本在 prefer cid 所在节点即可）
-
-     看起来得单独另其一个策略函数，在 migrate for rebalance 之后，以 pid 为粒度去遍历，仅靠以 cid 为粒度的两两匹配做不到这个。
-
-   prefer local 节点上没有副本的入口有且仅有这 2 个：
-
-   1. 高负载情况下，prefer local 的数据会被迁移；
-   2. 虚拟机热迁移（用户操作、无法干预）且处于高负载，此时不会做 prefer local 的副本迁移。
-
-2. ZBS-20993
-
-3. ZBS-21199
-
-
-
-改 Prefer Local / TopoAware / Localized 三个比较器名字，ZBS-25802
 
 如果都给了 topology 且两个副本的 zone distance, topo distance 都相同的情况下，LocalizedComparator 和 TopoAwareComparator 区别在于：
 
@@ -748,10 +703,6 @@ gtest系列之事件机制
 
    块存储对外接口并不多，一般就是快照/克隆之后的 COW 让问题变复杂，性能变慢
 
-3. lsm 测跟 dongdong 的聊天内容
-
-   meta 侧空间计算中的字段含义，[快照/克隆对空间参数的影响](https://docs.google.com/document/d/1oOZ6CENaLFBU_AG6tZ4nnxv1CFUNvv3ND_NWVGVN2PY/edit#heading=h.x0vh71hjzfds)
-   
 4. 目前遇到的高负载下不迁移：要么 topo 降级了，要么 lease owner 没释放，要么是双活只能在单 zone 内迁移
 
 4. 后续写文档可以考虑先介绍所有 sub migrate strategies 中共有的限制条件：
@@ -807,40 +758,38 @@ gtest系列之事件机制
 
 遗留问题：
 
-1. 为什么 AllocRecoverForAgile 中一定不会有 prior extent？
+1. lease owner 不释放的一个原因是 inspector 扫描到 extent generation 不一致而触发的读操作（借此剔除 gen 较低的 extent，再经由 recover 完成数据一致）
 
-2. lease owner 不释放的一个原因是 inspector 扫描到 extent generation 不一致而触发的读操作（借此剔除 gen 较低的 extent，再经由 recover 完成数据一致）
-
-3. 为什么 LSM 写 4 KiB cache 需要写 journal，写 256 KiB cache 不需要？
+2. 为什么 LSM 写 4 KiB cache 需要写 journal，写 256 KiB cache 不需要？
 
     4k 写为了避免写放大，除了写一个 4k 的真实数据外，还需要写对应的 bitmap （一个 256 KiB 的 block 中有 64 个 4k ）并持久化到 journal。
 
     否则就需要写 4k 真实数据 + 1020k 实际为 0 的数据，这将引起写放大。
 
-4. LSM2 中，采取 Journaling+Soft Update 的方式保证 crash consistency。默认采用 Journaling，所有数据和元数据的更新都需要通过 Journal 进行保护，然后再写入 BDev。当数据是初次写入时，允许采用 Soft Update 方式，先将数据写入磁盘，再把元数据写入 Journal，避免因数据写入 Journal 引起的写放大。
+3. LSM2 中，采取 Journaling+Soft Update 的方式保证 crash consistency。默认采用 Journaling，所有数据和元数据的更新都需要通过 Journal 进行保护，然后再写入 BDev。当数据是初次写入时，允许采用 Soft Update 方式，先将数据写入磁盘，再把元数据写入 Journal，避免因数据写入 Journal 引起的写放大。
 
     初次写的数据如果丢了，元数据没来得及写入 Journal 会有什么后果？
 
-5. 在元数据中，最消耗内存的是 PBlob ，我们必须实现 PBlob 不常驻内存。PBlobEntry 数量跟 PBlob 接近，但单个 PBlobEntry 较小，可全量放内存。对于独占数据，无需额外内存保存 Entry，只需要计算映射值即可；对于共享数据，需要在内存中保存 Entry，因此，快照数量的增加，会增加 LSM 的内存占用。
+4. 在元数据中，最消耗内存的是 PBlob ，我们必须实现 PBlob 不常驻内存。PBlobEntry 数量跟 PBlob 接近，但单个 PBlobEntry 较小，可全量放内存。对于独占数据，无需额外内存保存 Entry，只需要计算映射值即可；对于共享数据，需要在内存中保存 Entry，因此，快照数量的增加，会增加 LSM 的内存占用。
 
     为啥独占数据，无需额外内存保存 Entry，只需要计算映射值即可？
 
-6. 为啥 class PBlobCtx 相较于 message PBlobPB 可以节省内存和操作开销？
+5. 为啥 class PBlobCtx 相较于 message PBlobPB 可以节省内存和操作开销？
 
-7. 为啥只有 private pblob 可能触发 promote 的 IO 读，以及 shared pblob 为啥不会？
+6. 为啥只有 private pblob 可能触发 promote 的 IO 读，以及 shared pblob 为啥不会？
 
-8. 普通 IO 读不需要修改 Journal，触发 promote 的 IO 读由于涉及到从 data block 到 cache block 的拷贝，所以需要写一条 amend pblob PB 的 Journal，然后才会按照普通 IO 读的流程走下去。
+7. 普通 IO 读不需要修改 Journal，触发 promote 的 IO 读由于涉及到从 data block 到 cache block 的拷贝，所以需要写一条 amend pblob PB 的 Journal，然后才会按照普通 IO 读的流程走下去。
 
-9. 只有 partition 中会使用 checksum，每 8 KiB + 512 B 的布局，每 8 KiB 计算出 CRC32 值，保存在随后的 512 B 里，所以 valid_data_space = 94% * total_data_capacity
+8. 只有 partition 中会使用 checksum，每 8 KiB + 512 B 的布局，每 8 KiB 计算出 CRC32 值，保存在随后的 512 B 里，所以 valid_data_space = 94% * total_data_capacity
 
     分层之后的 valid_data_space = 94% * total_data_capacity，perf_valid_data_space <= 90% * perf_total_data_capacity，10% 指的是至少为 cap read cache 预留 10% 的 perf space
 
-10. SSD 和 HDD 的 Block（560 开始）
+9. SSD 和 HDD 的 Block（560 开始）
 
     1. SSD 的 Block 大小使用 16 KiB，而不是 4 KiB。主要出于两点考虑：1. 4 KiB 粒度过小，元数据量较大，且占用的内存过高；2. 4 KiB 粒度过小，对读不友好。单个大 IO 会切分成过多的小 IO。
     2. HDD 的 Block 大小使用 128 KiB，主要出于两点考虑：1. 128 KiB 粒度，占用的内存量可接受；2. HDD 的 IO 延时，大部分来自于寻道，写 IO 的放大对性能影响较小。
 
-11. 256 KiB PBlob 描述
+10. 256 KiB PBlob 描述
 
      ```protobuf
      message PBlobPB {
@@ -874,8 +823,6 @@ gtest系列之事件机制
 
 
 待整理
-
-整理一下 xen io reroute 中 meta leader 被 kill 的售后处理的流程，zk leader kill 包含 zk session、access session、db cluster 相关的内容。meta in zbs 中关于 db cluster 部分，DBCluster是一个通用的组件，用于各个节点间进行数据的同步。在有数据修改时，DBCluster会首先将journal提交到journal cluster（目前基于zookeeper实现），当提交到journal cluster完成后，数据修改就可以返回了，journal cluster保证修改的持久性，本地的LevelDb会异步的被修改。
 
 下一个 smtxos 开始使用 yq，了解 yq 的用法，https://github.com/mikefarah/yq 
 
