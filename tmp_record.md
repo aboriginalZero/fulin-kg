@@ -1,10 +1,10 @@
-
-重构一下 AccessManager::ReplicaIsValid，把 update 和判断是否要回收分开来处理。
-
-依赖 GetMetaContext().stretched_stage = StretchedStage::Stretched 的单测都需要在 CreateZone 后加一句
-
-
-给所有的 ECBadExtentStatus 追加 commit msg
+1. 针对 dst = prefer local 特殊处理，连续 2 次恢复失败才放入 recover dst 黑名单；
+2. access 在读 COW 出来还没写过的 pextent 时，如果读全部副本都失败，主动 refresh location 去读 parent 上的数据；
+3. recover cmd 被 migrate cmd 占满 slot 导致没法立即生成和下发
+4. 重构一下 AccessManager::ReplicaIsValid，把 update 和判断是否要回收分开来处理；
+5. 依赖 GetMetaContext().stretched_stage = StretchedStage::Stretched 的单测都需要在 CreateZone 后加一句
+6. 给所有的 ECBadExtentStatus 追加 commit msg
+7. access reposition 的 Counter 改成 metric，否则影响前端展示、metric 使用
 
 
 
@@ -37,11 +37,11 @@ chunk 日志中搜 migrate pblob skip 会显示卸载盘卸不掉的 pblob
 
 
 
-zbs 5.2.2 rc16 smtxos 5.0.6
+smtx os 6.1.0 周期 reroute 待办项
 
-看到的现象是移除 Node 13 的过程中，Node9 空间超过 90%
-
-
+1. [ZBS-27617](http://jira.smartx.com/browse/ZBS-27617)
+2. [ZBS-27632](http://jira.smartx.com/browse/ZBS-27632)
+3. [ZBS-13377](http://jira.smartx.com/browse/ZBS-13377)
 
 在 ssh target 上要执行的命令用单引号包双引号。
 
@@ -65,11 +65,7 @@ https://docs.paramiko.org/en/2.12/
 
 
 
-
-
-晚点把临时副本分配失败的 3 个 case 看一下，SpecialRecoverTemporaryWhenRead，汇总一下临时副本
-
-cap / perf 都会产生临时副本，为啥会用 UNLIKELY，在 git stash 中
+晚点把临时副本分配失败的 3 个 case 看一下，汇总一下临时副本
 
 什么时候会 verifyread 而不是普通的 read
 
@@ -193,6 +189,8 @@ pentry 的 rim_cid 只会在 remove replica 的时候被设置。
 
    1. 把 recover 的分页跟 Migrate 的独立开来，并改大点。减少还有待恢复数据但却先下发 migrate cmd 把 cmd slot 等资源用满的情况；
 
+      migrate 和 recover 用各自的 cmd slot 可以避免吗？
+
    2. 如果 generate recover cmd ，可以清空待下发的 migrate cmd 吗？
 
       已下发的 migrate cmd，只要他还没完成，recover handler 收到同一 pid 的 recover cmd 会被直接丢弃，不会执行。
@@ -203,7 +201,13 @@ pentry 的 rim_cid 只会在 remove replica 的时候被设置。
 
    5. recover manager 对于没有实际分配的数据会跳过命令下发配额的限制，快速下发给 access，如果这部分数据是从本地读，这个 recover 很快就会完成，但 recover handler 的 pending_recover_cmds_ 是按 FIFO 的顺序进 running_recover_pids_ 执行的，所以后发的符合上述特点的 pid 也没法快速执行，可能被前面执行慢的 pid 拖慢。
 
-3. recover cmd 快速生成的逻辑在 arm 的环境中貌似没有起作用，因为分页 + pid 数量变大的原因，多扫一次的做法提升并不明显了，可能得多扫一轮？
+4. recover cmd 快速生成的逻辑在 arm 的环境中貌似没有起作用，因为分页 + pid 数量变大的原因，多扫一次的做法提升并不明显了，可能得多扫一轮？
+
+   同样的原因，需要考虑 need recover 数据量可能超过一个分页的时候，给 tuna 侧暴露的查询待恢复数据量的接口不准。
+
+   多扫一轮不太现实，太耗时了。
+
+   下一个 4s 多扫一次的提升变得有限了。
 
 4. 检查 recover/migrate speed 在前端界面和 prometheus 中的数值是否准确，meta 侧跟 chunk 侧的 total speed 和 local speed 和 remote speed
 
@@ -451,6 +455,8 @@ esxcfg-route -d 192.168.33.2/32 10.0.0.22; esxcfg-route -a 192.168.33.2/32 10.0.
 4. zbs-meta recover < volume_id> 想让这个 volume 优先被 recover；
 
     当有多个 volume 需要 recover，耗时太久时，可以优先 recover 指定卷上的 pextent
+
+    貌似也可以提供 pid 粒度的优先 recover rpc，比如在 chunk 想要触发某个 pid 的 recover，这个优先级要比 recover doscan 扫描的高，更早被执行。
 
 5. zbs-meta recover set_runtime <start_hour> <end_hour>
 
