@@ -9,11 +9,6 @@
 
 
 
-p1 case zbs 5.2.2 rc16 smtxos 5.0.6
-
-dead pid：232814、239517
-
-
 
 刚刚那个日志显示 pid 239517 recover fail 报错 SYSENODATA
 
@@ -59,6 +54,8 @@ https://docs.paramiko.org/en/2.12/
 
 
 
+副本读失败并不会触发 remove replica，但在副本读之前会有一次 sync，sync 失败的副本会被 remove replica
+
 对于在被拔盘上的 extent，会读失败，但副本读失败并不会触发 remove replica，由于被拔盘了，所以他也不在 data report 里，meta 不会主动下发 gc cmd，直到 last report ms 超过 10 min 没更新，recover manager 扫描到它 not alive 了，才会下发 recover cmd。
 
 对于在被拔盘上的 extent，会写失败，触发 remove replica，紧接放入待生成 recover cmd 队列中。
@@ -73,7 +70,7 @@ https://docs.paramiko.org/en/2.12/
 
 普通读的时候是否会 sync，会的，在 AccessIOHandler::DoReadVExtent() 中调用，像写一样，也会剔除 gen 不符预期的副本、在 sync 失败时清理本地 lease， 读 COW 出来的 pentry 但 parent 不在本地的情况调用一次 RefreshChildExtentLocation rpc
 
-普通读一个 pentry 会避免读正在 recover 的副本
+普通读一个 pentry 会避免读正在 recover 的 dst 副本
 
 replica sync gen 的时候，如果发现他有 temporary replica，也会一起 sync gen
 
