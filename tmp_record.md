@@ -6,19 +6,6 @@
 
 
 
-一种方式是每次都判断下是在 ReplicaIOHandler::SetupReadIOCtx 中将
-
-```c++
-# 参考判断 cid 是否本地
-pextent_io_handler_->IsLocal(cid)
-```
-
-另外一种是在 lease UpdateFrom pextent 的时候，调用 BasePExtentInfo< Loc>::UpdateLocation 时
-
-在 meta 侧直接把 prefer local 排到 loc 里面的第 1 个会怎么样？
-
-
-
 刚刚那个日志显示 pid 239517 recover fail 报错 SYSENODATA
 
 /var/log/message 中搜坏盘 sdg
