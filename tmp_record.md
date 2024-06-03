@@ -1,8 +1,18 @@
 1. recover cmd 被 migrate cmd 占满 slot 导致没法立即生成和下发；
 2. access 在读 COW 出来还没写过的 pextent 时，如果读全部副本都失败，主动 refresh location 去读 parent 上的数据；
-3. access reposition 的 Counter 改成 metric，否则影响前端展示、metric 使用
+3. access reposition 的 Counter 改成 metric，否则影响前端展示、metric 使用，检查 recover/migrate speed 在前端界面和 prometheus 中的数值是否准确，meta 侧跟 chunk 侧的 total speed 和 local speed 和 remote speed。
 4. 重构一下 AccessManager::ReplicaIsValid，把 update 和判断是否要回收分开来处理；
 5. 让单测分层默认开启
+
+
+
+
+
+tuna 自己去翻页查找 need recover 数据了。
+
+zbs-client-py 中没有一个命令行可以给出精确的待恢复待恢复数据块个数，即使是隔 1min 调用 1 次 zbs-meta cluster summary 拿 ongoing / pending recover num，一共 2 次，在大规格容量（pid 数量超过 100w）下也会遗漏掉 100w 之后的那部分数据（目前 zbs 内部单次 recover 扫描上限是 50w 个 pid），比如最极端的场景有 800w 个 pid，需要调用 zbs-meta recover scan_immediate 16 次，如果连续 16 次看到的 ongoing / pending recover num 都是 0 并且 zbs-meta pextent find need_recover 也是 0，才认为集群真的没有待恢复数据。
+
+
 
 
 
@@ -180,15 +190,15 @@ pentry 的 rim_cid 只会在 remove replica 的时候被设置。
 
    用 zbs-meta pextent find need_recover 可以显示。
 
-   目前的做法，没法确保一定没有数据。
-
-   如果是因为选不出 recover src/dst，且待生成的数量少于 1024，比如 cmd slots 不足、可用节点数量不足、集群容量不足导致的，会造成通过 zbs-meta cluster summary 拿到的 ongoing / pending recover num 相加值为 0。
+   目前的做法，没法确保一定没有数据。如果是因为选不出 recover src/dst，且待生成的数量少于 1024，比如 cmd slots 不足、可用节点数量不足、集群容量不足导致的，会造成通过 zbs-meta cluster summary 拿到的 ongoing / pending recover num 相加值为 0。
 
    1. 把 recover 的分页跟 Migrate 的独立开来，并改大点。减少还有待恢复数据但却先下发 migrate cmd 把 cmd slot 等资源用满的情况；
 
+      tuna 是通过自己翻页查找 need recover pextent 来判断还有多少待恢复数据，所以暂时没必要把 2 个分页大小独立开来，虽然 recover 自己可以做到单次 scan 1024 * 1024 个 pid 耗时 10s 内，影响的只是 zbs-meta cluster summary 和 tower 上的展示。
+
       migrate 和 recover 用各自的 cmd slot 可以避免吗？
 
-   2. 如果 generate recover cmd ，可以清空待下发的 migrate cmd 吗？
+   2. 如果 generate recover cmd ，可以清空待下发的 migrate cmd 吗
 
       已下发的 migrate cmd，只要他还没完成，recover handler 收到同一 pid 的 recover cmd 会被直接丢弃，不会执行。
 
@@ -201,18 +211,6 @@ pentry 的 rim_cid 只会在 remove replica 的时候被设置。
    4. 进出维护模式，把 migrate cmd 清掉，防止他抢资源，让升级快点结束。进出维护模式的时间应该不长，这段时间内的 migrate 重要吗？
 
    5. recover manager 对于没有实际分配的数据会跳过命令下发配额的限制，快速下发给 access，如果这部分数据是从本地读，这个 recover 很快就会完成，但 recover handler 的 pending_recover_cmds_ 是按 FIFO 的顺序进 running_recover_pids_ 执行的，所以后发的符合上述特点的 pid 也没法快速执行，可能被前面执行慢的 pid 拖慢。
-
-4. recover cmd 快速生成的逻辑在 arm 的环境中貌似没有起作用，因为分页 + pid 数量变大的原因，多扫一次的做法提升并不明显了，可能得多扫一轮？
-
-   同样的原因，需要考虑 need recover 数据量可能超过一个分页的时候，给 tuna 侧暴露的查询待恢复数据量的接口不准。
-
-   多扫一轮不太现实，太耗时了。
-
-   下一个 4s 多扫一次的提升变得有限了。
-
-4. 检查 recover/migrate speed 在前端界面和 prometheus 中的数值是否准确，meta 侧跟 chunk 侧的 total speed 和 local speed 和 remote speed
-
-   排查 reposition 性能问题时应该看哪些指标
 
 
 
