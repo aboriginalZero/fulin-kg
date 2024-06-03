@@ -1,11 +1,8 @@
-1. 针对 dst = prefer local 特殊处理，连续 2 次恢复失败才放入 recover dst 黑名单；
-2. recover cmd 被 migrate cmd 占满 slot 导致没法立即生成和下发；
+1. recover cmd 被 migrate cmd 占满 slot 导致没法立即生成和下发；
 2. access 在读 COW 出来还没写过的 pextent 时，如果读全部副本都失败，主动 refresh location 去读 parent 上的数据；
-4. access reposition 的 Counter 改成 metric，否则影响前端展示、metric 使用
-5. 依赖 GetMetaContext().stretched_stage = StretchedStage::Stretched 的单测都需要在 CreateZone 后加一句
-6. 给所有的 ECBadExtentStatus 追加 commit msg
-7. 重构一下 AccessManager::ReplicaIsValid，把 update 和判断是否要回收分开来处理；
-7. 让单测分层默认开启
+3. access reposition 的 Counter 改成 metric，否则影响前端展示、metric 使用
+4. 重构一下 AccessManager::ReplicaIsValid，把 update 和判断是否要回收分开来处理；
+5. 让单测分层默认开启
 
 
 
@@ -183,6 +180,12 @@ pentry 的 rim_cid 只会在 remove replica 的时候被设置。
 
 3. 分开设置 recover 和 migrate 的单次 scan 上限，generate recover cmd 的过程中如果有了 migrate cmd，是可以打断他的。
 
+   用 zbs-meta pextent find need_recover 可以显示。
+
+   目前的做法，没法确保一定没有数据。
+
+   如果是因为选不出 recover src/dst，且待生成的数量少于 1024，比如 cmd slots 不足、可用节点数量不足、集群容量不足导致的，会造成通过 zbs-meta cluster summary 拿到的 ongoing / pending recover num 相加值为 0。
+
    1. 把 recover 的分页跟 Migrate 的独立开来，并改大点。减少还有待恢复数据但却先下发 migrate cmd 把 cmd slot 等资源用满的情况；
 
       migrate 和 recover 用各自的 cmd slot 可以避免吗？
@@ -190,6 +193,10 @@ pentry 的 rim_cid 只会在 remove replica 的时候被设置。
    2. 如果 generate recover cmd ，可以清空待下发的 migrate cmd 吗？
 
       已下发的 migrate cmd，只要他还没完成，recover handler 收到同一 pid 的 recover cmd 会被直接丢弃，不会执行。
+
+      access 做如果引入 recover cmd 的 cancel 机制，太麻烦了
+
+      如果 app io 写失败，会认为 reposition io 写也会失败。
 
    3. recover handler 中的执行队列，可否做成 ever exist = false 且 origin_pid = 0 的 pid 优先执行，其他 pid 按 FIFO 的顺序执行。
 
