@@ -1,8 +1,9 @@
-1. recover cmd 被 migrate cmd 占满 slot 导致没法立即生成和下发；
-2. access 在读 COW 出来还没写过的 pextent 时，如果读全部副本都失败，主动 refresh location 去读 parent 上的数据；
-3. access reposition 的 Counter 改成 metric，否则影响前端展示、metric 使用，检查 recover/migrate speed 在前端界面和 prometheus 中的数值是否准确，meta 侧跟 chunk 侧的 total speed 和 local speed 和 remote speed。
-4. 重构一下 AccessManager::ReplicaIsValid，把 update 和判断是否要回收分开来处理；
+1. access 在读 COW 出来还没写过的 pextent 时，如果读全部副本都失败，主动 refresh location 去读 parent 上的数据；
+2. access reposition 的 Counter 改成 metric，否则影响前端展示、metric 使用，检查 recover/migrate speed 在前端界面和 prometheus 中的数值是否准确，meta 侧跟 chunk 侧的 total speed 和 local speed 和 remote speed。
+3. 重构一下 AccessManager::ReplicaIsValid，把 update 和判断是否要回收分开来处理；
 5. 让单测分层默认开启
+
+
 
 
 
