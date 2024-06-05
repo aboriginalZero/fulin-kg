@@ -2,6 +2,31 @@
 2. access reposition 的 Counter 改成 metric，否则影响前端展示、metric 使用，检查 recover/migrate speed 在前端界面和 prometheus 中的数值是否准确，meta 侧跟 chunk 侧的 total speed 和 local speed 和 remote speed。
 3. 重构一下 AccessManager::ReplicaIsValid，把 update 和判断是否要回收分开来处理；
 5. 让单测分层默认开启
+5. 验证 [ZBS-25858](http://jira.smartx.com/browse/ZBS-25858) 的正确性，需要重新测一下最新的 lsm 上限值
+5. 整理命令行、给出文档
+
+
+
+meta 侧的参数
+
+不论是否 auto mode，都可以设置
+
+```
+  --static_generate_cmds_per_round_limit STATIC_GENERATE_CMDS_PER_ROUND_LIMIT
+                        max number of recover / migrate cmds generated per round (default: None)
+  --static_cap_distribute_cmds_per_chunk_limit STATIC_CAP_DISTRIBUTE_CMDS_PER_CHUNK_LIMIT
+                        max number of recover / migrate cmds distributed in capacity layer per chunk (default: None)
+  --static_perf_distribute_cmds_per_chunk_limit STATIC_PERF_DISTRIBUTE_CMDS_PER_CHUNK_LIMIT
+                        max number of recover / migrate cmds distributed in performance layer per chunk (default: None)
+```
+
+把当前带宽给出来？（可以自己通过 prometheus 里面相加得到）
+
+
+
+
+
+
 
 
 
