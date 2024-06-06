@@ -24,11 +24,93 @@ meta 侧的参数
 
 
 
+卸盘，根据盘类型分为 2 种：
+
+1. umount cache 
+
+   1. disk total size - disk used size < node perf valid space - node perf allocated space：含义是卸载盘后，节点的 perf 层使用量不该超过总量；
+   2. cluster perf thick allocated space < cluster perf thick valid space - disk total size * prs_ratio：含义是卸载盘后，集群 perf thick 的使用量不该超过总量（单节点即使超了也可以通过迁移腾出）；
+   3. node perf thin allocated space < node perf thin valid space - disk total size * (1 - prs_ratio)：含义是卸载盘后，节点 perf thin 的使用量不超过总量的 95%，避免下沉进入超高负载模式。
+
+   以上 3 点同时满足才算通过卸盘空间检验。
+
+2. umount partition
+
+   1. disk total size - disk used size < cap valid space - cap allocated space：含义是卸载盘后，节点的 cap 层使用量不该超过总量（注意根据是否 enable_thick_extent，用不同字段）；
+
+
+
+LSM 上卸载 Cache 的逻辑应该需要做一下平滑调整，先把上报的 Cache 可用空间减少，让 Meta 调整自己的分配策略。但是空间应该还是要可被 IO 的，直到本地的 Cache 已使用空间（Thin + Pin 预留）小于移除磁盘之后的可用空间时，才开始拒绝向移除中的磁盘写入新的数据。这样就是 Meta 感知有一个磁盘正在被卸载，开始组织数据迁移走。 LSM 等待迁移的差不多了，再开始现在流程的卸载动作。
+
+perf 层限流使用的数值字段，LSM 也需要想一下。
+
+所以是 LSM 做一下平滑调整。磁盘不直接进入卸载状态，上报 Meta 空间有变化，Meta 做数据调整，迁移出数据，并且尽量避免新数据分配过来，等到 OK 了 ，LSM 再进入真实动作。
+
+Meta 可以考虑一下怎么处理，可以利用一下现在已经有的 Removing 处理逻辑。给 Chunk 打一个新的 Removing Disk 状态，到目前空间之后就停止这样。就可以在不影响负载判定的迁移在完成适度的 Drain 工作。
+
+
+
+recover / sink manager 负载判断使用字段
+
+1. perf thin valid = perf valid - planned_prs；
+2. perf thin allocated = perf allocated - allocated_prs；
+
+
+
+整体上还是 lsm 收到卸载请求后，先降低面向 meta 上报的可用空间
+
+
+
+调用一个给到 meta rpc server 的 RemoveDisk rpc，request 包含 cid、disk perf size、disk cap size
+
+1. chunk 状态改成 DISK_REMOVING （新增 chunk 状态），这种状态的 chunk 有如下特点：
+   1. 集群分配新副本不会选它；
+   2. 触发磁盘移除迁移，具体策略复用节点移除迁移；
+   3. reposition dst 一定不选它，reposition replace 优先选它；
+   4. 下沉负载计算中将 perf valid 按 chunk 上报的 perf valid - disk perf size 来判断；
+2. 当这个 chunk 的 pextent 
+
+
+
+disk perf size、disk cap size
+
+1. chunk 先按 perf valid - disk perf size 上报 perf valid，perf  thin / thick used 正常上报，cap valid 同理；
+
+   >  应该要搞一个新字段  ，不然会影响前端展示。
+
+2. meta 据此
+
+   > 
+
+3. 若引发下沉/迁移
 
 
 
 
 
+
+
+
+
+这个空间检查只在卸盘前，卸盘过程中可能会有新数据写入，所以还需要多加个 2% - 5% 预留空间来做更严格的判定。
+
+
+
+在全闪分层模式下，一个磁盘上有可能即有 Cache 又有 partition，两者都要通过才在界面上允许卸载。
+
+1. umount cache 
+
+1. 集群中所有 Cache 分区的总和 - 待卸载磁盘 Cache 空间 > 集群整体的 Perf allocated 总和。
+
+1. umount partition
+
+1. 集群中所有 Parition 分区的总和 - 待卸载磁盘 Parition 空间 > 集群整体的 Cap allocated 总和。
+
+
+
+卸载盘后，集群 perf thin 的使用量不超过总量
+
+cluster perf thin allocated space < cluster perf thin valid space - disk total size * (1 - node prs_ratio)
 
 
 
