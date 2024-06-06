@@ -57,6 +57,25 @@ recover / sink manager 负载判断使用字段
 
 
 
+卸盘这个行为不可逆，
+
+
+
+对于任意一个待卸载盘上的 cache 分区大小记为 disk perf size，partition 分区大小记为 disk cap size。
+
+在收到卸盘请求后，lsm 将本轮的 perf valid - disk perf size 作为下一轮心跳上报的 perf valid 值，cap valid 同理，执行盘间迁移。
+
+tower 卸盘空间检验：
+
+1. disk perf size < cluster perf valid space - cluster perf allocated space，含义是盘上 cache 分区空间小于集群 perf 层的剩余可用空间；
+2. disk cap size < cluster cap valid space - cluster cap allocated space，含义是盘上 partition 分区空间小于集群 cap 层的剩余可用空间；
+3. disk perf size * prs_ratio < cluster perf thick valid space - cluster perf allocated space，含义是卸载盘后，集群 perf thick 的使用量不该超过总量；
+4. disk perf size * (1 - prs_ratio) < node perf thin valid space - node perf thin allocated space，含义是卸载盘后，节点 perf thin 的使用量不超过总量的 95%，避免下沉进入超高负载模式。
+
+补充说明：若卸盘后该节点的 perf/cap allocated > perf/cap valid，需要等待节点间的容量均衡迁移迁出部分数据才能完成盘间迁移，但容量均衡迁移可能因为拓扑降级或双活场景下单 zone 内空间已满而无法执行，导致盘一直卸不掉。作为已知问题，此时需要人工介入。
+
+
+
 整体上还是 lsm 收到卸载请求后，先降低面向 meta 上报的可用空间
 
 
@@ -72,45 +91,7 @@ recover / sink manager 负载判断使用字段
 
 
 
-disk perf size、disk cap size
-
-1. chunk 先按 perf valid - disk perf size 上报 perf valid，perf  thin / thick used 正常上报，cap valid 同理；
-
-   >  应该要搞一个新字段  ，不然会影响前端展示。
-
-2. meta 据此
-
-   > 
-
-3. 若引发下沉/迁移
-
-
-
-
-
-
-
-
-
 这个空间检查只在卸盘前，卸盘过程中可能会有新数据写入，所以还需要多加个 2% - 5% 预留空间来做更严格的判定。
-
-
-
-在全闪分层模式下，一个磁盘上有可能即有 Cache 又有 partition，两者都要通过才在界面上允许卸载。
-
-1. umount cache 
-
-1. 集群中所有 Cache 分区的总和 - 待卸载磁盘 Cache 空间 > 集群整体的 Perf allocated 总和。
-
-1. umount partition
-
-1. 集群中所有 Parition 分区的总和 - 待卸载磁盘 Parition 空间 > 集群整体的 Cap allocated 总和。
-
-
-
-卸载盘后，集群 perf thin 的使用量不超过总量
-
-cluster perf thin allocated space < cluster perf thin valid space - disk total size * (1 - node prs_ratio)
 
 
 
