@@ -7,6 +7,12 @@
 
 
 
+退出维护模式，等待数据恢复的那个过程，只要还有 need recover 的数据，就不允许生成 migrate cmd。否则可能出现这个分页内没有 need recover，把 avail slot 让给了 migrate，下个分页内的 need recover 需要等他做完才行。
+
+meta / chunk 升级到 5.6.0 之后，数据都被当作 cap，recover 相比之前只会更慢
+
+
+
 meta 侧的参数
 
 不论是否 auto mode，都可以设置
@@ -21,6 +27,12 @@ meta 侧的参数
 ```
 
 把当前带宽给出来？（可以自己通过 prometheus 里面相加得到）
+
+
+
+
+
+zbs-meta volume show_by_id 01576676-f8a0-40f2-88c0-434d05cddc8d --show_pextents  | grep PT_CAP | awk '{print $1, $(NF-4)}' | grep -w '2'
 
 
 

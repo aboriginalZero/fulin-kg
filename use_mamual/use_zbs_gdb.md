@@ -248,7 +248,7 @@ thread apply all bt
 4. 查看 coredump 中的变量来推测退出时机
 
    ```
-   gdb usr/sbin/zbs-metad UrgentThread.core.2042.1705303636
+   gdb /usr/sbin/zbs-metad UrgentThread.core.2042.1705303636
    (gdb) file zbs-metad
    (gdb) directory /path
    (gdb) thread apply all bt
