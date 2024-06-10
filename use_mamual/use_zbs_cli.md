@@ -131,6 +131,8 @@ systemctl restart tuna-rest-server zbs-rest-server
 zbs-meta -fjson chunk list | jq '.[] | {"ID", "Perf Valid Space", "Perf Allocated Space"}'
 # 查看所有的 chunk 的 ring id
 zbs-meta -fjson topo list | jq 'map(select(.type =="NODE")) | .[] | "\(.["description"]), ring id \(.["ring_id"])"'
+# 查看一个 volume 中 prefer local = 2 的所有 cap pid
+zbs-meta volume show_by_id 01576676-f8a0-40f2-88c0-434d05cddc8d --show_pextents | grep PT_CAP | awk '{print $1, $(NF-4)}' | grep -w '2'
 ```
 
 查找 even volume

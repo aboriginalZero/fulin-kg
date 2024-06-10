@@ -1,109 +1,29 @@
-1. access 在读 COW 出来还没写过的 pextent 时，如果读全部副本都失败，主动 refresh location 去读 parent 上的数据；
-2. access reposition 的 Counter 改成 metric，否则影响前端展示、metric 使用，检查 recover/migrate speed 在前端界面和 prometheus 中的数值是否准确，meta 侧跟 chunk 侧的 total speed 和 local speed 和 remote speed。
-3. 重构一下 AccessManager::ReplicaIsValid，把 update 和判断是否要回收分开来处理；
-5. 让单测分层默认开启
-5. 验证 [ZBS-25858](http://jira.smartx.com/browse/ZBS-25858) 的正确性，需要重新测一下最新的 lsm 上限值
-5. 整理命令行、给出文档
+1. 整理命令行、给出文档。meta 侧 reposition 参数，不论是否 auto / static mode，都要允许设置。统一
 
+    把当前带宽给出来？暂时不做，可以自己通过 prometheus 里面相加得到；
 
+2. 升级过程中避免迁移命令影响恢复命令的生成，[ZBS-27730](http://jira.smartx.com/browse/ZBS-27730)；
 
-退出维护模式，等待数据恢复的那个过程，只要还有 need recover 的数据，就不允许生成 migrate cmd。否则可能出现这个分页内没有 need recover，把 avail slot 让给了 migrate，下个分页内的 need recover 需要等他做完才行。
+3. internal throttle 调整，加入 sink 的考虑，放宽上限；
 
-meta / chunk 升级到 5.6.0 之后，数据都被当作 cap，recover 相比之前只会更慢
+4. 让单测分层默认开启
 
+5. 验证 [ZBS-25858](http://jira.smartx.com/browse/ZBS-25858) 的正确性，需要重新测一下最新的 lsm 上限值；
 
+6. access reposition 的 Counter 改成 metric，否则影响前端展示、metric 使用，检查 recover/migrate speed 在前端界面和 prometheus 中的数值是否准确，meta 侧跟 chunk 侧的 total speed 和 local speed 和 remote speed；
 
-meta 侧的参数
+7. 重构一下 AccessManager::ReplicaIsValid，把 update 和判断是否要回收分开来处理；
 
-不论是否 auto mode，都可以设置
-
-```
-  --static_generate_cmds_per_round_limit STATIC_GENERATE_CMDS_PER_ROUND_LIMIT
-                        max number of recover / migrate cmds generated per round (default: None)
-  --static_cap_distribute_cmds_per_chunk_limit STATIC_CAP_DISTRIBUTE_CMDS_PER_CHUNK_LIMIT
-                        max number of recover / migrate cmds distributed in capacity layer per chunk (default: None)
-  --static_perf_distribute_cmds_per_chunk_limit STATIC_PERF_DISTRIBUTE_CMDS_PER_CHUNK_LIMIT
-                        max number of recover / migrate cmds distributed in performance layer per chunk (default: None)
-```
-
-把当前带宽给出来？（可以自己通过 prometheus 里面相加得到）
+5. access 在读 COW 出来还没写过的 pextent 时，如果读全部副本都失败，主动 refresh location 去读 parent 上的数据；
 
 
 
 
 
-zbs-meta volume show_by_id 01576676-f8a0-40f2-88c0-434d05cddc8d --show_pextents  | grep PT_CAP | awk '{print $1, $(NF-4)}' | grep -w '2'
 
 
 
-卸盘，根据盘类型分为 2 种：
 
-1. umount cache 
-
-   1. disk total size - disk used size < node perf valid space - node perf allocated space：含义是卸载盘后，节点的 perf 层使用量不该超过总量；
-   2. cluster perf thick allocated space < cluster perf thick valid space - disk total size * prs_ratio：含义是卸载盘后，集群 perf thick 的使用量不该超过总量（单节点即使超了也可以通过迁移腾出）；
-   3. node perf thin allocated space < node perf thin valid space - disk total size * (1 - prs_ratio)：含义是卸载盘后，节点 perf thin 的使用量不超过总量的 95%，避免下沉进入超高负载模式。
-
-   以上 3 点同时满足才算通过卸盘空间检验。
-
-2. umount partition
-
-   1. disk total size - disk used size < cap valid space - cap allocated space：含义是卸载盘后，节点的 cap 层使用量不该超过总量（注意根据是否 enable_thick_extent，用不同字段）；
-
-
-
-LSM 上卸载 Cache 的逻辑应该需要做一下平滑调整，先把上报的 Cache 可用空间减少，让 Meta 调整自己的分配策略。但是空间应该还是要可被 IO 的，直到本地的 Cache 已使用空间（Thin + Pin 预留）小于移除磁盘之后的可用空间时，才开始拒绝向移除中的磁盘写入新的数据。这样就是 Meta 感知有一个磁盘正在被卸载，开始组织数据迁移走。 LSM 等待迁移的差不多了，再开始现在流程的卸载动作。
-
-perf 层限流使用的数值字段，LSM 也需要想一下。
-
-所以是 LSM 做一下平滑调整。磁盘不直接进入卸载状态，上报 Meta 空间有变化，Meta 做数据调整，迁移出数据，并且尽量避免新数据分配过来，等到 OK 了 ，LSM 再进入真实动作。
-
-Meta 可以考虑一下怎么处理，可以利用一下现在已经有的 Removing 处理逻辑。给 Chunk 打一个新的 Removing Disk 状态，到目前空间之后就停止这样。就可以在不影响负载判定的迁移在完成适度的 Drain 工作。
-
-
-
-recover / sink manager 负载判断使用字段
-
-1. perf thin valid = perf valid - planned_prs；
-2. perf thin allocated = perf allocated - allocated_prs；
-
-
-
-卸盘这个行为不可逆，
-
-
-
-对于任意一个待卸载盘上的 cache 分区大小记为 disk perf size，partition 分区大小记为 disk cap size。
-
-在收到卸盘请求后，lsm 将本轮的 perf valid - disk perf size 作为下一轮心跳上报的 perf valid 值，cap valid 同理，执行盘间迁移。
-
-tower 卸盘空间检验：
-
-1. disk perf size < cluster perf valid space - cluster perf allocated space，含义是盘上 cache 分区空间小于集群 perf 层的剩余可用空间；
-2. disk cap size < cluster cap valid space - cluster cap allocated space，含义是盘上 partition 分区空间小于集群 cap 层的剩余可用空间；
-3. disk perf size * prs_ratio < cluster perf thick valid space - cluster perf allocated space，含义是卸载盘后，集群 perf thick 的使用量不该超过总量；
-4. disk perf size * (1 - prs_ratio) < node perf thin valid space - node perf thin allocated space，含义是卸载盘后，节点 perf thin 的使用量不超过总量的 95%，避免下沉进入超高负载模式。
-
-补充说明：若卸盘后该节点的 perf/cap allocated > perf/cap valid，需要等待节点间的容量均衡迁移迁出部分数据才能完成盘间迁移，但容量均衡迁移可能因为拓扑降级或双活场景下单 zone 内空间已满而无法执行，导致盘一直卸不掉。作为已知问题，此时需要人工介入。
-
-
-
-整体上还是 lsm 收到卸载请求后，先降低面向 meta 上报的可用空间
-
-
-
-调用一个给到 meta rpc server 的 RemoveDisk rpc，request 包含 cid、disk perf size、disk cap size
-
-1. chunk 状态改成 DISK_REMOVING （新增 chunk 状态），这种状态的 chunk 有如下特点：
-   1. 集群分配新副本不会选它；
-   2. 触发磁盘移除迁移，具体策略复用节点移除迁移；
-   3. reposition dst 一定不选它，reposition replace 优先选它；
-   4. 下沉负载计算中将 perf valid 按 chunk 上报的 perf valid - disk perf size 来判断；
-2. 当这个 chunk 的 pextent 
-
-
-
-这个空间检查只在卸盘前，卸盘过程中可能会有新数据写入，所以还需要多加个 2% - 5% 预留空间来做更严格的判定。
 
 
 
@@ -128,12 +48,6 @@ rpm -qi zbs
 cd /var/log/zbs && ll -rth zbs-chunkd.log* 按照日期排序找文件
 
 grep "the" | less
-
-last reboot 看上一次启动时间
-
-
-
-chunk 日志中搜 migrate pblob skip 会显示卸载盘卸不掉的 pblob
 
 
 
@@ -1314,6 +1228,41 @@ access 按一个 pextent 的 gen 不降序的方式顺序下发 io co 给 lsm（
 ### sync gen
 
 access 从 meta 拿到的 lease 中的 location 是 loc 而不是 alive loc，可参考 GenerateLayerLease()，在 sync gen  是对 loc 而不是 alive loc 上每个 cid 都 sync，实际上，让 access 做一下 sync 真正确定一下这个副本是否连通比 meta 给出的信息更靠谱，因为这个 chunk 有可能跟 meta 失联，但还跟其他 chunk 联通，此时的失联 chunk 还是可以被读写副本的。
+
+### remove disk
+
+卸载盘调的是 chunk rpc server 的 UmountCache/UmountPartition rpc，没做空间校验，meta 侧没参与，tuna 那边也是放行的，所以变成 tower 在做。
+
+tower 卸载物理盘限制如下（zbs 5.6.x）：
+
+1. 存在数据恢复： 获取 [zbs_cluster_pending_recover_bytes](https://smartx1.slack.com/archives/C06T7HMAV5J/p1717136802475749?thread_ts=1716789334.665009&cid=C06T7HMAV5J) metric 数据，不为 0 则说明有数据恢复；
+
+    1. 判断待恢复数据是否存在，使用 zbs-meta pextent find need_recover；
+    2. 判断待恢复数据量，使用 metric zbs_cluster_pending_recover_bytes（zbs status server 对外暴露的时候提前加了，这个 metric = pending_recovers_bytes + ongoing_recovers_bytes），大部分情况下，能反映真实待恢复数据量，当比如剩余空间/节点/可用下发命令额度不足导致选不出 recover src/dst，这个值就会有偏差。
+
+2. 存在其它卸载的盘，需等待卸载完成；
+
+3. 不能卸载所属主机最后一块包含数据分区的物理盘，数据分区判断：partitions有 usage 为partition；
+
+4. 不能卸载启动盘 ，启动盘判断：usage 为 boot；
+
+5. 空间不够不可卸载，从 /v2/storage/storage_pools 和 /v2/cluster/storage api 处获取空间字段；
+
+    对于任意一个待卸载盘上的 cache 分区大小记为 disk perf size，partition 分区大小记为 disk cap size。tower 卸盘空间检验需同时满足以下 3 个条件：
+
+    1. disk perf size < cluster perf valid space - cluster perf allocated space，含义是待卸载盘上 cache 分区空间不该超过集群 perf 层的剩余可用空间；
+    2. disk cap size < cluster cap valid space - cluster cap allocated space，含义是待卸载盘上 partition 分区空间不该超过集群 cap 层的剩余可用空间；
+    3. disk perf size * prs_ratio < cluster perf thick valid space - cluster perf allocated space，含义是卸盘后，集群 perf thick 的使用量不该超过总量；
+
+    在收到卸盘请求后，lsm 将本轮的 perf valid - disk perf size 作为下一轮心跳上报的 perf valid 值，cap valid 同理，同时执行盘间迁移（限流 flow control 使用的负载判断字段需要调整）。
+
+    若卸盘后该节点的 perf/cap allocated > perf/cap valid，需要等待节点间的容量均衡迁移迁出部分数据才能完成盘间迁移。但容量均衡迁移可能因为拓扑降级或双活场景下单 zone 内空间已满而无法执行，导致盘一直卸不掉。作为已知问题，此时需要人工介入，zbs cli 提供了 zbs chunk cache / partition cancel-umount 命令。
+
+    这个空间检查只在卸盘前，卸盘过程中可能会有新数据写入，所以还需要多加个 2% - 5% 预留空间来做更严格的判定？目前未执行。
+
+前端在存储健康状态的判定基础上加了 job center 的判断（connected），如果卸载磁盘时，jc-worker 异常，不加这个判断的话，任务可能可以提交成功，但迟迟不会开始执行，直到 jc-worker 恢复正常。
+
+chunk 日志中搜 migrate pblob skip 会显示卸载盘卸不掉的 pblob，有 MIGRATE BLOCK DEVICE SUCCESS 表明卸载成功，搜 LSM::MigrateBlockDevice() --> SubmitBlockDeviceMigrate() --> MigratePBlobsOnBlockDevice() 可以看到卸盘逻辑
 
 ### remove chunk
 
