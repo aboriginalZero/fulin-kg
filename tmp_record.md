@@ -4,23 +4,15 @@
 
 2. 升级过程中避免迁移命令影响恢复命令的生成，[ZBS-27730](http://jira.smartx.com/browse/ZBS-27730)；
 
-3. internal throttle 调整，加入 sink 的考虑，放宽上限；
+3. internal throttle 调整，加入 sink 的考虑，放宽上限，验证 [ZBS-25858](http://jira.smartx.com/browse/ZBS-25858) 的正确性，需要重新测一下最新的 lsm 上限值；
 
-4. 让单测分层默认开启
-
-5. 验证 [ZBS-25858](http://jira.smartx.com/browse/ZBS-25858) 的正确性，需要重新测一下最新的 lsm 上限值；
+4. 让单测分层默认开启；
 
 6. access reposition 的 Counter 改成 metric，否则影响前端展示、metric 使用，检查 recover/migrate speed 在前端界面和 prometheus 中的数值是否准确，meta 侧跟 chunk 侧的 total speed 和 local speed 和 remote speed；
 
 7. 重构一下 AccessManager::ReplicaIsValid，把 update 和判断是否要回收分开来处理；
 
 5. access 在读 COW 出来还没写过的 pextent 时，如果读全部副本都失败，主动 refresh location 去读 parent 上的数据；
-
-
-
-
-
-
 
 
 
@@ -309,7 +301,7 @@ esxcfg-route -d 192.168.33.2/32 10.0.0.22; esxcfg-route -a 192.168.33.2/32 10.0.
     
     // 从 lextent table 中获取 lextent 的 cap/perf pid 信息
     LExtent lextent;
-    meta->GetLextent(lid, &lextent);
+    meta->GetLxtent(lid, &lextent);
     
     // 从 pextent table 中获取 pextent 的 location/preferred_cid/thin_provision 信息
     PExtent cap_pextent;
@@ -1317,6 +1309,8 @@ transaction 中，判断 thin/thick 的依据，cap 用 thin_provision_ ，perf 
 
 分配一个 thin pextent，直到初次写之前，他的 location 都是空的，所以 alive_location 也为空。
 
+分配一个 prefer local = 0 的 thick volume 时，会立马分配 cap loc，在低负载且 topology 不为空时，没有 prefer local 后，也不是按节点容量最低的作为第一个节点，而是会随机选第一个节点（只要剩余空间大于 pextent size），然后按 ring id 找他后续的节点。
+
 
 
 待核实：
@@ -1326,6 +1320,24 @@ transaction 中，判断 thin/thick 的依据，cap 用 thin_provision_ ，perf 
 分层之后，创建一个 lextent 时，会马上分配 perf / cap pextent，一定会给 perf 分配 location，如果 cap 的 origin pid 是 0，而且是 thick pextent，也要为 cap 分配 location，否则不分配
 
 ### Clone, Snapshot, COW
+
+如果一个 vextent 被打了 cow flag：vtable 上面会变成 cow=1 .... lid = 1[perf_pid = 1, cap_pid = 2]。
+
+- 如果对这个 vextent 发起写，会把这个 vtable[vno] 改成 cow = 0 ... lid = 2[perf_pid = 3, perf_origin_pid = 1, cap_pid = 4, cap_origin_pid = 2]，获取到的 lease 是 lid = 2 的。
+
+- 如果对这个 vextent 发起读，vtable[vno] 不变，获取 lease 是 Lid = 1 的，Child 还没出现，也不会 RefreshChild。
+
+
+
+这方面的内容应该通过在 tiering_test.cc 中写单测来感受？直接看代码理不顺。
+
+
+
+CreateSnapshot 只是将
+
+快照一定是个非 prior volume，且它的所有 vextent COW flag 一定都是 true，这样可以保证快照只读的假设。因为对这个快照的写，要申请 is_cow = true 的 GetLeaseForWrite，那么一定会 COW 出一份新的 vtable 和分配新的 pid，在新的上面写。
+
+
 
 假设 A 的 origin id = B，发生快照/克隆后 origin id 的变更情况（MetaRpcServer::CreateSnapshot / CloneVolumeTransaction）：
 
@@ -1382,8 +1394,6 @@ transaction 中，判断 thin/thick 的依据，cap 用 thin_provision_ ，perf 
  6. 
 
 在分层之后，更新一个 Volume：
-
-
 
 
 
