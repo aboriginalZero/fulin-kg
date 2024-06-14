@@ -58,8 +58,6 @@ GDB 是一款可以用来调试 C/C++/Java/Go 的调试工具，在类 Unix 系�
     (gdb) p ('zbs::meta::MetaServer')*0xaaad15a66700
     ```
     
-    
-    
 4. 运行 gdb
 
     ```shell
@@ -217,6 +215,8 @@ thread apply all bt
 
 ### 典型调试过程
 
+#### 用户环境
+
 1. 用户提供了一个 coredump 和集群收集日志
 
 2. 起一个 zbs-buildtime 的 docker，从 17.20 上下载、安装对应的 zbs 和对应的 debuginfo 的 rpm
@@ -280,6 +280,67 @@ thread apply all bt
       ```shell
       /opt/rh/devtoolset-10/root/bin/gdb -c /home/core/rpc-server.core.3219.1692671991 /usr/sbin/zbs-metad
       ```
+
+#### 内部环境
+
+1. 一键安装 zbs-debuginfo
+
+   ```shell
+   curl 192.168.31.215/i | bash
+   ```
+
+2. 安装 devtoolset-11-gdb
+
+   ```shell
+   grep -i 'centos' /etc/os-release && rpm -Uvh http://repo-idc.gitgo.cc/mirror/centos/7/centos-sclo-rh/x86_64/Packages/d/devtoolset-11-runtime-11.1-2.el7.x86_64.rpm http://repo-idc.gitgo.cc/mirror/centos/7/centos-sclo-rh/x86_64/Packages/d/devtoolset-11-gdb-10.2-6.el7.x86_64.rpm http://repo-idc.gitgo.cc/mirror/centos/7/os/x86_64/Packages/mpfr-3.1.1-4.el7.x86_64.rpm http://repo-idc.gitgo.cc/mirror/centos/7/os/x86_64/Packages/boost-regex-1.53.0-28.el7.x86_64.rpm http://repo-idc.gitgo.cc/mirror/centos/7/os/x86_64/Packages/source-highlight-3.1.6-6.el7.x86_64.rpm http://repo-idc.gitgo.cc/mirror/centos/7/os/x86_64/Packages/ctags-5.8-13.el7.x86_64.rpm
+   ```
+
+   可以打印 std::unordered_map 类型的变量、无需加载代码、自动加载符号表
+
+3. 查看 ChunkServer 和 MetaServer 的 PTR
+
+   ```shell
+   grep "CHUNK SERVER PTR" /var/log/zbs/zbs-chunkd*
+   grep "Starting the services of meta" /var/log/zbs/zbs-metad*
+   ```
+
+4. 启动 gdb
+
+   ```shell
+   /opt/rh/devtoolset-11/root/bin/gdb /usr/sbin/zbs-metad /tmp/core.9128
+   ```
+
+5. 在 gdb 中打印指定变量
+
+   ```shell
+   (gdb) p (('zbs::meta::MetaServer')*0x55c00d972000)->context_->recover_manager->recover_dst_mgrs_
+   $1 = std::unordered_map with 23 elements = {
+     [5747519] = {
+       ptr_ = 0x55c05fc1a960
+     },
+     ...
+   }
+   
+   (gdb) p (('zbs::meta::RecoverManager::RecoverDstMgr')*0x55c05fc1a960)
+   $3 = {
+     <zbs::RefCounted<zbs::meta::RecoverManager::RecoverDstMgr, false>> = {
+       <zbs::subtle::RefCountedBase<false>> = {
+         ref_count_ = 1
+       }, <No data fields>},
+     members of zbs::meta::RecoverManager::RecoverDstMgr:
+     pid = 5747519,
+     epoch = 11550747,
+     preferred_cid = 2 '\002',
+     is_preferred_cid_normal_used = false,
+     agile_dst_candidate_cids = std::vector of length 1, capacity 1 = {6 '\006'},
+     agile_dst_used_cids = std::unordered_set with 1 element = {
+       [0] = 6 '\006'
+     },
+     normal_dst_used_cids = std::unordered_set with 0 elements
+   }
+   ```
+
+   
 
 [参考1](https://zhuanlan.zhihu.com/p/74897601)，[参考2](https://cloud.tencent.com/developer/article/1142947)
 
