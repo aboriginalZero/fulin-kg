@@ -1,9 +1,20 @@
 1. 升级过程中避免迁移命令影响恢复命令的生成，[ZBS-27730](http://jira.smartx.com/browse/ZBS-27730)；
+
 2. internal throttle 调整，加入 sink 的考虑，放宽上限，验证 [ZBS-25858](http://jira.smartx.com/browse/ZBS-25858) 的正确性，需要重新测一下最新的 lsm 上限值；
+
+    https://smartx1.slack.com/archives/C061UF6CTEF/p1717858713757579
+
 3. 让单测分层默认开启；
+
 4. access reposition 的 Counter 改成 metric，否则影响前端展示、metric 使用，检查 recover/migrate speed 在前端界面和 prometheus 中的数值是否准确，meta 侧跟 chunk 侧的 total speed 和 local speed 和 remote speed；
+
 5. 重构一下 AccessManager::ReplicaIsValid，把 update 和判断是否要回收分开来处理；
+
 6. access 在读 COW 出来还没写过的 pextent 时，如果读全部副本都失败，主动 refresh location 去读 parent 上的数据；
+
+
+
+
 
 
 
