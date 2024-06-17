@@ -12,11 +12,9 @@
 
 6. access 在读 COW 出来还没写过的 pextent 时，如果读全部副本都失败，主动 refresh location 去读 parent 上的数据；
 
+7. 在 133.171 上挂载 8 个 64T 的大卷做 ummap 试一下，如果还是慢，说明有可能是接入协议的问题。
 
-
-
-
-
+    在 zbs 日志中看一下有没有 fail to ping 的日志，另外看一下多个卷做 unmap 的 zbs-chunk show_polling_stats 中 chunk-main 的 CPU 占用率。
 
 
 
