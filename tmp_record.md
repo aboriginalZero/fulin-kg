@@ -2,8 +2,6 @@
 zbs-chunk internal_io set --busy_bps_sata_ssd = 1 --busy_iops_sata_ssd = 1 --max_bps_limit_sata_ssd
 ```
 
-验证方式是在没有 topo 配置的情况下，在集群略低于高负载的时候，创建一个 normal thick 大卷，之前的方式是 volume 中所有 extent 都会按本地优先分配，把 prefer local 的空间耗尽，再分配到其他节点，但现在会先按本地优先分配，当 prefer local 进入高负载后，按容量均衡分配到剩余空间更多的节点。
-
 
 
 
@@ -49,6 +47,10 @@ zbs-chunk internal_io set --busy_bps_sata_ssd = 1 --busy_iops_sata_ssd = 1 --max
 ```
 
 
+
+目前同一个 volume 分配的 extent 都是采用的同一个策略，在一个策略在分配所有的 extent 之前就已经决定好了，而不是每一个 extent 决定一个策略，需要修改。http://gerrit.smartx.com/c/zbs/+/67339/2，这个 patch 的做法性能不够优秀。
+
+验证方式是在没有 topo 配置的情况下，在集群略低于高负载的时候，创建一个 normal thick 大卷，之前的方式是 volume 中所有 extent 都会按本地优先分配，把 prefer local 的空间耗尽，再分配到其他节点，但现在会先按本地优先分配，当 prefer local 进入高负载后，按容量均衡分配到剩余空间更多的节点。
 
 
 
