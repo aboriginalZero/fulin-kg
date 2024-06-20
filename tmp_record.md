@@ -4,6 +4,18 @@ zbs-chunk internal_io set --busy_bps_sata_ssd = 1 --busy_iops_sata_ssd = 1 --max
 
 
 
+按 4 块盘测，256k, 4k 的业务 IO 是否能抢到 app io，
+
+让集群真的产生 recover ，去看 throttle 给的默认值。
+
+
+
+类似于 cat /proc/12035/stack，在 esxi 环境中
+
+top -H -p `pidof zbs-metad `，按 f 选中 P (Last Used Cpu)，可以看每个线程具体跑在哪个核上
+
+
+
 
 
 1. 升级过程中避免迁移命令影响恢复命令的生成，[ZBS-27730](http://jira.smartx.com/browse/ZBS-27730)；
