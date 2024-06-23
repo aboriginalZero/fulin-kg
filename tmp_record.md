@@ -10,9 +10,41 @@ zbs-chunk internal_io set --busy_bps_sata_ssd = 1 --busy_iops_sata_ssd = 1 --max
 
 
 
+app io  iodepth 32 的话，bs 从 8k / 256k /  1024k，internal io 都会下降。
+
+
+
 类似于 cat /proc/12035/stack，在 esxi 环境中
 
 top -H -p `pidof zbs-metad `，按 f 选中 P (Last Used Cpu)，可以看每个线程具体跑在哪个核上
+
+
+
+如果 app io 流量没有超过  zbs 能够发挥磁盘的上限，那么智能调节的机制应该是保持 internal io 和 app io 的使用总和不超过 zbs 发挥磁盘的上限，而不是一旦有 20 MiB/s app io 来了，就让 internal io 减到最低。之后可以考虑让 app io busy bps 在一个基准值的基础上动态变化。具个简单的例子，比如 app io 大于 20 MiB/s，internal io limit 减一半，只有 app io 大于 40 MiB/s，internal io limit 才继续再减一半。
+
+而如果 app io 大于磁盘上限，那可以考虑让 internal io 降低的快一点，且下限低一些。
+
+
+
+
+
+5.6.0 中，lsm 对外暴露 GetPerfSpaceInfo，其中引入 PerfSpaceInfo 给 access 限流/下沉使用（meta 没用）
+
+```c++
+struct PerfSpaceInfo {
+    size_t thin_used;
+    size_t thin_free;
+    size_t thin_valid;
+    size_t thick_reserved;
+};
+```
+
+其中，
+
+-  space_info.thin_free + space_info.thin_used 不等于 space_info.thin_valid；
+- space_info.thin_used 可能大于 space_info.thin_valid，当发生拔盘，卸载盘，或者快照克隆时会发生；
+- access 限流 block 分配时，使用 space_info.thin_free / space_info.thin_valid 来判断是否要限流，值越小，越需要限流；
+- access 是否加速下沉，使用 space_info.thin_used / space_info.thin_valid 判断，是否需要加速下沉，值越大，越需要加速下沉。
 
 
 
@@ -394,7 +426,9 @@ esxcfg-route -d 192.168.33.2/32 10.0.0.22; esxcfg-route -a 192.168.33.2/32 10.0.
 
     另外，命令下发窗口可能被自动调节的前提是要打满一个窗口，也就是要有满一个窗口大小的命令数大部分都失败才有可能引发窗口收缩，比如 lease owner = 1, src_cid = 2, dst_cid = 3，若集群中只是 cid 2 IO 性能性能差，基本上需要给到 1 的 cmd src 基本都是 2 才满足整个窗口命令基本超时的条件，而此时把 1 的窗口跳调小也算正常，因为后续这些超时 cmd 的 pextent 再生成 cmd 时，lease owner 大概率还是 1。
 
-7. meta 侧智能调节可以依赖 access 侧的并发度，比如某个 access 对其他所有 chunk 的并发度中取个最大值，比如 3 节点，access 1 认为自己作为 lease owner 跟 2 的 reposition 并发度是 32，跟 3 的 reposition 并发度是 64，那么可以让 meta 侧给到 access 1 的命令下发窗口是 64。
+8. meta 侧智能调节可以依赖 access 侧的并发度，比如某个 access 对其他所有 chunk 的并发度中取个最大值，比如 3 节点，access 1 认为自己作为 lease owner 跟 2 的 reposition 并发度是 32，跟 3 的 reposition 并发度是 64，那么可以让 meta 侧给到 access 1 的命令下发窗口是 64。
+
+    hdd 盘配比不均的话，meta 侧智能调节各个 access 的 cmd slot size 就能够避免 access 没喂饱。
 
 9. 调整 business io 影响内部 IO 的 iops 和 bps 阈值。
 
