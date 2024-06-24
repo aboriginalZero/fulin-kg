@@ -32,6 +32,7 @@ zrt zbs3 FunctionalTest.WriteResize
 docker run --rm --privileged=true -it -v /home/code/zbs3:/zbs -w /zbs registry.smtx.io/zbs/zbs-buildtime:el7-x86_64
 mkdir build && cd build && source /opt/rh/devtoolset-7/enable && cmake -DBUILD_MOLD_LINKER=ON -DCMAKE_BUILD_TYPE=RELWITHDEBINFO -G Ninja ..
 # 编译时给定参数，比如要同时编译 bench，cmake -DBUILD_BENCHMARKS=ON -G Ninja ..
+# d-DBUILD_TARGET_PLATFORM=hygon 编译海光下的
 ninja zbs_test
 
 # 屏幕中会提示出错处的日志信息，借助 newci 可以避免在本地配置 nvmf/rdma 环境跑单测
@@ -79,10 +80,13 @@ source scripts/init_build_env.sh
 pip install -e .
 # 指定自己嵌套集群的 meta leader ip，存储 IP 或管理 IP 都可以
 # 如果 zbs-chunk 的命令，填的 chunk ip 如果下线，请求就会失败
-zbs-meta --meta_ip <manager_ip> migrate get_mode_info
+zbs-meta --meta_ip <meta_leader_mgt_ip> migrate get_mode_info
+zbs-chunk --chunk_ip <chunk_mgt_ip> internal_io get 
 ```
 
 pyzbs 原来是一个 monorepo，里面包含了很多模块，elf，network，tuna，deploy，他们之间的依赖关系非常的重，在 py2 -> py3 的升级过程中，将各个模块独立了 venv，现在 pyzbs 里面只有 zbs-rest-server，专门负责 zbs 相关的 http 接口，tuna 是 ops 相关的模块，里面有所有的硬件，部署，配置变更，集群变更等 API，有自己的 web server，早期整个 pyzbs 只有一个 web server，但是耦合太严重了，各个组件升级完全没办法独立运维。
+
+如果要 zbs-chunk cli，把要验证的 chunk 节点上的 /etc/zbs/zbs.conf 复制到 docker 里（docker 本身没有 /etc/zbs 目录），并在 zbs-chunk --chunk_ip < mgt_ip> internal_io get。
 
 ### pyzbs 调试
 

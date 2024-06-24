@@ -671,6 +671,8 @@ cat bigfile.txt | parallel --pipe sed s/old/new/g
 
 ### 实用
 
+1. 查看进程执行卡住位置：cat /proc/`pidof zbs-metad`/stack
+1. 查看进程中各线程使用 CPU：top -H -p `pidof zbs-metad `，按 f 选中 P (Last Used Cpu)
 1. 查看最近 20 条日志： journalctl -n 20 -u zbs-metad；
 2. 实时显示最新日志： journalctl -f /usr/sbin/crond；
 3. 查看内核日志： journalctl -k，等同于 dmesg -T；
@@ -706,13 +708,13 @@ cat bigfile.txt | parallel --pipe sed s/old/new/g
 cat /proc/${PID}/environ | tr '\0' '\n'	# 将其中的 \0 替换成 \n
 ```
 
-终止进程
+终止进程，发送 SIGTERM 信号，进程有机会执行清理操作，如关闭文件、释放资源等。无法杀死那些不响应 SIGTERM 信号的僵尸进程。
 
 ```
-kill -9 PID
+kill PID
 ```
 
-参数`-9`强制杀死进程
+参数`-9`强制杀死进程，发送 SIGKILL 信号，进程会立即终止,无法执行任何清理操作
 
 ```
 kill -9 $(ps -ef | grep dst_user) 

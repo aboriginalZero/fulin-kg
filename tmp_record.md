@@ -1,62 +1,84 @@
 ```
-zbs-chunk internal_io set --busy_bps_sata_ssd = 1 --busy_iops_sata_ssd = 1 --max_bps_limit_sata_ssd
+LOG(INFO, 5) << "yiwu pt: " << PExtentType_Name(type) << " app_io_iops: " << business_io_iops
+                             << " app_io_bps: " << (uint64_t(business_io_bandwidth) >> 20)
+                             << " limit_iops: " << limit.normal_io_busy_iops_throttle
+                             << " limit_bps: " << (limit.normal_io_busy_bps_throttle >> 20)
+                             << " internal_iops: " << internal_io_iops
+                             << " internal_bps: " << (uint64_t(internal_io_bandwidth) >> 20)
+                             << " last_speed_limit: " << (last_speed_limit >> 20)
+                             << " 0.8 * tmp: " << ((uint64_t)(last_speed_limit * FLAGS_internal_io_busy_ratio) >> 20);
+
 ```
 
 
 
-按 4 块盘测，256k, 4k 的业务 IO 是否能抢到 app io，
-
-让集群真的产生 recover ，去看 throttle 给的默认值。
+观察 perf app io 下降再上涨的时段，perf reposition io 的性能曲线。
 
 
 
-app io  iodepth 32 的话，bs 从 8k / 256k /  1024k，internal io 都会下降。
+iscsi io 流
 
 
 
-类似于 cat /proc/12035/stack，在 esxi 环境中
+一次写操作
 
-top -H -p `pidof zbs-metad `，按 f 选中 P (Last Used Cpu)，可以看每个线程具体跑在哪个核上
+一直走到 zbs client 侧
 
+ZbsClient::DoIO --> ZbsClientProxyV2::DoIO --> IOReceiver::HandleIO（消费队列元素） --> ZbsClientProxyV2::IOSplit （放入一个 polling 队列中，之后被塞到 chunk 主线程） --> ZbsClientProxyV2::IOSubmit --> zbs_aio_write --> blockdev_zbs_writev -->  _blockdev_zbs_submit_request（在这区分 bdev io type，有 read / write / unmap / flush / reset / abort / CAW 等） --> blockdev_zbs_submit_request （注册在 zbs_fn_table 上） --> __submit_request --> spdk_bdev_io_submit --> spdk_bdev_writev --> spdk_bdev_scsi_readwrite --> spdk_bdev_scsi_process_block --> spdk_bdev_scsi_execute --> spdk_scsi_lun_execute_tasks --> spdk_scsi_dev_queue_task --> spdk_iscsi_queue_task --> spdk_iscsi_op_scsi / spdk_iscsi_op_data --> spdk_iscsi_execute --> spdk_iscsi_conn_handle_incoming_pdus --> spdk_iscsi_conn_execute --> spdk_iscsi_conn_full_feature_do_work --> spdk_iscsi_conn_full_feature_migrate （在这起了一个 timer 循环执行 do_work） 
 
+初始化过程
 
-如果 app io 流量没有超过  zbs 能够发挥磁盘的上限，那么智能调节的机制应该是保持 internal io 和 app io 的使用总和不超过 zbs 发挥磁盘的上限，而不是一旦有 20 MiB/s app io 来了，就让 internal io 减到最低。之后可以考虑让 app io busy bps 在一个基准值的基础上动态变化。具个简单的例子，比如 app io 大于 20 MiB/s，internal io limit 减一半，只有 app io 大于 40 MiB/s，internal io limit 才继续再减一半。
+spdk_iscsi_conn_full_feature_migrate --> spdk_iscsi_conn_login_do_work --> spdk_iscsi_conn_construct --> spdk_iscsi_portal_accept --> spdk_iscsi_portal_grp_open --> spdk_iscsi_portal_grp_open_all --> spdk_iscsi_setup --> ISCSIServer::SetupPortal --> ISCSIServer::UpdateConfig --> SetupChunkServerCtx（到了 zbs chunk 侧了）
 
-而如果 app io 大于磁盘上限，那可以考虑让 internal io 降低的快一点，且下限低一些。
+ISCSIServer 在这执行注册多个
 
-
-
-
-
-5.6.0 中，lsm 对外暴露 GetPerfSpaceInfo，其中引入 PerfSpaceInfo 给 access 限流/下沉使用（meta 没用）
-
-```c++
-struct PerfSpaceInfo {
-    size_t thin_used;
-    size_t thin_free;
-    size_t thin_valid;
-    size_t thick_reserved;
-};
-```
-
-其中，
-
--  space_info.thin_free + space_info.thin_used 不等于 space_info.thin_valid；
-- space_info.thin_used 可能大于 space_info.thin_valid，当发生拔盘，卸载盘，或者快照克隆时会发生；
-- access 限流 block 分配时，使用 space_info.thin_free / space_info.thin_valid 来判断是否要限流，值越小，越需要限流；
-- access 是否加速下沉，使用 space_info.thin_used / space_info.thin_valid 判断，是否需要加速下沉，值越大，越需要加速下沉。
+iSCSI initiator 和 ZBS Chunk server 进行交互，iSCSI 配置信息要在 Chunk 上落地才算真正生效。
 
 
 
+1. ZbsClientProxyV2::DoIO
+2. ZbsClient::Write / Unmap
+3. ZbsClient::DoIO
+4. ZbsClient::SplitIO
+5. ZbsClient::ProcessIO
+6. ZbsClient::SubmitIO
+7. InternalIOClient::SubmitIO
+   1. InternalIOClient::DoLocalIO
+      1. AccessIOHandler::WriteVExtent
+   2. InternalIOClient::DoRemoteIO
+      1. DataChannelClient::WriteVExtent
+      2. DataChannelClient::Impl::WriteVExtent
+      3. AccessIOHandler::SubmitWriteVExtent，Access IO Handler 中注册了该回调
+      4. AccessIOHandler::WriteVExtent
+8. AccessIOHandler::WriteVExtent
+9. 
+10. access io handler
+11. replica io handler
+    1. 
+12. 
 
+
+
+
+
+
+
+开启 prometheus： nc -k -l -p 9093 -c "nc 10.0.180.183 9090"
+
+4k app io 没被统计在这，access handler 中显示 app iops / bps = 0，显示在 perf layer，因为 4k 会先写 perf layer
+
+
+
+
+1. 如果 app io 流量没有超过  zbs 能够发挥磁盘的上限，那么智能调节的机制应该是保持 internal io 和 app io 的使用总和不超过 zbs 发挥磁盘的上限，而不是一旦有 20 MiB/s app io 来了，就让 internal io 减到最低。之后可以考虑让 app io busy bps 在一个基准值的基础上动态变化。具个简单的例子，比如 app io 大于 20 MiB/s，internal io limit 减一半，只有 app io 大于 40 MiB/s，internal io limit 才继续再减一半。而如果 app io 大于磁盘上限，那可以考虑让 internal io 降低的快一点，且下限低一些。
+
+1. internal io throttle 加入 iops 的限制，综合考虑 sink 和 reposition
+
+1. zbs-chunk metric reposition 中作为 lease owner 的 access 的值在 migrate 进行时始终为 0 
+
+1. recover dst 没有优选 topo safety，可能造成 recover 后要立马 migrate。
 
 1. 升级过程中避免迁移命令影响恢复命令的生成，[ZBS-27730](http://jira.smartx.com/browse/ZBS-27730)；
-
-2. internal throttle 调整，加入 sink 的考虑，放宽上限，验证 [ZBS-25858](http://jira.smartx.com/browse/ZBS-25858) 的正确性，需要重新测一下最新的 lsm 上限值；
-
-    https://smartx1.slack.com/archives/C061UF6CTEF/p1717858713757579
-
-3. 让单测分层默认开启；
 
 4. access reposition 的 Counter 改成 metric，否则影响前端展示、metric 使用，检查 recover/migrate speed 在前端界面和 prometheus 中的数值是否准确，meta 侧跟 chunk 侧的 total speed 和 local speed 和 remote speed；
 
@@ -941,6 +963,18 @@ vscode 中用 vim 插件，这样可以按区域替换代码
 
 ### reposition 性能测试
 
+测试 auto mode 给的默认值是否合适
+
+1. 没有执行 zbs-meta reposition update --static_cap_distribute_cmds_per_chunk_limit 256，跑不满 internal IO 上限
+2. 需要执行 zbs-meta sink update --cap_direct_write_policy_map '0, 3; 1, 3; 2, 3; 3, 3'  来直写 cap，且要保证这个 volume 没有 perf 副本
+3. zbs-perf-tools volume show 的值跟 fio 的基本能对上
+4. watch zbs-meta internal_io show
+5. zbs-meta topo update 77d91b44-abb8-43ce-832f-5bf632b50601 --new_ring_id 2 / 4 && zbs-meta migrate scan_immediate
+6. watch zbs-meta reposition summary
+7. rm -f /usr/sbin/zbs-chunkd && cp /tmp/zbs-chunkd /usr/sbin/ && systemctl restart zbs-chunkd
+
+
+
 在一个脚本中跑多个 fio 任务，lun 更改之后，计算端怎么感知到，目前是先退出再进去。
 
 看下 zbs-meta session list_iscsi_conn 给出的 session id 和 cid
@@ -1468,6 +1502,24 @@ COW PEXTENT 的触发时机是 GetVExtentLease rpc，如果 access/chunk 那里 
 COW 之后，child alive loc 不一定等于 parent alive loc。实际上，COW 在 Transaction Prepare 的 CowPExtent 时只会只会复制 parent 的 loc，然后在 Commit -> PersistExtents -> UpdateMetaContextWhenSuccess -> SetPExtents 时会将 loc 上的每一个副本的 last_report_ms 设为当前时间，所以 child alive loc = child loc = parent loc，但是不一定等于 parent alive loc。
 
 ### 560 空间计算
+
+5.6.0 中，lsm 对外暴露 GetPerfSpaceInfo，其中引入 PerfSpaceInfo 给 access 限流/下沉使用（meta 没用）
+
+```c++
+struct PerfSpaceInfo {
+    size_t thin_used;
+    size_t thin_free;
+    size_t thin_valid;
+    size_t thick_reserved;
+};
+```
+
+其中，
+
+-  space_info.thin_free + space_info.thin_used 不等于 space_info.thin_valid；
+-  space_info.thin_used 可能大于 space_info.thin_valid，当发生拔盘，卸载盘，或者快照克隆时会发生；
+-  access 限流 block 分配时，使用 space_info.thin_free / space_info.thin_valid 来判断是否要限流，值越小，越需要限流；
+-  access 是否加速下沉，使用 space_info.thin_used / space_info.thin_valid 判断，是否需要加速下沉，值越大，越需要加速下沉。
 
 #### space
 
