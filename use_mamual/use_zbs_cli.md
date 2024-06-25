@@ -301,7 +301,7 @@ zbs-nvmf ns create <subsystem_name> <ns_id_0-256> <Gib_size>
 
 ### iSCSI 使用
 
-搭建基于 ELF 的集群，通过 iSCSI 为在该嵌套集群所在的物理集群上创建的一个Linux VM 使用 ZBS 提供的存储。经黄萍讲解，NFS 与EXSi 搭配使用，该 Linux VM 通过 iSCSI 访问集群上 ZBS 的 chunk。
+搭建基于 ELF 的集群，通过 iSCSI 为在该嵌套集群所在的物理集群上创建的一个Linux VM 使用 ZBS 提供的存储。经 hping 讲解，NFS 与EXSi 搭配使用，该 Linux VM 通过 iSCSI 访问集群上 ZBS 的 chunk。
 
 1. 集群默认已经关闭 SELinux，否则将`/etc/sysconfig/selinux`中的`SELINUX`改为`disabled`，使得chunk相关端口允许被访问，或 setenforce=0；
 

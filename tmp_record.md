@@ -1,3 +1,16 @@
+把 log size 调大些
+
+下次如果还发现这个情况，试着执行 esxcfg-route -l 或 esxcfg-vmknic -l，看看是不是这 2 条命令卡在驱动上
+
+```
+```
+
+python 有没有办法不开子进程去 run cmd 
+
+
+
+
+
 ```
 LOG(INFO, 5) << "yiwu pt: " << PExtentType_Name(type) << " app_io_iops: " << business_io_iops
                              << " app_io_bps: " << (uint64_t(business_io_bandwidth) >> 20)
@@ -18,7 +31,8 @@ LOG(INFO, 5) << "yiwu pt: " << PExtentType_Name(type) << " app_io_iops: " << bus
 
 iscsi io 流
 
-
+1. submitter_receiver.cc 中的 eventfd_read / eventfd_write 使用
+2. zbs client proxy 和 v2 的区别
 
 一次写操作
 
@@ -30,7 +44,7 @@ ZbsClient::DoIO --> ZbsClientProxyV2::DoIO --> IOReceiver::HandleIO（消费队�
 
 spdk_iscsi_conn_full_feature_migrate --> spdk_iscsi_conn_login_do_work --> spdk_iscsi_conn_construct --> spdk_iscsi_portal_accept --> spdk_iscsi_portal_grp_open --> spdk_iscsi_portal_grp_open_all --> spdk_iscsi_setup --> ISCSIServer::SetupPortal --> ISCSIServer::UpdateConfig --> SetupChunkServerCtx（到了 zbs chunk 侧了）
 
-ISCSIServer 在这执行注册多个
+ISCSIServer 在这执行注册多个回调，如 b
 
 iSCSI initiator 和 ZBS Chunk server 进行交互，iSCSI 配置信息要在 Chunk 上落地才算真正生效。
 
@@ -64,6 +78,8 @@ iSCSI initiator 和 ZBS Chunk server 进行交互，iSCSI 配置信息要在 Chu
 
 
 开启 prometheus： nc -k -l -p 9093 -c "nc 10.0.180.183 9090"
+
+ssh -p 2222 yiwu.cai@jump.smartx.com 输入MFA Code 后，直接输入要登陆的主机 IP
 
 4k app io 没被统计在这，access handler 中显示 app iops / bps = 0，显示在 perf layer，因为 4k 会先写 perf layer
 
