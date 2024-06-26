@@ -86,6 +86,8 @@ ssh -p 2222 yiwu.cai@jump.smartx.com 输入MFA Code 后，直接输入要登陆�
 
 
 
+1. 命令行和 meta rpc server 中的默认比例，从 0.2 改成 0.3
+
 1. 如果 app io 流量没有超过  zbs 能够发挥磁盘的上限，那么智能调节的机制应该是保持 internal io 和 app io 的使用总和不超过 zbs 发挥磁盘的上限，而不是一旦有 20 MiB/s app io 来了，就让 internal io 减到最低。之后可以考虑让 app io busy bps 在一个基准值的基础上动态变化。具个简单的例子，比如 app io 大于 20 MiB/s，internal io limit 减一半，只有 app io 大于 40 MiB/s，internal io limit 才继续再减一半。而如果 app io 大于磁盘上限，那可以考虑让 internal io 降低的快一点，且下限低一些。
 
 1. internal io throttle 加入 iops 的限制，综合考虑 sink 和 reposition
