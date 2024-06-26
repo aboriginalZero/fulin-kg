@@ -2,30 +2,20 @@
 
 下次如果还发现这个情况，试着执行 esxcfg-route -l 或 esxcfg-vmknic -l，看看是不是这 2 条命令卡在驱动上
 
-```
-```
-
 python 有没有办法不开子进程去 run cmd 
-
-
 
 
 
 ```
 LOG(INFO, 5) << "yiwu pt: " << PExtentType_Name(type) << " app_io_iops: " << business_io_iops
-                             << " app_io_bps: " << (uint64_t(business_io_bandwidth) >> 20)
-                             << " limit_iops: " << limit.normal_io_busy_iops_throttle
-                             << " limit_bps: " << (limit.normal_io_busy_bps_throttle >> 20)
-                             << " internal_iops: " << internal_io_iops
-                             << " internal_bps: " << (uint64_t(internal_io_bandwidth) >> 20)
-                             << " last_speed_limit: " << (last_speed_limit >> 20)
-                             << " 0.8 * tmp: " << ((uint64_t)(last_speed_limit * FLAGS_internal_io_busy_ratio) >> 20);
-
+<< " app_io_bps: " << (uint64_t(business_io_bandwidth) >> 20)
+<< " limit_iops: " << limit.normal_io_busy_iops_throttle
+<< " limit_bps: " << (limit.normal_io_busy_bps_throttle >> 20)
+<< " internal_iops: " << internal_io_iops
+<< " internal_bps: " << (uint64_t(internal_io_bandwidth) >> 20)
+<< " last_speed_limit: " << (last_speed_limit >> 20)
+<< " 0.8 * tmp: " << ((uint64_t)(last_speed_limit * FLAGS_internal_io_busy_ratio) >> 20);
 ```
-
-
-
-观察 perf app io 下降再上涨的时段，perf reposition io 的性能曲线。
 
 
 
@@ -85,6 +75,12 @@ ssh -p 2222 yiwu.cai@jump.smartx.com 输入MFA Code 后，直接输入要登陆�
 
 
 
+
+1. 开了限速后，prometheus 中的 repositon speed bps 还是会有超过时刻会超过上限（是把全 0 统计进去了吗？）
+
+    观察 perf app io 下降再上涨的时段，perf reposition io 的性能曲线。
+
+2. perf 和 cap inernal io 除了考虑磁盘能力，还需要考虑他两加起来不能超过网络带宽的 50%。
 
 1. 命令行和 meta rpc server 中的默认比例，从 0.2 改成 0.3
 
