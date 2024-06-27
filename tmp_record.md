@@ -1,8 +1,79 @@
+1. recover lease owner 上的 access metric 没有值，recover 路径上只对 counter 埋点，没有针对 metric 埋点；
+2. 升级中心静态恢复速率的设置：zbs 自己先按 cap / perf 各一半的比例向前兼容，给升级中心提需求，让他们在 1.1 的版本中适配层次化改动后的静态限速设置；
+3. 节点移除迁移中对 migrate src 的选择策略有问题，COW 后没写过的 pexent 迁移过的场景。
+4. 处理售后 case，出问题的 3 个节点表现一致：ESXI 上 Reroute 进程仍存在，但不打印日志，跟 zbs insight 心跳失联。单节点的多个 Reroute 进程中大部分都能响应 SIGTERM 立马被 kill，但会剩一个 Reroute 进程需要通过 SIGKILL 才能完全杀死。上去排查日志看到退出栈停在 run_cmd 的 execute_child 上，Reroute 每个周期（2s）会通过起子进程的方式来在 ESXi 上执行 shell 命令如查看路由表、网卡信息，这里怀疑有可能是频繁创建/销毁子进程时卡住了。
+
+
+
+1. 如果升级中心界面上设置了静态恢复速率
+
+   新 meta leader 会给老 chunk 发 recover_mode  = static，但是没有给 static_recover_speed_limit 设上值，从老 chunk 的视角，拿到 static mode，static_recover_speed_limit = 0，但是 0 的情况下并不会更新自己的的 migrate speed limit，所以还是按照升级之前，最近一次设置的静态值来处理，不符预期。
+
+2. 如果升级中心界面上没设置，集群之前是静态模式
+
+   与第一种情况一样。
+
+3. 如果升级中心界面上没设置，集群之前是智能模式
+
+   新 meta leader 会给老 chunk 发 recover_mode  = auto，access 自行调整限速，符合预期。
+
+
+
+背景信息
+
+希望在 SMTXOS 6.1.0 中包含。
+
+从 zbs 5.6.0 开始，为适应层次化改造，zbs-client-py 提供了新命令来执行静态恢复速率的设置。
+
+```shell
+# after zbs 5.6.0（下文简称新命令）
+zbs-meta internal_io update --static_cap_internal_io_speed_limit xxx --static_perf_internal_io_speed_limit xxx
+# before zbs 5.6.0（下文简称旧命令）
+zbs-meta recover set_mode_info 1 --static_recover_speed_limit xxx
+```
+
+集群升级前，在升级中心上设置的静态恢复速率，执行时机是在 zbs-meta 升级后，zbs-client-py 更新前，所以是用低版本的 zbs-client-py 通过 rpc 访问新版本的 zbs-meta leader。
+
+那么当升级前后的版本不同时，需要有不同的行为表现
+
+1. before < 5.6.0，after < 5.6.0
+
+   无需改动。
+
+2. before < 5.6.0，after >= 5.6.0
+
+   zbs meta 做了适配，所以升级中心自身无需改动。
+
+   由于 zbs-client-py 还处于老版本，所以 tuna 只能通过旧命令设置恢复速率，在 zbs meta leader 上会按默认比例分配 cap / perf 各自的限速值。
+
+   1. 若不开分层，全部给到 cap static_internal_io_speed_limit；
+   2. 若开启分层，按照 0.5 : 0.5 分别给到 cap / perf static_internal_io_speed_limit。
+
+3. before >= 5.6.0，after >= 5.6.0
+
+   由于 zbs-client-py 已经支持新版本的命令，虽然 zbs-meta leader 也兼容旧命令，但希望 tuna 通过新命令设置恢复速率。
+
+   升级中心的界面上不区分 cap / perf 静态恢复速率，由 tuna 来识别集群部署形态（是否开启分层），给出 cap / perf 的分配比例
+
+   期望改动如下：
+
+   1. 升级中心的前端允许静态恢复设置范围从 [100, 500] 改成  [100, 2000]。
+
+      即使 perf 层磁盘能力一般情况下比 cap 层强很多，但二者都需要受限于集群网络带宽能够提供的恢复能力，2000 是一个足够大的上限，大于一般情况下 cap / perf 层硬件能够提供的恢复能力。
+
+   2. 升级中心的后端识别集群部署形态（是否开启分层），给出 cap / perf 的期望比例，通过新命令设置恢复速率。
+
+      举个例子，比如前端给了一个 1000 的值，分层场景下  cap : perf = 4 : 6，通过执行 `zbs-meta internal_io update --static_cap_internal_io_speed_limit 400 --static_perf_internal_io_speed_limit 600 ` 来达到这个效果。
+
+
+
 把 log size 调大些
 
 下次如果还发现这个情况，试着执行 esxcfg-route -l 或 esxcfg-vmknic -l，看看是不是这 2 条命令卡在驱动上
 
 python 有没有办法不开子进程去 run cmd 
+
+除了 CPU 的差异，节点间可能还有其他配置/网卡差异导致软件运行上的不一致。这么上层的问题直接怀疑 CPU 不太科学。
 
 
 
@@ -34,7 +105,7 @@ ZbsClient::DoIO --> ZbsClientProxyV2::DoIO --> IOReceiver::HandleIO（消费队�
 
 spdk_iscsi_conn_full_feature_migrate --> spdk_iscsi_conn_login_do_work --> spdk_iscsi_conn_construct --> spdk_iscsi_portal_accept --> spdk_iscsi_portal_grp_open --> spdk_iscsi_portal_grp_open_all --> spdk_iscsi_setup --> ISCSIServer::SetupPortal --> ISCSIServer::UpdateConfig --> SetupChunkServerCtx（到了 zbs chunk 侧了）
 
-ISCSIServer 在这执行注册多个回调，如 b
+ISCSIServer 在这执行注册多个回调，如 UpdateLuns / RefreshConfig / ListConnection。
 
 iSCSI initiator 和 ZBS Chunk server 进行交互，iSCSI 配置信息要在 Chunk 上落地才算真正生效。
 
@@ -63,13 +134,9 @@ iSCSI initiator 和 ZBS Chunk server 进行交互，iSCSI 配置信息要在 Chu
 
 
 
+开启 prometheus：在 meta leader 上执行 nc -k -l -p 9093 -c "nc 10.0.180.183 9090"
 
-
-
-
-开启 prometheus： nc -k -l -p 9093 -c "nc 10.0.180.183 9090"
-
-ssh -p 2222 yiwu.cai@jump.smartx.com 输入MFA Code 后，直接输入要登陆的主机 IP
+ssh -p 2222 yiwu.cai@jump.smartx.com 输入 MFA Code 后，直接输入要登陆的主机 IP
 
 4k app io 没被统计在这，access handler 中显示 app iops / bps = 0，显示在 perf layer，因为 4k 会先写 perf layer
 
@@ -80,9 +147,9 @@ ssh -p 2222 yiwu.cai@jump.smartx.com 输入MFA Code 后，直接输入要登陆�
 
     观察 perf app io 下降再上涨的时段，perf reposition io 的性能曲线。
 
-2. perf 和 cap inernal io 除了考虑磁盘能力，还需要考虑他两加起来不能超过网络带宽的 50%。
+2. perf 和 cap inernal io 除了考虑磁盘能力，还需要考虑他两加起来不能超过网络带宽的 50%，如果只有单层数据待恢复，那应该允许他用满 50%。
 
-1. 命令行和 meta rpc server 中的默认比例，从 0.2 改成 0.3
+    目前的实现里，假设 cap / perf 都在满负载恢复，两边都 500 MB/s，那 app io 可能就抢不到网络带宽了。
 
 1. 如果 app io 流量没有超过  zbs 能够发挥磁盘的上限，那么智能调节的机制应该是保持 internal io 和 app io 的使用总和不超过 zbs 发挥磁盘的上限，而不是一旦有 20 MiB/s app io 来了，就让 internal io 减到最低。之后可以考虑让 app io busy bps 在一个基准值的基础上动态变化。具个简单的例子，比如 app io 大于 20 MiB/s，internal io limit 减一半，只有 app io 大于 40 MiB/s，internal io limit 才继续再减一半。而如果 app io 大于磁盘上限，那可以考虑让 internal io 降低的快一点，且下限低一些。
 

@@ -338,6 +338,20 @@ thread apply all bt
      },
      normal_dst_used_cids = std::unordered_set with 0 elements
    }
+   
+   (gdb) p ((zbs::chunk::ChunkServer)*0x55cdb71d8000).access_handler_.recover_handler_.recover_speed_limit_
+   $2 = 52428800
+   (gdb) p ((zbs::chunk::ChunkServer)*0x55cdb71d8000).access_handler_.recover_handler_.recover_mode_
+   $3 = zbs::RECOVER_AUTO
+   
+   
+   (gdb) p ((zbs::chunk::ChunkServer)*0x559ca839a000).access_handler_.layer_throttle_.mode_
+   $2 = zbs::INTERNAL_IO_AUTO
+   (gdb) p ((zbs::chunk::ChunkServer)*0x559ca839a000).access_handler_.layer_throttle_.throttles_
+   $7 = {_M_elems = {std::unique_ptr<zbs::chunk::AccessInternalIOThrottle> = {get() = 0x559ca82aed00},
+       std::unique_ptr<zbs::chunk::AccessInternalIOThrottle> = {get() = 0x559ca9596000}}}
+   (gdb) p ((zbs::chunk::AccessInternalIOThrottle)*0x559ca9596000).internal_io_speed_limit_
+   $8 = 78643200
    ```
 
    
