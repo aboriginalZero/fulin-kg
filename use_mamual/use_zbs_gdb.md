@@ -18,7 +18,8 @@ GDB 是一款可以用来调试 C/C++/Java/Go 的调试工具，在类 Unix 系�
     # scp 到待调试节点
     scp /data/distros/repo/pub/smartxos/el7/smtx-zbs/x86_64/zbs-debuginfo-5.5.0-rc7.0.release.git.g915e8af70.el7.SMTX.SERVER_SAN.x86_64.rpm smartx@172.20.134.135:/tmp
     # -U（大写）选项的含义是：如果该软件没安装过则直接安装；若已经安装则升级至最新版本
-    rpm -Uvh zbs-debuginfo-5.5.0-rc7.0.release.git.g915e8af70.el7.SMTX.SERVER_SAN.x86_64.rpm 
+    rpm -Uvh zbs-debuginfo-5.5.0-rc7.0.release.git.g915e8af70.el7.SMTX.SERVER_SAN.x86_64.rpm
+    # 添加 --force 可以强制安装更低版本的
     # 主动 dump，若所需内存过大，dump meta leader 可能引发切主，将 core.xxx 都放在 /tmp
     gcore <zbs-chunkd-pid>
     ```
@@ -354,7 +355,7 @@ thread apply all bt
    $8 = 78643200
    ```
 
-   
+   set max-value-size unlimited
 
 [参考1](https://zhuanlan.zhihu.com/p/74897601)，[参考2](https://cloud.tencent.com/developer/article/1142947)
 

@@ -1,7 +1,11 @@
-1. recover lease owner 上的 access metric 没有值，recover 路径上只对 counter 埋点，没有针对 metric 埋点；
-2. 升级中心静态恢复速率的设置：zbs 自己先按 cap / perf 各一半的比例向前兼容，给升级中心提需求，让他们在 1.1 的版本中适配层次化改动后的静态限速设置；
-3. 节点移除迁移中对 migrate src 的选择策略有问题，COW 后没写过的 pexent 迁移过的场景。
-4. 处理售后 case，出问题的 3 个节点表现一致：ESXI 上 Reroute 进程仍存在，但不打印日志，跟 zbs insight 心跳失联。单节点的多个 Reroute 进程中大部分都能响应 SIGTERM 立马被 kill，但会剩一个 Reroute 进程需要通过 SIGKILL 才能完全杀死。上去排查日志看到退出栈停在 run_cmd 的 execute_child 上，Reroute 每个周期（2s）会通过起子进程的方式来在 ESXi 上执行 shell 命令如查看路由表、网卡信息，这里怀疑有可能是频繁创建/销毁子进程时卡住了。
+for ec, its recover src cid = kInvalidChunkId, migrate src cid =   replace cid, access will select which chunks to read by itself
+
+
+
+1. 升级中心静态恢复速率的设置：zbs 自己先按 cap / perf 各一半的比例向前兼容，给升级中心提需求，让他们在 1.1 的版本中适配层次化改动后的静态限速设置；
+2. 节点移除迁移中对 migrate src 的选择策略有问题，COW 后没写过的 pexent 迁移过的场景。
+3. recover lease owner 上的 access metric 没有值，recover 路径上只对 counter 埋点，没有针对 metric 埋点；
+4. 处理售后 case，出问题的 3 个节点表现一致：ESXI 上 Reroute 进程仍存在，但不打印日志，跟 zbs insight 心跳失联。单节点的多个 Reroute 进程中大部分都能响应 SIGTERM 立马被 kill，但会剩一个 Reroute 进程需要通过 SIGKILL 才能完全杀死。上去排查日志看到退出栈停在 run_cmd 的 execute_child 上，Reroute 每个周期（2s）会通过起子进程的方式来在 ESXi 上执行 shell 命令如查看路由表、网卡信息，这里怀疑有可能是频繁创建/销毁子进程时卡住了。CPU 在不兼容性列表里
 
 
 
@@ -566,6 +570,8 @@ esxcfg-route -d 192.168.33.2/32 10.0.0.22; esxcfg-route -a 192.168.33.2/32 10.0.
            3. GenerateMigrateCmdsForRemovingChunk 中 migrate_generate_used_cmd_slots 对 src / dst 的判断应该传入 AllocRecoverCap/PerfExtents；
 
               传入会有点麻烦，可能出现 removing chunk 的时候总是选某个 src / dst cid，但那个 dst cid 可生成的余额不足，还一直选他。但是影响最大也就造成一次 generate 过程中只选 1 个 src cid，用满他的 256 的配额，所以先不修复。
+              
+           4. reposition src 如果有多个可选，可以考虑随机选，避免总是选到一个没法执行的导致一直 recover / migrate 不掉
 
            这部分代码可以写到 recover manager，另外也可以总结出一个 recover 和 alloc 虽然大部分相同，但是存在的细微差别。
 
@@ -576,7 +582,7 @@ esxcfg-route -d 192.168.33.2/32 10.0.0.22; esxcfg-route -a 192.168.33.2/32 10.0.
           只有 replica 才会分配临时副本，所以 ec 不会有 agile recover
 
           有很多代码适合 pick 到 55x，但在 56x 中直接被删除了，见 [ZBS-27109](http://jira.smartx.com/browse/ZBS-27109)
-
+    
           ```
           for (const auto& [cid, info] : healthy_chunks_map) {
           LOG(INFO) << "yiwu cid " << cid << " perf thick allocated "
@@ -1438,7 +1444,7 @@ chunk 日志中搜 migrate pblob skip 会显示卸载盘卸不掉的 pblob，有
 ### remove chunk
 
 1. zbs-deploy-manage storage_pool_remove_node < storage ip> 
-    1. 这个命令会调用 zbs 侧的 RemoveChunkFromStoragePool rpc，只做剩余空间检查，检查通过后，chunk 状态改成 REMOVING，日志里出现 REMOVE CHUNK FROM STORAGEPOOL；
+    1. 这个命令会调用 zbs 侧的 RemoveChunkFromStoragePool rpc，只做剩余空间检查，检查通过后，chunk 状态改成 REMOVING，日志里出现 REMOVE CHUNK FROM STORAGE POOL；
     2. recover manager 有个 4s 定时器会为状态为 REMOVING 的 chunk 生成迁移命令并下发，而对 migrate dst 的选取，如果是在集群 normal low/medium load，会按本地化 + 局部化 + topo 安全策略选，如果是 normal high load，优先考虑 topo 安全，然后才是剩余容量；
     3. 等待这个 chunk  pextent 全被 remove（命令行看 provisioned_data_space 为 0），chunk manager 有个 4s 的定时器会将状态为 REMOVING 且它上面的 pextent 全被 remove 的 chunk 改成 IDLE；
 2. zbs-deploy-manage meta_remove_node < storage ip>
