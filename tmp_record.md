@@ -1,4 +1,6 @@
-for ec, its recover src cid = kInvalidChunkId, migrate src cid =   replace cid, access will select which chunks to read by itself
+按 batch 去拿 pentry，比如每次 100 个这样的拿，虽然浪费了点内存，但是会减少对 pentry mutex 的获取
+
+drain scan 中要加 do_scan = true
 
 
 
