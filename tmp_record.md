@@ -1,3 +1,19 @@
+看 fio 给出的延迟
+
+zbs-perf-tools volume show < volume id > 给出的延迟
+
+zbs-perf-tools chunk access summary 给出的延迟
+
+zbs-perf-tools chunk lsm summary 看存储引擎给出的延迟
+
+iostat -xm 2 看物理磁盘给出的延迟
+
+
+
+rdma 可以用 ib 
+
+
+
 按 batch 去拿 pentry，比如每次 100 个这样的拿，虽然浪费了点内存，但是会减少对 pentry mutex 的获取
 
 drain scan 中要加 do_scan = true
