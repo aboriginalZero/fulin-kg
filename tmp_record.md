@@ -6,7 +6,7 @@ zbs-perf-tools chunk access summary 给出的延迟
 
 zbs-perf-tools chunk lsm summary 看存储引擎给出的延迟
 
-iostat -xm 2 看物理磁盘给出的延迟
+iostat -xm 1 看物理磁盘给出的延迟
 
 
 
@@ -15,6 +15,8 @@ rdma 的网络环境测试由自己的 ib 测试方法，不能只看 ping 的�
 
 
 按 batch 去拿 pentry，比如每次 100 个这样的拿，虽然浪费了点内存，但是会减少对 pentry mutex 的获取
+
+RecoverManager::MarkParent 改成批量获取
 
 
 
@@ -166,6 +168,8 @@ ssh -p 2222 yiwu.cai@jump.smartx.com 输入 MFA Code 后，直接输入要登陆
 1. 开了限速后，prometheus 中的 repositon speed bps 还是会有超过时刻会超过上限（是把全 0 统计进去了吗？）
 
     观察 perf app io 下降再上涨的时段，perf reposition io 的性能曲线。
+
+2. jiewei 提到，可以考虑 perf 层可供 recover 使用的副本空间不超过 95%，以避免大量 recover 占据了 app io 的空间出现 IO 无法写入的问题。
 
 2. perf 和 cap inernal io 除了考虑磁盘能力，还需要考虑他两加起来不能超过网络带宽的 50%，如果只有单层数据待恢复，那应该允许他用满 50%。
 

@@ -366,7 +366,7 @@ zbs-nvmf ns create <subsystem_name> <ns_id_0-256> <Gib_size>
 
 ### 以 volume id 查询
 
-1. iscsi，通过 volume id 找到对应的 iscsi target id 和 lun id 和 lun name，之后可以用 lun name 在 tower 中搜索就能找到对应的虚拟卷，进而可以看到该卷挂载了哪些虚拟机。
+1. iscsi，通过 volume id 找到对应的 iscsi target id 和 lun id 和 lun name，之后可以用 lun name 在 tower 中搜索就能找到对应的虚拟卷，进而可以看到该卷被哪些虚拟机挂载。
 
    ```shell
    [root@hygon-node-19-98 17:57:40 ~]$ zbs-iscsi lun show_target_and_lun_by_uuid 817e39de-41ee-49d5-a9bb-446951d4d607
