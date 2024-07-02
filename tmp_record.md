@@ -14,12 +14,6 @@ rdma 的网络环境测试由自己的 ib 测试方法，不能只看 ping 的�
 
 
 
-按 batch 去拿 pentry，比如每次 100 个这样的拿，虽然浪费了点内存，但是会减少对 pentry mutex 的获取
-
-RecoverManager::MarkParent 改成批量获取
-
-
-
 1. 升级中心静态恢复速率的设置：zbs 自己先按 cap / perf 各一半的比例向前兼容，给升级中心提需求，让他们在 1.1 的版本中适配层次化改动后的静态限速设置；
 2. 节点移除迁移中对 migrate src 的选择策略有问题，COW 后没写过的 pexent 迁移过的场景。
 3. recover lease owner 上的 access metric 没有值，recover 路径上只对 counter 埋点，没有针对 metric 埋点；
@@ -323,6 +317,8 @@ force recover from tmeporary replica 直接从临时副本上读数据，不管�
 rollback_failed_replica 是丢弃临时副本上的数据，直接把失败副本当正常副本来用，rollback 是一种更兜底的做法，大部分情况是在集群因为空间不足没法为临时副本分配副本的时候用的。
 
 
+
+临时副本不会产生迁移命令，且由于 temporary pid 不在 chunk table 的 cap / perf pids，所以移除节点迁移时，即使不迁移临时副本，但最终也认为他移除完了，实际上这个移除节点上的临时副本全都丢失了，不过一般来说不会在有数据恢复的情况下移除节点，所以应该还好。
 
 
 
