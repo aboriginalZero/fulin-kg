@@ -1,3 +1,153 @@
+5.6.0 中采集日志，也把 zbs-meta cluster summary 采集一下，其实是关注 alloced_pids 
+
+prometheus 用法 
+
+```shell
+# 过滤掉不想看的 volume 
+zbs_volume_logical_size_bytes{_volume!~"7697f.*|56e7e.*|130478.*|6ac3588.*"}
+# 按值过滤
+zbs_volume_logical_size_bytes{} > 1 and zbs_volume_logical_size_bytes{} < 536870912000
+```
+
+
+
+recover 的统计
+
+```
+➜  zbs-metad grep -wn "agile_recover_only: false" zbs-metad.log.20240703-1* | wc -l
+   31821
+➜  zbs-metad grep -wn "agile_recover_only: true" zbs-metad.log.20240703-1* | wc -l
+    5358
+```
+
+
+
+集群中不同节点能力有差，有时候升级慢是在重启某个 chunk 后的恢复慢，这种情况下 meta 侧智能调节下发窗口就显得很有必要了。
+
+
+
+本身磁盘延迟也高，有 lsm slow io，大概在 100 - 300 ms，但还没触发 recover timeout，所以可以把 cmd slots 调高
+
+recover dst 都选了同一个
+
+agile recover 的触发概率很低
+
+````
+*metad.log.20240703*1058437
+````
+
+
+
+```
+I0703 17:47:29.394574 1070540 access_manager.cc:1099] [RECOVER]: pid: 315292 lease { owner { uuid: "cea43e84-525d-4eaf-8139-3881a62edd7e" ip: "10.84.224.30" num_ip: 518018058 port: 10201 cid: 5 secondary_data_ip: "10.84.214.30" zone: "default" scvm_mode_host_data_ip: "" alive_sec: 3683 machine_uuid: "331257de-5f59-11ed-aa32-f55bd9262bfc" } pid: 315292 location: 261 origin_pid: 0 epoch: 386073 origin_epoch: 0 ever_exist: true meta_generation: 968 expected_replica_num: 2 thin_provision: true chunks { id: 5 data_ip: 518018058 data_port: 10201 rpc_ip: 518018058 rpc_port: 10200 zone_id: "default" } chunks { id: 1 data_ip: 484463626 data_port: 10201 rpc_ip: 484463626 rpc_port: 10200 zone_id: "default" } } dst_chunk: 2 replace_chunk: 5 src_chunk: 5 is_migrate: true epoch: 386073 active_location: 261 start_ms: 7790599990
+
+
+```
+
+
+
+回到 43515 行
+
+
+
+瓶颈不在 chunk 侧，因为从 recover handler 开始执行 recover cmd 到结束，基本不超过 2 min，虽然有 lsm slow io，但基本上就 100 - 200 ms
+
+旧 chunk log 中会在 setup recover 的时候调用 remove replica，这一次的 recover 就失败了
+
+```
+zbs-chunkd.log.20240629-085734.8475:208516:I0703 16:57:26.751508  8491 recover_handler.cc:477] [RECOVER] Setup for pid: 63917
+zbs-chunkd.log.20240629-085734.8475:208532:W0703 16:57:26.763597  8491 meta.cc:1099] [REMOVE REPLICA]: pid: 63917 cid: 2 gen: 105725
+zbs-chunkd.log.20240629-085734.8475:208551:I0703 16:57:26.770462  8491 recover_handler.cc:712] [NORMAL RECOVER START] pid: 63917 state: START cur_block: 4294967295 src_cid: 1 dst_cid: 2 is_migrate: false silence_ms: 0 replace_cid: 2 epoch: 92472 gen: 105725
+zbs-chunkd.log.20240629-085734.8475:208594:E0703 16:57:26.786450  8491 recover_handler.cc:583] failed to recover a pextent. pid: 63917 state: START cur_block: 4294967295 src_cid: 1 dst_cid: 2 is_migrate: false silence_ms: 0 replace_cid: 2 epoch: 92472 gen: 105725
+```
+
+
+
+
+
+17:44:24 想进维护模式
+
+17:49:16 才下发 recover cmd，这些 recover cmd 的 replace cid 都是 2，在这之前，下发了一波 dst = 2 的 migrate cmd，把 cid 2 的 avail cmd slot 用满了。
+
+replace cid 都是 2，比较像是他们真的 10 min 没有被 data report，数据本身是好的，gen 也对，所以 access handler 侧的 recover cmd 基本上也是执行失败，关键还会把健康的副本置为 invalid，这样副本就真没了，触发了一个 dst = 5 的 recover cmd，这次会成功，但是已经浪费了 3 min。
+
+（不过为啥没有被 data report 很奇怪）
+
+这些 recover cmd 的 replace 和 dst 都是 2，recover cmd 是因为有 dead replica，但给到 dst = 2 的这条 recover cmd 并没有成功，重试了 dst = 5 成功，前后耗时 3min
+
+17:50:17 才开始下发 replace = 0 的 recover cmd（这中间 1min 下发了 15 次，都是 replace 和 dst = 2 的 recover cmd），但他们的 dst 又都是 5 了。
+
+18:15:45 附近开始穿插一些 dst = 2 && replace = 5 的 recover cmd，且数量也很多，这两类 recover cmd 都有发
+
+```
+zbs-chunkd.log.20240703-163340.8436:60316:I0703 17:49:17.233659  8459 recover_handler.cc:285] Get recover notification: pid: 398668 lease { owner { uuid: "40bd44f7-c363-44be-a846-30f79c972cc8" ip: "10.84.224.29" num_ip: 501240842 port: 10201 cid: 2 secondary_data_ip: "10.84.214.29" zone: "default" scvm_mode_host_data_ip: "" alive_sec: 3792 machine_uuid: "294d7616-5f59-11ed-832e-ed756b05e07a" } pid: 398668 location: 516 origin_pid: 237154 epoch: 491385 origin_epoch: 283007 ever_exist: true meta_generation: 1 expected_replica_num: 2 thin_provision: true chunks { id: 4 data_ip: 467686410 data_port: 10201 rpc_ip: 467686410 rpc_port: 10200 zone_id: "default" } chunks { id: 2 data_ip: 501240842 data_port: 10201 rpc_ip: 501240842 rpc_port: 10200 zone_id: "default" } } dst_chunk: 2 replace_chunk: 2 src_chunk: 4 epoch: 491385 active_location: 4 agile_recover_only: false start_ms: 7790707718
+zbs-chunkd.log.20240703-163340.8436:60489:I0703 17:49:17.254196  8459 recover_handler.cc:477] [RECOVER] Setup for pid: 398668
+zbs-chunkd.log.20240703-163340.8436:60564:W0703 17:49:17.255514  8459 meta.cc:1099] [REMOVE REPLICA]: pid: 398668 cid: 2 gen: 85449051
+zbs-chunkd.log.20240703-163340.8436:60588:I0703 17:49:17.265929  8459 recover_handler.cc:712] [NORMAL RECOVER START] pid: 398668 state: START cur_block: 4294967295 src_cid: 4 dst_cid: 2 is_migrate: false silence_ms: 0 replace_cid: 2 epoch: 491385 gen: 85449051
+zbs-chunkd.log.20240703-163340.8436:60593:W0703 17:49:17.266067  8460 lsm.cc:1758] extent already exists during recover start: status: EXTENT_STATUS_ALLOCATED pid: 398668 epoch: 491385 generation: 85449051 bucket_id: 1356 pblob_table_id: 193593 pblob_group_id: 2288510
+zbs-chunkd.log.20240703-163340.8436:60595:I0703 17:49:17.266173  8460 extent.cc:138] [EXTENT SET STATUS] pid: 398668 from: EXTENT_STATUS_ALLOCATED to: EXTENT_STATUS_INVALID
+zbs-chunkd.log.20240703-163340.8436:60613:E0703 17:49:17.266597  8459 recover_handler.cc:583] failed to recover a pextent. pid: 398668 state: START cur_block: 4294967295 src_cid: 4 dst_cid: 2 is_migrate: false silence_ms: 0 replace_cid: 2 epoch: 491385 gen: 85449051
+zbs-chunkd.log.20240703-163340.8436:60684:I0703 17:49:17.434800  8460 lsm.cc:4648] [FREE EXTENT] status: EXTENT_STATUS_INVALID pid: 398668 epoch: 491385 generation: 85449051 bucket_id: 1356 pblob_table_id: 193593 pblob_group_id: 2288510
+zbs-chunkd.log.20240703-163340.8436:75855:I0703 17:50:17.720784  8459 recover_handler.cc:285] Get recover notification: pid: 398668 lease { owner { uuid: "40bd44f7-c363-44be-a846-30f79c972cc8" ip: "10.84.224.29" num_ip: 501240842 port: 10201 cid: 2 secondary_data_ip: "10.84.214.29" zone: "default" scvm_mode_host_data_ip: "" alive_sec: 3852 machine_uuid: "294d7616-5f59-11ed-832e-ed756b05e07a" } pid: 398668 location: 4 origin_pid: 237154 epoch: 491385 origin_epoch: 283007 ever_exist: true meta_generation: 85449051 expected_replica_num: 2 thin_provision: true chunks { id: 4 data_ip: 467686410 data_port: 10201 rpc_ip: 467686410 rpc_port: 10200 zone_id: "default" } chunks { id: 2 data_ip: 501240842 data_port: 10201 rpc_ip: 501240842 rpc_port: 10200 zone_id: "default" } } dst_chunk: 5 src_chunk: 4 epoch: 491385 active_location: 4 agile_recover_only: false start_ms: 7790768204
+zbs-chunkd.log.20240703-163340.8436:76847:I0703 17:50:36.617069  8459 recover_handler.cc:477] [RECOVER] Setup for pid: 398668
+zbs-chunkd.log.20240703-163340.8436:76848:I0703 17:50:36.617146  8459 recover_handler.cc:712] [NORMAL RECOVER START] pid: 398668 state: START cur_block: 4294967295 src_cid: 4 dst_cid: 5 is_migrate: false silence_ms: 0 replace_cid: 0 epoch: 491385 gen: 85449201
+zbs-chunkd.log.20240703-163340.8436:77900:I0703 17:52:42.413748  8459 recover_handler.cc:757] [NORMAL RECOVER END] pid: 398668 state: END cur_block: 1024 src_cid: 4 dst_cid: 5 is_migrate: false silence_ms: 0 replace_cid: 0 epoch: 491385 gen: 85449421 recover block num: 1024
+```
+
+
+
+19:16:05 才真正进入维护模式
+
+
+
+
+
+recover 慢，要检查网络情况，看看是否有大包丢包，如果不是所有节点都差的情况下，可以适当选择切换 bond
+
+查看网络的方式有哪些？
+
+* 网卡异常探测（节点层面） /var/log/zbs/netbouncer/l2ping@storage.INFO
+
+  https://docs.google.com/document/d/1cNja_rnJ3fQglBqfouPvx8Ss82qzIiObN6cN_wYUs3s/edit#heading=h.xjzjaz3p8u9t
+
+  https://docs.google.com/document/d/1nB270ymaYNWK_b_WVShtJ79yGWW5bi76/edit
+
+* 网络亚健康探测（集群层面） /var/log/zbs/network-monitor.log
+
+  https://docs.google.com/document/d/1MK0VRK5WcRF14N36PpJ_O0Y-HUHG-fxe9q-usfAAevk/edit#heading=h.jz7vtdo3hm60
+
+* data channel 探测（chunk 层面）/var/log/zbs/zbs-chunkd.INFO
+
+网络延迟发生在中间网络或者发生在 L2 层以上，网络亚健康探测的 fping 发现异常，而网卡异常探测 L2Ping 没有发现异常，此时也只能依靠 Fail Slow 机制隔离节点。
+
+tower 首页的存储性能图标对应 zbs 的哪些 metric
+
+怎么查看是否 bonding 以及切换 bond 的方式
+
+
+
+ELF 克隆虚拟机有 2 种：
+
+* 快速克隆
+
+  COW 出来的 pextent 与 origin 的 loc 是一样的
+
+  有的用户也会习惯于将应用装在系统盘，因此克隆后应用所使用的数据盘并不一定是新建的
+
+  我们的 VM 盘会被局部化，写操作造成的 COW 又集中在这个母盘所在的机器上，导致性能差。
+
+  调用 metad 提供的 Copy
+
+* 完全克隆
+
+  对 src volume 创建临时快照，调用 zbs taskd 提供的 CopyVolume(src_cid, dst_cid, src_snapshot, dst_volume)，全量备份后，删除临时快照。
+  
+  https://docs.google.com/document/d/1HyJ7uJpT0K3zSoAFKEX_m2gKNRYDlzWTXNoLNFTY0ac/edit#heading=h.umizx61uu46q
+
+
+
+
+
 看 fio 给出的延迟
 
 zbs-perf-tools volume show < volume id > 给出的延迟
