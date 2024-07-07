@@ -1,3 +1,11 @@
+VLOG(VLOG_INFO) 级别的日志怎么开线开启，zbs-meta vlog -h 的用法
+
+ zbs-meta memory heap_profiler_start /root/yiwu/heap_profiler && zbs-meta memory heap_profiler_stop 收集到的文件如何使用
+
+https://smartx1.slack.com/archives/C02Q81Y1NJF/p1718957381217059?thread_ts=1718181962.366229&cid=C02Q81Y1NJF ，这里怎么判断是腾挪 vtable 导致申请了比较多的内存
+
+
+
 5.6.0 中采集日志，也把 zbs-meta cluster summary 采集一下，其实是关注 alloced_pids 
 
 prometheus 用法 
@@ -8,6 +16,53 @@ zbs_volume_logical_size_bytes{_volume!~"7697f.*|56e7e.*|130478.*|6ac3588.*"}
 # 按值过滤
 zbs_volume_logical_size_bytes{} > 1 and zbs_volume_logical_size_bytes{} < 536870912000
 ```
+
+
+
+
+
+volume 级别的 metric 中各空间字段含义
+
+* logical_size = vtable_size * 256 MiB，vtable_size 就是一个 volume 里 lid 的数量，每个 lextent 只算单个分片，且是固定的 256 MiB。
+
+* logical_used_size = 对每个 lid，取他的 cap / perf pextent 中 logical_used_size 最大的那个。
+
+    对于每个 pextent 的 logical_used_size：（PhysicalExtentTableEntry::GetLogicalUsedSpace）
+
+    * thick，不论 replica 还是 ec shard，都是 256 MiB；
+    * thin，对于 replica 是 lsm 汇报的所有 replica space / get_replica_num(location)  ，对于 ec shard 是  lsm 汇报的所有 ec shard space / 数据块个数（不是数据块 + 检验块），算的平均每个分片的 lsm 汇报的空间占用，是 256 KiB 的倍数。
+
+* perf_unique_size = 持有的所有 perf pextent 独占的所有分片的 allocated size 总和
+
+* perf_shared_size = 持有的所有 cap pextent 共享的所有分片的 allocated size 总和，如果一个卷不曾发生过克隆/快照，shared_size 始终为 0。
+
+logical 不考虑分片数量，physical 考虑分片数
+
+
+
+vtable_id 就是 volume_id，vtable_size 就是这个 volume 持有的 lextent 的个数。lextent 先 gc，跟他对应的 cap / perf pextent 才会被 gc
+
+
+
+gc 中的 ScanByPidRefs 会拷贝出一个 pid_perf_map 到 gc 线程中，migrate scan 也可以这么做，这样 next_scan_migrate_pid 才会比较准确，避免无效的访问。
+
+
+
+
+
+
+
+这个函数不仅标记了可以被 gc 的 lextent，而且更新了所有 pid 的 ref_status，后续计算 unique_size 和 shared_size 也会有变化
+
+GcManager::ScanAndProcessLExtents
+
+
+
+计算 logical_size_bytes 相关的两个函数
+
+GcManager::CountVolumeSize()
+
+PhysicalExtentTable::ScanByPidRefs()
 
 
 
@@ -509,6 +564,24 @@ should meet
 
 
 失败副本在写失败时就在 meta 侧设成待 gc 了，但是在 lsm 侧，只有对应的临时副本 gc 后，这个失败副本才会被 gc（代码体现在一个副本如果有对应的临时副本，那么 meta 不会下发 gc cmd）。
+
+
+
+临时副本的 pentry 被删除一定发生在他所附属的那个普通 pentry 被删除
+
+```
+// PhysicalExtentTable::ScanByPidRefs
+{
+	...
+	MarkAndClearGarbageUnlocked(pid);
+	MarkAndClearAllTemporaryReplicaGarbageUnlocked(pid);
+}
+
+```
+
+
+
+
 
 
 
