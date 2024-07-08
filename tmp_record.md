@@ -2,7 +2,14 @@ VLOG(VLOG_INFO) 级别的日志怎么开线开启，zbs-meta vlog -h 的用法
 
  zbs-meta memory heap_profiler_start /root/yiwu/heap_profiler && zbs-meta memory heap_profiler_stop 收集到的文件如何使用
 
-https://smartx1.slack.com/archives/C02Q81Y1NJF/p1718957381217059?thread_ts=1718181962.366229&cid=C02Q81Y1NJF ，这里怎么判断是腾挪 vtable 导致申请了比较多的内存
+```
+# 在 docker 里安装 pprof，
+./pprof_linux_amd64 -h
+# 测试环境的话，可以直接在节点上 wget http://192.168.91.19/bin/x86_64/pprof_linux_amd64
+./pprof_linux_amd64 -text /usr/sbin/zbs-metad heap_profiler.0002.heap
+```
+
+
 
 
 
