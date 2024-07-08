@@ -13,6 +13,21 @@ VLOG(VLOG_INFO) 级别的日志怎么开线开启，zbs-meta vlog -h 的用法
 
 
 
+可以通过在目标节点上的 /var/log/message 里搜索 Abort Task 来检查是否有物理磁盘 IO 异常的信息。如果有则通常是磁盘损坏或者磁盘固件版本不对，如果多个磁盘均有出现则有可能是 HBA 卡异常或者固件版本不对。
+
+
+
+```shell
+# 磁盘消除"隔离中"状态
+zbs-chunk partition set-healthy /dev/sdx
+# 磁盘消除"亚健康/不健康"状态
+zbs-node set_disk_healthy sdx
+```
+
+
+
+
+
 5.6.0 中采集日志，也把 zbs-meta cluster summary 采集一下，其实是关注 alloced_pids 
 
 prometheus 用法 
