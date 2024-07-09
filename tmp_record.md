@@ -1,15 +1,34 @@
-VLOG(VLOG_INFO) 级别的日志怎么开线开启，zbs-meta vlog -h 的用法
+VLOG(VLOG_INFO) 级别的日志怎么开启，zbs-meta vlog -h 的用法
+
+```shell
+# 在 meta 配置文件里加上
+GLOG_vmodule="tcp=4, data_channel=4"
+```
+
+如果是 chunk 的 vlog，需要在 chunk 配置文件里加上吗？有了这个之后，可以通过 zbs-meta vlog -h 来不重启的状态下调节。
+
+
 
  zbs-meta memory heap_profiler_start /root/yiwu/heap_profiler && zbs-meta memory heap_profiler_stop 收集到的文件如何使用
 
 ```
-# 在 docker 里安装 pprof，
+# 在对应 docker （oe1 或 el7）里安装 pprof
 ./pprof_linux_amd64 -h
 # 测试环境的话，可以直接在节点上 wget http://192.168.91.19/bin/x86_64/pprof_linux_amd64
 ./pprof_linux_amd64 -text /usr/sbin/zbs-metad heap_profiler.0002.heap
 ```
 
 
+
+查看集群空间占用
+
+```
+zbs-tool space show 
+```
+
+
+
+chunk table 改成读写锁
 
 
 
@@ -1553,7 +1572,7 @@ void TEST_DoScan() {
 
 RWLock 是个线程间的读写锁，如果需要互斥的 2 个线程有 co 语义（ThreadContext），其中一个线程 co 因为拿不到锁而阻塞，那么其内部的 coroutine 也没法调度，可能出现一个 rpc 阻塞着，其他 rpc 也没法响应的情况。
 
-CoM
+CoRWLock 是协程间的读写锁，
 
 
 
