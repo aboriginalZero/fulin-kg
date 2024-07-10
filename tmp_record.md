@@ -1,6 +1,10 @@
-一开始 access handler 发过去时 enable_iscsi_config_push_ = false
 
-在选 dead replica 的时候打印一下它的 last report ms，这样可以直接是异常了，还是真的没有上报
+
+1. 从 5.0.5 升级到 5.6.0
+2. 总结恢复不及预期的问题验证
+3. 测试 replica 和 ec 的 migrate 时间上的区别
+4. 感觉下沉，怎么写 ec shard 的
+5. 更新 meta 文档中 reposition 部分
 
 
 
