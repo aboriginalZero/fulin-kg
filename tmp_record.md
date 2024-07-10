@@ -1,3 +1,9 @@
+一开始 access handler 发过去时 enable_iscsi_config_push_ = false
+
+在选 dead replica 的时候打印一下它的 last report ms，这样可以直接是异常了，还是真的没有上报
+
+
+
 VLOG(VLOG_INFO) 级别的日志怎么开启，zbs-meta vlog -h 的用法
 
 ```shell
