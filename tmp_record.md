@@ -1,9 +1,16 @@
+考虑一个被写满的 extent，从理论上分析：
+
+* 如果他是 ec，recover 读的数据总量是 256 MiB，写是 256 MiB / k；migrate 读是 256 MiB / k，
+* 如果他是 replica，recover 读写都是 256 MiB。
 
 
-1. 从 5.0.5 升级到 5.6.0
+
+
+
+1. 从 5.0.5 升级到 5.6.0，感受一下敏捷恢复的触发效率（或者直接找 qe 借个环境）
 2. 总结恢复不及预期的问题验证
 3. 测试 replica 和 ec 的 migrate 时间上的区别
-4. 感觉下沉，怎么写 ec shard 的
+4. 感觉下沉，access 怎么写 ec shard 的
 5. 更新 meta 文档中 reposition 部分
 
 

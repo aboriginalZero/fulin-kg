@@ -1,3 +1,19 @@
+### 集群升级过程中能力协商不兼容
+
+access manager
+
+1. MetaServer::StartService() --> MetaContext::Initialize() --> AccessManagerInitialize()
+2. AccessManager::DoInit()，打印 Initializing AccessManager，然后按顺序执行 chunk 侧的 zk、session master、data report master 的初始化；
+3. SessionMaster::Initialize()，先查 session db，如果其中存在还没过期的 session，那么会复用该 session，否则新建 session。接着调用 SessionInitializeCb()，如果是新建的 session，那么会在此时就通过 ComposeNegotiatedResponse() 在 keep alive 之前就先能力协商相关信息传入，access handler 会在它的 SessionCreateCb() 中处理。
+4. 继续建立 session client info 并 Start session（lease 就会开始延长），最后调用 SessionCreatedCb()，打印  ACCESS SESSION CREATED；
+5. access manager 对外暴露 HandleKeepAlive / HandleDataReport  rpc 用以接受每个 chunk 的 keep alive / data report，能力协商相关信息也会借助 KeepAliveResponse 传回去；
+
+access handler
+
+1. ChunkServer::Start() --> AccessHandler::Start() --> AccessHandler::CreateSession()
+2. SessionFollower::CreateSession()，先调用 SessionClient::CreateSession()，创建成功后调用 SessionCreatedCb()，这里面会通过 HandleNegotiatedResponse() 在 keep alive 之前先协商一次，然后调用 KeepAliveLoop()
+3. KeepAliveLoop 中通过 KeepAliveCb() 消化上一轮的包含能力协商信息的心跳返回内容（对应函数 HandleAccessResponse / HandleChunkResponse），并设置这一轮的包含能力协商信息的心跳上传内容（ComposeAccessKeepAliveRequest / ComposeChunkRequest），最后通过 SessionClient::KeepAlive 调用 session master 的 KeepAlive rpc，实际上就是 HandleKeepAlive rpc
+
 ### 快速切出切回路由出现 IO 重试
 
 由于 IOReroute 在无网络故障时有一定概率会发生本地路由快速切出切回以及 ESXi NFS Client 有一定概率会复用之前的端口号导致出现超过 1min 的 IO 中断时间，触发 Oracle rac 虚拟机保护机制，自动重启。
