@@ -1,3 +1,25 @@
+主要是完善迁移策略和提高集群 recover / migrate 的效率，然后穿插处理一些 io reroute 的售后问题（ssh 异常处理、锁处理、超时时间设定）
+
+
+
+一开始就是改迁移策略，一边是适配分层，一边在 qe 测试的过程暴露了过去各个迁移子策略都有些 cornor case 没考虑到的问题。然后在优先卷适配分层的故事里，发现 3 种类型的 pextent 基本可以复用相同的副本分配/迁移/恢复策略，就调整了一下。另外这里也有些无用功，在 5.6.0 周期一开始做的优先卷迁移策略改进有一些代码就都删掉了。
+
+
+
+拔盘性能测试中暴露的 recover 的问题，恢复目的地没有优选本地，recover 后的读没有优先读本地，recover metric 要调整
+
+集群升级测试中数据恢复过长的问题，这里踩了一些recover 相关字段和 rpc 的更改引发的兼容性问题，另外恢复慢主要是 2 个原因：
+
+1.  meta 侧恢复命令下发的慢，可用命令槽位的限制、已有迁移命令抢占槽位、下发频率的限制、；
+
+2. access 侧恢复速率设置的过慢，不同硬件能提供给 recover 使用的值、动态调节的依据不够准确；
+
+测了一些经验值，同时也对外暴露一些 rpc 来兜底。最近就是在通过批处理和缓存来减少迁移/恢复定时扫描拿各种锁的耗时。
+
+
+
+
+
 考虑一个被写满的 extent，从理论上分析：
 
 * 如果他是 ec，recover 读的数据总量是 256 MiB，写是 256 MiB / k；migrate 读是 256 MiB / k，
@@ -8,7 +30,7 @@
 
 
 1. 从 5.0.5 升级到 5.6.0，感受一下敏捷恢复的触发效率（或者直接找 qe 借个环境）
-2. 总结恢复不及预期的问题验证
+1. recover perf 按 pid 顺序，cap 按 pid 逆序，提高 recover 成功率
 3. 测试 replica 和 ec 的 migrate 时间上的区别
 4. 感觉下沉，access 怎么写 ec shard 的
 5. 更新 meta 文档中 reposition 部分
@@ -124,15 +146,6 @@ PhysicalExtentTable::ScanByPidRefs()
 
 
 
-recover 的统计
-
-```
-➜  zbs-metad grep -wn "agile_recover_only: false" zbs-metad.log.20240703-1* | wc -l
-   31821
-➜  zbs-metad grep -wn "agile_recover_only: true" zbs-metad.log.20240703-1* | wc -l
-    5358
-```
-
 
 
 集群中不同节点能力有差，有时候升级慢是在重启某个 chunk 后的恢复慢，这种情况下 meta 侧智能调节下发窗口就显得很有必要了。
@@ -144,22 +157,6 @@ recover 的统计
 recover dst 都选了同一个
 
 agile recover 的触发概率很低
-
-````
-*metad.log.20240703*1058437
-````
-
-
-
-```
-I0703 17:47:29.394574 1070540 access_manager.cc:1099] [RECOVER]: pid: 315292 lease { owner { uuid: "cea43e84-525d-4eaf-8139-3881a62edd7e" ip: "10.84.224.30" num_ip: 518018058 port: 10201 cid: 5 secondary_data_ip: "10.84.214.30" zone: "default" scvm_mode_host_data_ip: "" alive_sec: 3683 machine_uuid: "331257de-5f59-11ed-aa32-f55bd9262bfc" } pid: 315292 location: 261 origin_pid: 0 epoch: 386073 origin_epoch: 0 ever_exist: true meta_generation: 968 expected_replica_num: 2 thin_provision: true chunks { id: 5 data_ip: 518018058 data_port: 10201 rpc_ip: 518018058 rpc_port: 10200 zone_id: "default" } chunks { id: 1 data_ip: 484463626 data_port: 10201 rpc_ip: 484463626 rpc_port: 10200 zone_id: "default" } } dst_chunk: 2 replace_chunk: 5 src_chunk: 5 is_migrate: true epoch: 386073 active_location: 261 start_ms: 7790599990
-
-
-```
-
-
-
-回到 43515 行
 
 
 
@@ -191,23 +188,6 @@ replace cid 都是 2，比较像是他们真的 10 min 没有被 data report，�
 17:50:17 才开始下发 replace = 0 的 recover cmd（这中间 1min 下发了 15 次，都是 replace 和 dst = 2 的 recover cmd），但他们的 dst 又都是 5 了。
 
 18:15:45 附近开始穿插一些 dst = 2 && replace = 5 的 recover cmd，且数量也很多，这两类 recover cmd 都有发
-
-```
-zbs-chunkd.log.20240703-163340.8436:60316:I0703 17:49:17.233659  8459 recover_handler.cc:285] Get recover notification: pid: 398668 lease { owner { uuid: "40bd44f7-c363-44be-a846-30f79c972cc8" ip: "10.84.224.29" num_ip: 501240842 port: 10201 cid: 2 secondary_data_ip: "10.84.214.29" zone: "default" scvm_mode_host_data_ip: "" alive_sec: 3792 machine_uuid: "294d7616-5f59-11ed-832e-ed756b05e07a" } pid: 398668 location: 516 origin_pid: 237154 epoch: 491385 origin_epoch: 283007 ever_exist: true meta_generation: 1 expected_replica_num: 2 thin_provision: true chunks { id: 4 data_ip: 467686410 data_port: 10201 rpc_ip: 467686410 rpc_port: 10200 zone_id: "default" } chunks { id: 2 data_ip: 501240842 data_port: 10201 rpc_ip: 501240842 rpc_port: 10200 zone_id: "default" } } dst_chunk: 2 replace_chunk: 2 src_chunk: 4 epoch: 491385 active_location: 4 agile_recover_only: false start_ms: 7790707718
-zbs-chunkd.log.20240703-163340.8436:60489:I0703 17:49:17.254196  8459 recover_handler.cc:477] [RECOVER] Setup for pid: 398668
-zbs-chunkd.log.20240703-163340.8436:60564:W0703 17:49:17.255514  8459 meta.cc:1099] [REMOVE REPLICA]: pid: 398668 cid: 2 gen: 85449051
-zbs-chunkd.log.20240703-163340.8436:60588:I0703 17:49:17.265929  8459 recover_handler.cc:712] [NORMAL RECOVER START] pid: 398668 state: START cur_block: 4294967295 src_cid: 4 dst_cid: 2 is_migrate: false silence_ms: 0 replace_cid: 2 epoch: 491385 gen: 85449051
-zbs-chunkd.log.20240703-163340.8436:60593:W0703 17:49:17.266067  8460 lsm.cc:1758] extent already exists during recover start: status: EXTENT_STATUS_ALLOCATED pid: 398668 epoch: 491385 generation: 85449051 bucket_id: 1356 pblob_table_id: 193593 pblob_group_id: 2288510
-zbs-chunkd.log.20240703-163340.8436:60595:I0703 17:49:17.266173  8460 extent.cc:138] [EXTENT SET STATUS] pid: 398668 from: EXTENT_STATUS_ALLOCATED to: EXTENT_STATUS_INVALID
-zbs-chunkd.log.20240703-163340.8436:60613:E0703 17:49:17.266597  8459 recover_handler.cc:583] failed to recover a pextent. pid: 398668 state: START cur_block: 4294967295 src_cid: 4 dst_cid: 2 is_migrate: false silence_ms: 0 replace_cid: 2 epoch: 491385 gen: 85449051
-zbs-chunkd.log.20240703-163340.8436:60684:I0703 17:49:17.434800  8460 lsm.cc:4648] [FREE EXTENT] status: EXTENT_STATUS_INVALID pid: 398668 epoch: 491385 generation: 85449051 bucket_id: 1356 pblob_table_id: 193593 pblob_group_id: 2288510
-zbs-chunkd.log.20240703-163340.8436:75855:I0703 17:50:17.720784  8459 recover_handler.cc:285] Get recover notification: pid: 398668 lease { owner { uuid: "40bd44f7-c363-44be-a846-30f79c972cc8" ip: "10.84.224.29" num_ip: 501240842 port: 10201 cid: 2 secondary_data_ip: "10.84.214.29" zone: "default" scvm_mode_host_data_ip: "" alive_sec: 3852 machine_uuid: "294d7616-5f59-11ed-832e-ed756b05e07a" } pid: 398668 location: 4 origin_pid: 237154 epoch: 491385 origin_epoch: 283007 ever_exist: true meta_generation: 85449051 expected_replica_num: 2 thin_provision: true chunks { id: 4 data_ip: 467686410 data_port: 10201 rpc_ip: 467686410 rpc_port: 10200 zone_id: "default" } chunks { id: 2 data_ip: 501240842 data_port: 10201 rpc_ip: 501240842 rpc_port: 10200 zone_id: "default" } } dst_chunk: 5 src_chunk: 4 epoch: 491385 active_location: 4 agile_recover_only: false start_ms: 7790768204
-zbs-chunkd.log.20240703-163340.8436:76847:I0703 17:50:36.617069  8459 recover_handler.cc:477] [RECOVER] Setup for pid: 398668
-zbs-chunkd.log.20240703-163340.8436:76848:I0703 17:50:36.617146  8459 recover_handler.cc:712] [NORMAL RECOVER START] pid: 398668 state: START cur_block: 4294967295 src_cid: 4 dst_cid: 5 is_migrate: false silence_ms: 0 replace_cid: 0 epoch: 491385 gen: 85449201
-zbs-chunkd.log.20240703-163340.8436:77900:I0703 17:52:42.413748  8459 recover_handler.cc:757] [NORMAL RECOVER END] pid: 398668 state: END cur_block: 1024 src_cid: 4 dst_cid: 5 is_migrate: false silence_ms: 0 replace_cid: 0 epoch: 491385 gen: 85449421 recover block num: 1024
-```
-
-
 
 19:16:05 才真正进入维护模式
 
@@ -281,20 +261,6 @@ rdma 的网络环境测试由自己的 ib 测试方法，不能只看 ping 的�
 2. 节点移除迁移中对 migrate src 的选择策略有问题，COW 后没写过的 pexent 迁移过的场景。
 3. recover lease owner 上的 access metric 没有值，recover 路径上只对 counter 埋点，没有针对 metric 埋点；
 4. 处理售后 case，出问题的 3 个节点表现一致：ESXI 上 Reroute 进程仍存在，但不打印日志，跟 zbs insight 心跳失联。单节点的多个 Reroute 进程中大部分都能响应 SIGTERM 立马被 kill，但会剩一个 Reroute 进程需要通过 SIGKILL 才能完全杀死。上去排查日志看到退出栈停在 run_cmd 的 execute_child 上，Reroute 每个周期（2s）会通过起子进程的方式来在 ESXi 上执行 shell 命令如查看路由表、网卡信息，这里怀疑有可能是频繁创建/销毁子进程时卡住了。CPU 在不兼容性列表里
-
-
-
-1. 如果升级中心界面上设置了静态恢复速率
-
-   新 meta leader 会给老 chunk 发 recover_mode  = static，但是没有给 static_recover_speed_limit 设上值，从老 chunk 的视角，拿到 static mode，static_recover_speed_limit = 0，但是 0 的情况下并不会更新自己的的 migrate speed limit，所以还是按照升级之前，最近一次设置的静态值来处理，不符预期。
-
-2. 如果升级中心界面上没设置，集群之前是静态模式
-
-   与第一种情况一样。
-
-3. 如果升级中心界面上没设置，集群之前是智能模式
-
-   新 meta leader 会给老 chunk 发 recover_mode  = auto，access 自行调整限速，符合预期。
 
 
 
@@ -451,6 +417,8 @@ ssh -p 2222 yiwu.cai@jump.smartx.com 输入 MFA Code 后，直接输入要登陆
 7. 在 133.171 上挂载 8 个 64T 的大卷做 ummap 试一下，如果还是慢，说明有可能是接入协议的问题。
 
     在 zbs 日志中看一下有没有 fail to ping 的日志，另外看一下多个卷做 unmap 的 zbs-chunk show_polling_stats 中 chunk-main 的 CPU 占用率。
+    
+13. migrate 和 recover 各自维护自己的 cmd slots，升级期间，限制 migrate slots 小一些
 
 
 
@@ -483,13 +451,9 @@ ssh -p 2222 yiwu.cai@jump.smartx.com 输入 MFA Code 后，直接输入要登陆
 
 
 
-
-
 tuna 自己去翻页查找 need recover 数据了。
 
 zbs-client-py 中没有一个命令行可以给出精确的待恢复待恢复数据块个数，即使是隔 1min 调用 1 次 zbs-meta cluster summary 拿 ongoing / pending recover num，一共 2 次，在大规格容量（pid 数量超过 100w）下也会遗漏掉 100w 之后的那部分数据（目前 zbs 内部单次 recover 扫描上限是 50w 个 pid），比如最极端的场景有 800w 个 pid，需要调用 zbs-meta recover scan_immediate 16 次，如果连续 16 次看到的 ongoing / pending recover num 都是 0 并且 zbs-meta pextent find need_recover 也是 0，才认为集群真的没有待恢复数据。
-
-
 
 
 
@@ -639,10 +603,6 @@ should meet
 
 
 
-
-
-
-
 remove replica rpc 时会把那个 cid 从 pentry 中 clear 掉，这样在 PhysicalExtentTableEntry::UpdateReplicaInfo 的返回值就是 False，HandlePExtentInfo 也是 False，等到对应的临时副本先回收，她才被回收。
 
 meta 认为的要回收的临时副本，会将这个 pentry garbage 设成 true，valid = 0；
@@ -717,7 +677,7 @@ prometheus 中支持多种 IO 类型的 metric 相加，比如二者相加可以
 
 
 
-一个是 tuna 那报的一个问题，从 5.0.3 升级到 5.0.7，有个节点 IO 重路由状态检查失败，上去看了下，有个现象是会删除本地存储 ip，然后又把他添加回来，看了下应该是这个版本里对 session alive 的判断逻辑有问题，当时没有 session alive 字段，他是自己写的一套判断逻辑，应该是有点 bug，还没来得及继续调查，还会出 5.0.8 吗？还需要更细致的调查吗？
+一个是 tuna 那报的一个问题，从 5.0.3 升级到 5.0.7，有个节点 IO 重路由状态检查失败，上去看了下，有个现象是会删除本地存储 ip，然后又把他添加回来，看了下应该是这个版本里对 session alive 的判断逻辑有问题，当时没有 session alive 字段，他是自己写的一套判断逻辑，应该是有点 bug，还没来得及继续调查，还会出 5.0.8 吗？还需要更细致的调查吗？不会出，不接着调查。
 
 
 
@@ -894,8 +854,6 @@ esxcfg-route -d 192.168.33.2/32 10.0.0.22; esxcfg-route -a 192.168.33.2/32 10.0.
           LOG(INFO) << "yiwu sp_load " << sp_load << " pk " << pk;
           ```
     
-12. 对于仅被 thin volume / snapshot 引用的 capacity pextent，其 provision 将在 gc 扫描时被更新为 thin，随心跳下发给 lsm，如果有 pextent 被 thick volume 引用，那其 provision 将被更新为 thick，随心跳下发给 lsm，[ZBS-15094](http://jira.smartx.com/browse/ZBS-15094)。
-
 13. 根据最新 lsm 设计文档大致了解 lsm2 
 
 14. 补一个同时有多个 removing cid 的单测；
@@ -937,11 +895,6 @@ esxcfg-route -d 192.168.33.2/32 10.0.0.22; esxcfg-route -a 192.168.33.2/32 10.0.
 做一次冲突检查，合法且和当前恢复不冲突，prefer local 和 topo 相关的不管。
 
 ZBS-20993，允许 RPC 产生恢复/迁移命令，可以指定源和目的地，在运维场景或许会有用。
-
-
-
-1. 让 cli 可以看到 avail cmd slots
-2. 把 distributeRecoverCmds 中的生成部分函数抽出来
 
 
 
@@ -1122,12 +1075,6 @@ chunk recover 执行的慢可能原因：慢盘、缓存击穿、normal instead 
 敏捷恢复为减少内存使用，是有单次最大数量的限制。不过 100G 的写盘应该不会触发这个上限。
 
 调查为啥升级时触发的敏捷恢复数量不及预期可以从维护模式时是否 lease 没清空的角度出发调查。
-
-
-
-缓存击穿后，大量的恢复任务争抢 IO，恢复任务容易超时被取消，导致实际恢复速率不足 10MB/s。副本恢复的并发度默认是固定值 32，应该作为一个自适应缓存命中率的值
-
-现有负载的计算是只算 partition 的已用比例。
 
 
 
