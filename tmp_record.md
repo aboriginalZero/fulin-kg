@@ -1,3 +1,11 @@
+https://docs.google.com/document/d/17H6WVHB3fWr_JnyNutRkycpXSIZbWKujS6oybFZhR64/edit
+
+写这个文档和 meta in zbs 文档
+
+
+
+
+
 移除节点和 recover 的 dst，针对 perf thin，只允许选 recover dst 已使用空间比例 < 95% 的，避免 recover 用满所有的 perf 空间，app io 写不下去，这样留个缓冲地带，给下沉留出时间。
 
 perf thick 也不会下沉，cap 基本不会用满，所以不用做这个限制
