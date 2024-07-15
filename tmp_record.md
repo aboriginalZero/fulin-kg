@@ -1,3 +1,56 @@
+10.255.0.95:10100:2,10.255.0.96:10100:2,10.255.0.97:10100:2,10.255.0.98:10100:1,10.255.0.99:10100:1
+
+
+
+
+
+升级日志中搜 Wait data recover 和 Set chunk maintenance mode
+
+如果是敏捷恢复期间产生的 need recover，会被记录在 rim_pextent_num 中
+
+除了读写初次 sync 会剔除 gen 不一样的 segment，ec 只有在写失败才会剔除 shard，并且不会创建临时副本。
+
+进入维护模式后，会 revoke lease，那么下次读的时候，重新拿到 lease 后的初次读之前，会 sync，此时会剔除那些 gen 不一致的 segment 引发 recover
+
+
+
+受限于 recover dst 基本都选 prefer local，prefer local 此时成为 recover cmd 下发的瓶颈，不过这个算预期内的
+
+恢复过程中穿插了 migrate cmd，剩下了几个 recover cmd 由于
+
+
+
+avail cmd slots 忽略 cmd src 会被 lease owner 替换的情况，即它限制的是 old src
+
+
+
+先关注 migrate cmd 会不会影响 recover cmd 的执行
+
+
+
+少量非预期日志的出现，晚点可以查一下这些 pid 的特点
+
+```
+W0712 14:06:47.404752 19128 physical_extent_table_entry.cc:147] [RECOVERING PEXTENT REPORTED]:  pid: 6052057 cid: 18
+I0712 14:06:47.404778 19128 physical_extent_table_entry.cc:124] [IGNORE SMALL GEN]: wrong gen: 5 expected gen: 439 pid: 6052072 now_ms: 5187225614 cid: 18
+W0712 14:06:47.404783 19128 physical_extent_table_entry.cc:147] [RECOVERING PEXTENT REPORTED]:  pid: 6052080 cid: 18
+```
+
+还是出现了 data report 超过 7s 没处理完的日志
+
+```
+W0712 14:06:58.241887 19128 rpc_server.cc:186] [RPC] Undone message socket: 0x564d28bf1ae0 OnReadContext: header: error_code: 0, service_id: 7002, method_id: 0, timeout_ms: 7000, message_id: 136, buf_len: 3157303 , offset: 1243800, elapsedTime: 108
+W0712 14:06:58.351882 19128 rpc_server.cc:186] [RPC] Undone message socket: 0x564d28bf1ae0 OnReadContext: header: error_code: 0, service_id: 7002, method_id: 0, timeout_ms: 7000, message_id: 136, buf_len: 3157303 , offset: 2735240, elapsedTime: 218
+```
+
+
+
+
+
+只统计 agile recover 没有意义，因为 ec recover 是一定不会走 agile recover 的，需要看待恢复数据中 ec 和 replica 的比例
+
+
+
 https://docs.google.com/document/d/17H6WVHB3fWr_JnyNutRkycpXSIZbWKujS6oybFZhR64/edit
 
 写这个文档和 meta in zbs 文档
