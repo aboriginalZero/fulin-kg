@@ -1,10 +1,18 @@
-10.255.0.95:10100:2,10.255.0.96:10100:2,10.255.0.97:10100:2,10.255.0.98:10100:1,10.255.0.99:10100:1
+zbs-insight 每收到一次日志有可能打印一下吗？
+
+zbs-meta pextent list 支持仅展示 perf 或仅展示 cap
+
+升级过程中查看 ongoing_recover 的值，如果没有降到 0，说明慢的瓶颈在 access 侧。
 
 
 
+如果 app io 流量没有超过  zbs 能够发挥磁盘的上限，那么智能调节的机制应该是保持 internal io 和 app io 的使用总和不超过 zbs 发挥磁盘的上限，而不是一旦有 20 MiB/s app io 来了，就让 internal io 减到最低。之后可以考虑让 app io busy bps 在一个基准值的基础上动态变化。具个简单的例子，比如 app io 大于 20 MiB/s，internal io limit 减一半，只有 app io 大于 40 MiB/s，internal io limit 才继续再减一半。而如果 app io 大于磁盘上限，那可以考虑让 internal io 降低的快一点，且下限低一些。
+
+算 app io + internel io 不超过 zbs 能发挥磁盘的最大值。
 
 
-升级日志中搜 Wait data recover 和 Set chunk maintenance mode
+
+升级日志中搜 Wait data recover 和 Set chunk maintenance mode 和 Set data static recover limit
 
 如果是敏捷恢复期间产生的 need recover，会被记录在 rim_pextent_num 中
 
@@ -16,15 +24,9 @@
 
 受限于 recover dst 基本都选 prefer local，prefer local 此时成为 recover cmd 下发的瓶颈，不过这个算预期内的
 
-恢复过程中穿插了 migrate cmd，剩下了几个 recover cmd 由于
-
-
+恢复过程中穿插了 migrate cmd，不过都是在 recover 完成之后的间隙里。影响不大
 
 avail cmd slots 忽略 cmd src 会被 lease owner 替换的情况，即它限制的是 old src
-
-
-
-先关注 migrate cmd 会不会影响 recover cmd 的执行
 
 
 
@@ -463,7 +465,9 @@ ssh -p 2222 yiwu.cai@jump.smartx.com 输入 MFA Code 后，直接输入要登陆
 
     目前的实现里，假设 cap / perf 都在满负载恢复，两边都 500 MB/s，那 app io 可能就抢不到网络带宽了。
 
-1. 如果 app io 流量没有超过  zbs 能够发挥磁盘的上限，那么智能调节的机制应该是保持 internal io 和 app io 的使用总和不超过 zbs 发挥磁盘的上限，而不是一旦有 20 MiB/s app io 来了，就让 internal io 减到最低。之后可以考虑让 app io busy bps 在一个基准值的基础上动态变化。具个简单的例子，比如 app io 大于 20 MiB/s，internal io limit 减一半，只有 app io 大于 40 MiB/s，internal io limit 才继续再减一半。而如果 app io 大于磁盘上限，那可以考虑让 internal io 降低的快一点，且下限低一些。
+4. 如果 app io 流量没有超过  zbs 能够发挥磁盘的上限，那么智能调节的机制应该是保持 internal io 和 app io 的使用总和不超过 zbs 发挥磁盘的上限，而不是一旦有 20 MiB/s app io 来了，就让 internal io 减到最低。之后可以考虑让 app io busy bps 在一个基准值的基础上动态变化。具个简单的例子，比如 app io 大于 20 MiB/s，internal io limit 减一半，只有 app io 大于 40 MiB/s，internal io limit 才继续再减一半。而如果 app io 大于磁盘上限，那可以考虑让 internal io 降低的快一点，且下限低一些。
+
+    算 app io + internel io 不超过 zbs 能发挥磁盘的最大值。
 
 1. internal io throttle 加入 iops 的限制，综合考虑 sink 和 reposition
 
@@ -475,15 +479,15 @@ ssh -p 2222 yiwu.cai@jump.smartx.com 输入 MFA Code 后，直接输入要登陆
 
 4. access reposition 的 Counter 改成 metric，否则影响前端展示、metric 使用，检查 recover/migrate speed 在前端界面和 prometheus 中的数值是否准确，meta 侧跟 chunk 侧的 total speed 和 local speed 和 remote speed；
 
-5. 重构一下 AccessManager::ReplicaIsValid，把 update 和判断是否要回收分开来处理；
-
 6. access 在读 COW 出来还没写过的 pextent 时，如果读全部副本都失败，主动 refresh location 去读 parent 上的数据；
 
 7. 在 133.171 上挂载 8 个 64T 的大卷做 ummap 试一下，如果还是慢，说明有可能是接入协议的问题。
 
     在 zbs 日志中看一下有没有 fail to ping 的日志，另外看一下多个卷做 unmap 的 zbs-chunk show_polling_stats 中 chunk-main 的 CPU 占用率。
     
-13. migrate 和 recover 各自维护自己的 cmd slots，升级期间，限制 migrate slots 小一些
+12. migrate 和 recover 各自维护自己的 cmd slots，升级期间，限制 migrate slots 小一些
+
+     升级过程中其他 migrate 如 even migrate 等是否可以暂缓进行，仅保留 uneven rebalance
 
 
 
