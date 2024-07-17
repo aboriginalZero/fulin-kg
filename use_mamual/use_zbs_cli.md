@@ -33,7 +33,7 @@ docker run --rm --privileged=true -it -v /home/code/zbs3:/zbs -w /zbs registry.s
 mkdir build && cd build && source /opt/rh/devtoolset-7/enable && cmake -DBUILD_MOLD_LINKER=ON -DCMAKE_BUILD_TYPE=RELWITHDEBINFO -G Ninja ..
 # 编译时给定参数，比如要同时编译 bench，cmake -DBUILD_BENCHMARKS=ON -G Ninja ..
 # -DBUILD_TARGET_PLATFORM=hygon 编译海光下的
-ninja zbs_test
+ninja -j20 zbs_test
 
 # 屏幕中会提示出错处的日志信息，借助 newci 可以避免在本地配置 nvmf/rdma 环境跑单测
 # 但是要配好 nvmf/rdma 的相关依赖包/服务

@@ -1,6 +1,16 @@
-zbs-insight 每收到一次日志有可能打印一下吗？
+8 min 不工作的原因
 
-zbs-meta pextent list 支持仅展示 perf 或仅展示 cap
+不管怎么样，至少要每半天打印一次
+
+
+
+zbs cli 对应更新 3 个 rpc
+
+
+
+
+
+zbs-insight 每收到一次日志有可能打印一下吗？
 
 升级过程中查看 ongoing_recover 的值，如果没有降到 0，说明慢的瓶颈在 access 侧。
 
