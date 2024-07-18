@@ -65,6 +65,7 @@ xen 中删除 reroute 进程
 ps -ef | grep scvm_failure_loop.sh  |grep -v grep | grep -v vi | awk '{print $2}' | xargs /bin/kill
 esxi 中删除 reroute 进程
 ps -c| grep scvm_failure_loop.sh | grep -v grep | grep -v vi | awk '{print $1}' | xargs /bin/kill
+ps -c| grep reroute.py | grep -v grep | grep -v vi | awk '{print $1}' | xargs /bin/kill
 ```
 
 
@@ -89,13 +90,6 @@ scvm
 192.168.85.15 16 17
 10.10.85.15 16 17
 ```
-
-
-
-1. 去掉 shell 版代码；
-2. 在每次 add route 之后，都主动调用一次 update_local_hypervisor_ip 去刷新 zbs 侧的 session 记录信息，以保证接入点的唯一性；
-3. 试着重写一下 check_scvm_reroute_status，让路由切换优先级的定义更清晰，明确 session exist/a lie 的使用，考虑 chunk 会反复重启等特殊场景，减少不必要的路由切换。
-4. 去掉 active_scvm_data_ip，只保留 active_scvm_data_ip_list
 
 
 
