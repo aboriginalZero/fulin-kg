@@ -1,8 +1,16 @@
-提高执行命令行的频率
+ring id 一开始是 1 4 2 3 的顺序（值要分散点），副本超时时间配成 1 min，fio 在 cid1 上做，对应 ip 213
 
-在 ESXi 8 上执行
+1. 一开始 segment 在 [1, 4, 2]，修改 cid 3 的 ring id 到 4 和 2 之间，产生 src = 2，dst = 3，replace = 2 的 migrate cmd（因为 ec src = ec replace），统计时间，之后 loc = [1, 4, 3]
+2. 把 cid 4 的 chunk stop 掉，统计时间，之后 loc = [1, 2, 3]
+3. ring id 改成 1 4 2 3 的顺序，把 ec 卷删掉，再开始创建一个 prefer local 也是 1 的 replica 卷，fio 写全盘后，主动多次 sink；
+4. 一开始 segment 在 [1, 4, 2]，修改 cid 3 的 ring id 到 4 和 2 之间，产生 src = 1，dst = 3，replace = 2 的 migrate cmd（因为 replica replace 会优选 lease owner），统计时间，之后 loc = [1, 4, 3]
+5. 把 cid 4 的 chunk stop 掉，统计时间，之后 loc = [1, 2, 3]
 
 
+
+
+
+判断 IO reroute 不工作的方式是没有按一定频率跟 insight 心跳，如果超过 n 次没有跟 insight 心跳，主动退出程序？
 
 zbs-insight 每收到一次日志有可能打印一下吗？
 
@@ -75,15 +83,16 @@ perf thick 也不会下沉，cap 基本不会用满，所以不用做这个限�
 
 一开始就是改迁移策略，一边是适配分层，一边在 560 测试的过程暴露了过去各个迁移子策略都有些 cornor case 没考虑到的问题，就修了一下。然后在优先卷适配分层的故事里，发现 3 种类型的 pextent 基本可以复用相同的副本分配/迁移/恢复策略，就调整了一下。另外这里也有些无用功，在 5.6.0 周期一开始做的优先卷迁移策略改进有一些代码就都删掉了。
 
-拔盘性能测试中暴露的 recover 的问题，恢复目的地没有优选本地，recover 后的读没有优先读本地（recover metric 要调整）
+拔盘故障性能测试中暴露的 recover 的问题，恢复目的地没有优选本地，recover 后的读没有优先读本地（recover metric 要调整）
 
-集群升级测试中数据恢复过长的问题，这里踩了一些recover 相关字段和 rpc 的更改引发的兼容性问题，另外恢复慢主要是 2 个原因：
+集群升级测试中数据恢复过长的问题，这里踩了一些 recover 相关字段和 rpc 的更改引发的兼容性问题，另外恢复慢主要是 2 个原因：
 
-1.  meta 侧恢复命令下发的慢，可用命令槽位的限制、已有迁移命令抢占恢复可用槽位、下发频率的限制；
+1.  meta 侧恢复命令下发的慢，可用命令槽位的限制、下发频率的限制；
+2. access 侧恢复速率设置的过慢，不同硬件能提供给 internal io 使用的值、动态调节的依据可以更准确；
 
-2. access 侧恢复速率设置的过慢，不同硬件能提供给 recover 使用的值、动态调节的依据不够准确；
+测了一些经验值，同时也对外暴露一些 rpc 来兜底。
 
-测了一些经验值，同时也对外暴露一些 rpc 来兜底。最近就是在通过批处理和缓存来减少迁移/恢复定时扫描拿各种锁的耗时。
+另外就是通过批处理和缓存来减少迁移/恢复定时扫描拿各种锁的耗时，总之还是围绕迁移和恢复开展工作。
 
 穿插处理一些 io reroute 的售后问题（ssh 异常处理、锁处理、超时时间设定）
 
@@ -1366,6 +1375,16 @@ vscode 中用 vim 插件，这样可以按区域替换代码
 
 
 ### reposition 性能测试
+
+顺序写 nvme 盘
+
+cgexec -g cpuset:. taskset -c 11 fio -ioengine=libaio -invalidate=1 -iodepth=128  -direct=1 -bs=256k -filename=/dev/nvme4n1 -name=write_128_4k_fio -rw=write
+
+
+
+
+
+
 
 测试 auto mode 给的默认值是否合适
 

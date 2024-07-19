@@ -1,3 +1,12 @@
+替换所有 esxi 节点 reroute 脚本的方式
+
+1. 任选一个 scvm 节点，修改 /usr/share/tuna/script/scvm_failure_common/reroute.py 和 reroute_version
+2. 执行 zbs-deploy-manage update_reroute_version
+
+
+
+
+
 shell io reroute，一开始 scvm 存储网都 down 的情况下，切到管理网，此时恢复其中一个 scvm 存储网，但就一个本地的 xen 的路由切回存储网，这是符合预期的，因为这个管理网的 session alive sec 正常，shell 版本中不会去选别的存储网。
 
 
