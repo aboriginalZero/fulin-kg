@@ -1,127 +1,18 @@
-这个问题这两天有新的发现，具体调查分析过程在这，https://docs.google.com/document/d/1_8BvTnJFWMjFEI3umdp2mCG7vLO9wljK5QofTojuE1k/edit
+先弄一下性能测试，然后开始搞 [ZBS-19788](http://jira.smartx.com/browse/ZBS-19788)
 
-结论是：在 ESXi 上 reroute 进程创建用于查看路由表/网卡信息的子进程存在一定概率卡住，进而导致父进程卡住，对外表象为 Reroute 进程不工作。
-
-
-
-在 ESXi 上 reroute 进程中通过 subprocess.Popen 创建的子进程，存在一定概率，它的 parent pid 是自己，并且躲过了父进程对它的 2s 超时击杀，reroute 进程一直等着子进程的返回结果，但子进程一直没有返回（没有干预的情况下，会一直卡住），于是 reroute 进程一直卡着。
-
-
-
-
-
-esxi 中的 ptrace 默认 disable 了，没法 gdb attach 一个正在运行的 python 进程
-
-
-
-通过 ps -c| grep reroute.py | grep -v grep | grep -v vi | awk '{print $1}' | xargs /bin/kill 来把所有的都 kill，但其实 1725208 还在，因为他不响应 15 信号，不过不影响新的 reroute 进程的拉起，这个进程变成僵尸进程，一直在了
+ssh -p 2222 yiwu.cai@jump.smartx.com 输入 MFA Code 后，直接输入要登陆的主机 IP
 
 ```
-[PID:1189743] 2024-07-20 02:09:23 reroute.py:1263 WARNING get local hypervisor ip list failed
-[PID:1189743] 2024-07-20 02:09:25 reroute.py:1280 INFO send heartbeat to 10.157.20.207 succeed
-[PID:1189743] 2024-07-20 14:48:41 reroute.py:1187 WARNING signal signum: 15 received, traceback stack:   File "/vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py", line 1976, in <module>
-    if parse_args():
-  File "/vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py", line 1963, in parse_args
-    return loop_main()
-  File "/vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py", line 1872, in loop_main
-    previous_heartbeat_result = heartbeat(previous_heartbeat_result, current_dst_ip)    # pragma: no cover
-  File "/vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py", line 1261, in heartbeat
-    hyper_ip_list = get_local_ip_list(RerouteConfig.host_type)
-  File "/vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py", line 919, in get_local_ip_list
-    retcode, stdout, stderr = run_cmd("esxcfg-vmknic -l")
-  File "/vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py", line 707, in run_cmd
-    cmd_proc = subprocess.Popen(
-  File "/lib64/python3.8/subprocess.py", line 858, in __init__
-  File "/lib64/python3.8/subprocess.py", line 1660, in _execute_child
-
-[PID:1189743] 2024-07-20 14:48:41 reroute.py:692 WARNING kill process id: 1189743 actively
-[PID:1995729] 2024-07-20 14:49:03 reroute.py:692 WARNING kill process id: 1995730 actively
-[PID:1995729] 2024-07-20 14:49:03 reroute.py:731 WARNING child pid: 1995730 run cmd: ['rm', '-f', '/var/log/scvm_failure.log'], timeout: 2, cmd_retcode: -9, cmd_stdout: , cmd_stderr:
-[PID:1995729] 2024-07-20 14:49:06 reroute.py:1480 INFO session has changed, persistent and reload scvm ip list
-[PID:1995729] 2024-07-20 14:49:06 reroute.py:1481 INFO new session info:
-                new_local_data_ip_set: {'10.157.20.199', '10.157.20.197', '10.157.20.207', '10.157.20.205', '10.157.20.203', '10.157.20.201'}
-                new_local_manage_ip_set: {'172.20.134.164', '172.20.134.165', '172.20.134.166', '172.20.134.161', '172.20.134.162', '172.20.134.163'}
-                new_remote_data_ip_set: set()
-                new_remote_manage_ip_set: set()
-
-[PID:1995729] 2024-07-20 14:49:06 reroute.py:1280 INFO send heartbeat to 10.157.20.207 succeed
-[PID:1995729] 2024-07-20 14:49:09 reroute.py:615 INFO dst ip is always: 10.157.20.207, status: normal and is local scvm data ip, times: 1
+sdf() {
+    ssh -p 2222 yiwu.cai@jump.smartx.com
+}
 ```
-
-主动 kill 1725208
-
-为啥即使是正常的 reroute 进程，也会出现某个时刻会有多个线程的状态？这已经是协程使用模式了
-
-```
-1189743  1189743  python                                                            python /vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py loop esxi
-1189748  1189743  python                                                            python /vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py loop esxi
-1725208  1725208  python                                                            python /vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py loop esxi
-1995102  1189743  python                                                            python /vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py loop esxi
-\n\n
-1189743  1189743  python                                                            python /vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py loop esxi
-1189748  1189743  python                                                            python /vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py loop esxi
-1725208  1725208  python                                                            python /vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py loop esxi
-\n\n
-1189743  1189743  python                                                            python /vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py loop esxi
-1189748  1189743  python                                                            python /vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py loop esxi
-1725208  1725208  python                                                            python /vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py loop esxi
-\n\n
-1995130  1189743  python                                                            python /vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py loop esxi
-1995131  1189743  python                                                            python /vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py loop esxi
-1995132  1189743  python                                                            python /vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py loop esxi
-1995133  1189743  python                                                            python /vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py loop esxi
-1995134  1189743  python                                                            python /vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py loop esxi
-1995135  1189743  python                                                            python /vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py loop esxi
-1995136  1189743  python                                                            python /vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py loop esxi
-1995137  1189743  python                                                            python /vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py loop esxi
-1995138  1189743  python                                                            python /vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py loop esxi
-1995139  1189743  python                                                            python /vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py loop esxi
-1995140  1189743  python                                                            python /vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py loop esxi
-1995141  1189743  python                                                            python /vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py loop esxi
-1995142  1189743  python                                                            python /vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py loop esxi
-1189743  1189743  python                                                            python /vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py loop esxi
-1189748  1189743  python                                                            python /vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py loop esxi
-1725208  1725208  python                                                            python /vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py loop esxi
-```
-
-有问题的 reroute 进程，总是有多个，这个也不太符合预期，预期只会有一个运行，手动把他 kill 掉就好了
-
-这个 2115326，理论上应该是 
-
-当子进程（WID）的 CID 不是 reroute 主进程的话，就会出现卡死的现象
-
-```
-2115326  2115326  python                                                            python /vmfs/volumes/6699d0f3-ce1e3666-9b9e-005056ab2622/vmware_scvm_failure/reroute.py loop esxi
-1295201  1295201  python                                                            python /vmfs/volumes/6699d0f3-ce1e3666-9b9e-005056ab2622/vmware_scvm_failure/reroute.py loop esxi
-1295206  1295201  python                                                            python /vmfs/volumes/6699d0f3-ce1e3666-9b9e-005056ab2622/vmware_scvm_failure/reroute.py loop esxi
-```
-
-
-
-考虑一个被写满的 extent，从理论上分析：
-
-* 如果他是 ec，recover 读的数据总量是 256 MiB / k * (k - 1)，从 k - 1 个节点上读，写是 256 MiB / k；migrate 读写都是 256 MiB / k。
-* 如果他是 replica，recover / migrate 读写都是 256 MiB。
-
-实验设定：
-
-ring id 一开始是 1 4 2 3 的顺序（值要分散点），副本超时时间配成 1 min，fio 在 cid1 上做，对应 ip 213
-
-1. 一开始 segment 在 [1, 4, 2]，修改 cid 3 的 ring id 到 4 和 2 之间，产生 src = 2，dst = 3，replace = 2 的 migrate cmd（因为 ec src = ec replace），统计时间，之后 loc = [1, 4, 3]
-2. 把 cid 4 的 chunk stop 掉，统计时间，之后 loc = [1, 2, 3]
-3. ring id 改成 1 4 2 3 的顺序，把 ec 卷删掉，再开始创建一个 prefer local 也是 1 的 replica 卷，fio 写全盘后，主动多次 sink；
-4. 一开始 segment 在 [1, 4, 2]，修改 cid 3 的 ring id 到 4 和 2 之间，产生 src = 1，dst = 3，replace = 2 的 migrate cmd（因为 replica replace 会优选 lease owner），统计时间，之后 loc = [1, 4, 3]
-5. 把 cid 4 的 chunk stop 掉，统计时间，之后 loc = [1, 2, 3]
-
-
 
 
 
 判断 IO reroute 不工作的方式是没有按一定频率跟 insight 心跳，如果超过 n 次没有跟 insight 心跳，主动退出程序？
 
 zbs-insight 每收到一次日志有可能打印一下吗？
-
-升级过程中查看 ongoing_recover 的值，如果没有降到 0，说明慢的瓶颈在 access 侧。
 
 
 
@@ -131,93 +22,12 @@ zbs-insight 每收到一次日志有可能打印一下吗？
 
 
 
-升级日志中搜 Wait data recover 和 Set chunk maintenance mode 和 Set data static recover limit
-
-如果是敏捷恢复期间产生的 need recover，会被记录在 rim_pextent_num 中
-
-除了读写初次 sync 会剔除 gen 不一样的 segment，ec 只有在写失败才会剔除 shard，并且不会创建临时副本。
-
-进入维护模式后，会 revoke lease，那么下次读的时候，重新拿到 lease 后的初次读之前，会 sync，此时会剔除那些 gen 不一致的 segment 引发 recover
-
-
-
-受限于 recover dst 基本都选 prefer local，prefer local 此时成为 recover cmd 下发的瓶颈，不过这个算预期内的
-
-恢复过程中穿插了 migrate cmd，不过都是在 recover 完成之后的间隙里。影响不大
-
-avail cmd slots 忽略 cmd src 会被 lease owner 替换的情况，即它限制的是 old src
-
-
-
-少量非预期日志的出现，晚点可以查一下这些 pid 的特点
-
-```
-W0712 14:06:47.404752 19128 physical_extent_table_entry.cc:147] [RECOVERING PEXTENT REPORTED]:  pid: 6052057 cid: 18
-I0712 14:06:47.404778 19128 physical_extent_table_entry.cc:124] [IGNORE SMALL GEN]: wrong gen: 5 expected gen: 439 pid: 6052072 now_ms: 5187225614 cid: 18
-W0712 14:06:47.404783 19128 physical_extent_table_entry.cc:147] [RECOVERING PEXTENT REPORTED]:  pid: 6052080 cid: 18
-```
-
-还是出现了 data report 超过 7s 没处理完的日志
-
-```
-W0712 14:06:58.241887 19128 rpc_server.cc:186] [RPC] Undone message socket: 0x564d28bf1ae0 OnReadContext: header: error_code: 0, service_id: 7002, method_id: 0, timeout_ms: 7000, message_id: 136, buf_len: 3157303 , offset: 1243800, elapsedTime: 108
-W0712 14:06:58.351882 19128 rpc_server.cc:186] [RPC] Undone message socket: 0x564d28bf1ae0 OnReadContext: header: error_code: 0, service_id: 7002, method_id: 0, timeout_ms: 7000, message_id: 136, buf_len: 3157303 , offset: 2735240, elapsedTime: 218
-```
-
-
-
-
-
-只统计 agile recover 没有意义，因为 ec recover 是一定不会走 agile recover 的，需要看待恢复数据中 ec 和 replica 的比例
-
-
-
 1. 从 5.0.5 升级到 5.6.0，感受一下敏捷恢复的触发效率（或者直接找 qe 借个环境）
 1. recover perf 按 pid 顺序，cap 按 pid 逆序，提高 recover 成功率
 3. 测试 replica 和 ec 的 migrate 时间上的区别
 4. 感觉下沉，access 怎么写 ec shard 的
 5. 更新 meta 文档中 reposition 部分
-
-
-
-VLOG(VLOG_INFO) 级别的日志怎么开启，zbs-meta vlog -h 的用法
-
-```shell
-# 在 meta 配置文件里加上
-GLOG_vmodule="tcp=4, data_channel=4"
-```
-
-如果是 chunk 的 vlog，需要在 chunk 配置文件里加上吗？有了这个之后，可以通过 zbs-meta vlog -h 来不重启的状态下调节。
-
-
-
- zbs-meta memory heap_profiler_start /root/yiwu/heap_profiler && zbs-meta memory heap_profiler_stop 收集到的文件如何使用
-
-```
-# 在对应 docker （oe1 或 el7）里安装 pprof
-./pprof_linux_amd64 -h
-# 测试环境的话，可以直接在节点上 wget http://192.168.91.19/bin/x86_64/pprof_linux_amd64
-./pprof_linux_amd64 -text /usr/sbin/zbs-metad heap_profiler.0002.heap
-```
-
-查看集群空间占用
-
-```
-zbs-tool space show 
-```
-
-chunk table 改成读写锁
-
-
-
-可以通过在目标节点上的 /var/log/message 里搜索 Abort Task 来检查是否有物理磁盘 IO 异常的信息。如果有则通常是磁盘损坏或者磁盘固件版本不对，如果多个磁盘均有出现则有可能是 HBA 卡异常或者固件版本不对。
-
-```shell
-# 磁盘消除"隔离中"状态
-zbs-chunk partition set-healthy /dev/sdx
-# 磁盘消除"亚健康/不健康"状态
-zbs-node set_disk_healthy sdx
-```
+5. chunk table 改成读写锁
 
 
 
@@ -237,21 +47,10 @@ MLAG 集群中不同节点能力有差，有时候升级慢是在重启某个 ch
 
 
 
-tower 首页的存储性能图标对应 zbs 的哪些 metric
 
 
-
-1. 升级中心静态恢复速率的设置：zbs 自己先按 cap / perf 各一半的比例向前兼容，给升级中心提需求，让他们在 1.1 的版本中适配层次化改动后的静态限速设置；
-2. 节点移除迁移中对 migrate src 的选择策略有问题，COW 后没写过的 pexent 迁移过的场景。
-3. recover lease owner 上的 access metric 没有值，recover 路径上只对 counter 埋点，没有针对 metric 埋点；
-
-
-
-
-
-ssh -p 2222 yiwu.cai@jump.smartx.com 输入 MFA Code 后，直接输入要登陆的主机 IP
-
-4k app io 没被统计在这，access handler 中显示 app iops / bps = 0，显示在 perf layer，因为 4k 会先写 perf layer
+1. 节点移除迁移中对 migrate src 的选择策略有问题，COW 后没写过的 pexent 迁移过的场景。
+2. recover lease owner 上的 access metric 没有值，recover 路径上只对 counter 埋点，没有针对 metric 埋点；
 
 
 
@@ -333,11 +132,7 @@ zbs-client-py 中没有一个命令行可以给出精确的待恢复待恢复数
 
 
 
-rpm -qi zbs
-
 cd /var/log/zbs && ll -rth zbs-chunkd.log* 按照日期排序找文件
-
-grep "the" | less
 
 
 
@@ -388,88 +183,6 @@ replica sync gen 的时候，如果发现他有 temporary replica，也会一起
 remove replica 和 replace replica 这两个 rpc 很重要，理解形参各个字段的含义、副本被剔除/替换的时机、access 什么时候会调用
 
 
-
-只有在做 special recover 且 rollback_failed_replica 和 force_recover_from_temporary_replica 其中一个为 true 的时候才会在 replace replica request 中设置 reset_location_to_dst 和 reset_generation，那么 meta 会要求这个 pentry 必须所有副本都 dead，把这个 pentry 的 location 设置成只有一个 dst cid， gen 设置成 reset_generation，rim cid 设置成 0，清空这个 pentry 所有的临时副本。
-
-
-
-有损临时副本的 temporary_pid 和 temporaray_epoch 都是 0，但他的 failed_cid 是个有意义的值，能保证避免在 failed_cid 上的失败副本被 lsm 回收。
-
-special recover 的 src cid 是（有损）临时副本所在 chunk，dst 是失败副本所在 chunk。
-
-由于允许发起 special recover 的前提是所有副本都 dead，所以 special recover 中的 replace cid 一定会被填充。当使用的临时副本是 lossy 时，必须要让 force_recover_from_temporary_replia 和 rollback_failed_replica 其中一个为 true。
-
-
-
-所有副本都 dead 的时候才允许 special recover rpc 执行
-
-1. normal special recover like agile recover
-2. force_recover_from_temporary_replica, base on normal special  recover, but we ignore the validity check of  temporary replica 
-3. rollback_failed_replica, just set temporary replica's failed_cid  as pextent's location
-
-一般情况下，如果不能直接通过 normal special recover 恢复的，需要分析日志再决定采用强制恢复还是回滚。
-
-force recover from tmeporary replica 直接从临时副本上读数据，不管他的  gen 是多少，然后写入到失败副本，然后把这个副本当成正常副本来用。
-
-rollback_failed_replica 是丢弃临时副本上的数据，直接把失败副本当正常副本来用，rollback 是一种更兜底的做法，大部分情况是在集群因为空间不足没法为临时副本分配副本的时候用的。
-
-
-
-临时副本不会产生迁移命令，且由于 temporary pid 不在 chunk table 的 cap / perf pids，所以移除节点迁移时，即使不迁移临时副本，但最终也认为他移除完了，实际上这个移除节点上的临时副本全都丢失了，不过一般来说不会在有数据恢复的情况下移除节点，所以应该还好。
-
-
-
-临时副本以一个单副本的形式保存了失败副本（通过 RemoveReplica rpc 被剔除的副本）在剔除之后增量 IO，在失败副本恢复可用之后（常见于节点升级、服务重启，网络中断等存储介质本身没有损失的场景），失败副本中的 原始数据和临时副本中的增量数据能够组合成一份完整数据。
-
-在分配临时副本时（AllocTemporaryReplica），会在集群中所有的健康节点中选一个节点（是的，因为是单个副本）
-
-must meet
-
-1. 不是这个 pextent 的其他临时副本所在 chunk；
-2. 不是这个 pextent 的失败副本所在 chunk；
-3. 不是这个 pextent 的 location 中的 chunk；
-4. 已使用空间没有超过 95% 的 chunk
-
-should meet
-
-1. 不是 isolated 节点；
-
-2. 跟这个 pextent 的失败副本所在 chunk 还有 location 中的 chunk 的 topo distance 最远的；
-
-    双活下的规则特殊点：
-
-    1. 健康副本剩余 2 个：若在同一个可用域，则优先选择与当前存活副本相同可用域的节点存放 Temporary Replica，否则优先选择 extent 自身 prefer local 所在可用域的节点存放 Temporary Replica；
-    2. 健康副本剩余 1 个，则优先选择与当前健康副本在同一个可用域内的节点；
-
-3. 正在 reposition 数量最少的；
-
-4. 剩余空间最大的。
-
-分配临时副本时，先默认分配一个 lossy 临时副本，如果空间充足，分配成功了会在 transaction commit 中把它设成 false 的，否则还是分配一个 lossy 临时副本，不会不分配（因为想尽可能保留失败副本，有临时副本的失败副本，不会在 lsm 被 GC）。
-
-除了集群无法为临时副本分配空间时它的 lossy 属性是 True，已分配的临时副本有 IO 错误时为 True（在 RemoveReplica rpc 移除副本时可能也会夹带着移除有 IO 错误的临时副本 ），有损临时副本不参与 IO，仅可用作恢复，多为有损恢复。除开这 2 种情况，临时副本的  lossy 都是 False。
-
-在 RemoveReplica rpc 时，如果在 request 里也指定了要移除的临时副本，那么只是把这些临时副本 lossy 设为 true，而不去标记待 gc，这是因为 IO 过程出错的临时副本已经写了一部分数据，想保留这部分数据（临时副本这一功能的核心是尽力保留所有已经写入的数据），不到万不得已不丢弃数据。
-
-失败副本及其临时副本什么时候才认为可以被 gc？比如 3 副本的 extent，降级为 1 副本+ 2 临时副本，等这个 extent 恢复成 2 副本后，调用 ReplaceReplica rpc 告知 meta，其中 request 的 src_chunk 是 recover cmd 中的 replace cid ，这个 rpc 中会调用 RemoveTemporaryReplicaOnReplace 来移除 1 个临时副本（dst cid 上的优先，否则是 lossy 和 ever exist = false 的临时副本，最后才是 gen 最大的那个副本）
-
-
-
-失败副本在写失败时就在 meta 侧设成待 gc 了，但是在 lsm 侧，只有对应的临时副本 gc 后，这个失败副本才会被 gc（代码体现在一个副本如果有对应的临时副本，那么 meta 不会下发 gc cmd）。
-
-
-
-临时副本的 pentry 被删除一定发生在他所附属的那个普通 pentry 被删除
-
-```
-// PhysicalExtentTable::ScanByPidRefs
-{
-	...
-	MarkAndClearGarbageUnlocked(pid);
-	MarkAndClearAllTemporaryReplicaGarbageUnlocked(pid);
-}
-
-```
 
 
 
@@ -547,57 +260,7 @@ prometheus 中支持多种 IO 类型的 metric 相加，比如二者相加可以
 
 
 
-一个是 tuna 那报的一个问题，从 5.0.3 升级到 5.0.7，有个节点 IO 重路由状态检查失败，上去看了下，有个现象是会删除本地存储 ip，然后又把他添加回来，看了下应该是这个版本里对 session alive 的判断逻辑有问题，当时没有 session alive 字段，他是自己写的一套判断逻辑，应该是有点 bug，还没来得及继续调查，还会出 5.0.8 吗？还需要更细致的调查吗？不会出，不接着调查。
-
-
-
-smtxos 4.1.0 在 scvm 的 sshd 配置 /etc/ssh/sshd_config 中 ssh PermitRootLogin 默认为 yes，升级到 5.1.2 后会改为 no，这导致旧版本 ioreroute ssh scvm 失败，无法获取 session 信息
-
-
-
-五一期间 ESXi 升级后 SCVM 所在主机的 IO 重路由服务停止工作
-
-8 个节点有 2 个出现问题，看 ESXi 的日志发现这两个节点在 4 月中旬做 scvm 的升级的时候 io reroute 就有问题了，scvm 升级之后，在 io reroute 升级时，scvm 会通过 ssh 的方式在每台 ESXi 上执行多个 cli 用以杀死旧进程，更换最新的 reroute 脚本，使用新的 reroute 文件并更新 crontab。
-
-这个过程中需要获取 reroute 脚本所在的 datastore，这个 ssh 的过程中如果密码/密钥对不上或者网络 Timeout 时会将 datastore_path 认为是 None，然后直接用 None 去拼接路径字符串，填到 crontab 里，导致有问题。
-
-这里没有做好 ssh 异常的处理，是 6 年前就有的问题了，不过现在才暴露，薛总说是这个客户机器物理环境很差，机房非常热，可能是导致 ssh timeout 的原因。
-
-
-
-整理一下 xen io reroute 中 meta leader 被 kill 的售后处理的流程，zk leader kill 包含 zk session、access session、db cluster 相关的内容。meta in zbs 中关于 db cluster 部分，DBCluster是一个通用的组件，用于各个节点间进行数据的同步。在有数据修改时，DBCluster会首先将journal提交到journal cluster（目前基于zookeeper实现），当提交到journal cluster完成后，数据修改就可以返回了，journal cluster保证修改的持久性，本地的LevelDb会异步的被修改。
-
-
-
-SCVM 升级之后，在 IO Reroute 升级时，SCVM 会通过 ssh 的方式在每台 ESXi 上执行多个 cli 用以杀死 reroute 旧进程，更换新版本 reroute 脚本，更新 crontab 中新 reroute 脚本位置并等待唤起新进程。
-
-当 SCVM ssh ESXi Timeout 时，由于没有正确处理异常，会将 datastore_path 认为是 None，路径被拼接成一个错误的 "/vmfs/volumes/None/vmware_scvm_failure/reroute.py" 
-
-crontab 没能正确找到 reroute 脚本所在位置，reroute 进程没起，引发 Tower 报警。
-
-
-
 fio -ioengine=libaio -invalidate=1 -iodepth=128 -ramp_time=0 -runtime=300000 -time_based -direct=1 -bs=4k -filename=/dev/sdc -name=wrtie_sdc -rw=randwrite;
-
-
-
-esxcfg-route -d 192.168.33.2/32 10.0.0.22; esxcfg-route -a 192.168.33.2/32 10.0.0.21; sleep 3; esxcfg-route -d 192.168.33.2/32 10.0.0.21; esxcfg-route -a 192.168.33.2/32 10.0.0.22; 
-
-
-
-执行以下操作前，需要保证所有 ESXi 上的 192.168.33.2 的下一跳指向本地 SCVM 存储 IP：
-
-在所有 SCVM 节点上执行：
-
-1. 进入 /usr/share/tuna/script/scvm_failure_common 目录，在后面的操作中，不要切换目录。 
-2. 备份已有 io reroute 脚本。命令：mv reroute.py reroute.py.bak
-3. 将新的 reroute.py 脚本复制到同级目录；
-4. 检查新的 reroute.py 脚本 md5sum = 60b0c13cd5680afb4f71c65a4785a07f
-5. 将同级目录中的 rereoute_version 文件中记录的版本号从 2.2 改成 2.2.1；
-
-在任一 SCVM 节点上执行：
-
-1. zbs-deploy-manage update_reroute_version
 
 
 
@@ -652,7 +315,7 @@ esxcfg-route -d 192.168.33.2/32 10.0.0.22; esxcfg-route -a 192.168.33.2/32 10.0.
                 1. ReplicaIOHandler::DoUpdateAndTemporaryReplica
                 2. ReplicaIOHandler::UpdateInternal()
 
-6. 编译换回 docker
+6. 编译换回 docker，弄回 67.4
 
 7. 若已有 lease owner，他可能跟 src/dst cid 不同，如果是由于 src/dst 单点 IO 性能差造成的 auto mode 下缩小 lease owner 命令下发窗口，看起来是误判，实际上这种情况，下一次关于这个 pid 的 cmd 大概率还是会选到这个 lease owner，所以也不算误判。
 
@@ -1162,7 +825,93 @@ vscode 中用 vim 插件，这样可以按区域替换代码
 
 
 
+### 临时副本
+
+只有在做 special recover 且 rollback_failed_replica 和 force_recover_from_temporary_replica 其中一个为 true 的时候才会在 replace replica request 中设置 reset_location_to_dst 和 reset_generation，那么 meta 会要求这个 pentry 必须所有副本都 dead，把这个 pentry 的 location 设置成只有一个 dst cid， gen 设置成 reset_generation，rim cid 设置成 0，清空这个 pentry 所有的临时副本。
+
+
+
+有损临时副本的 temporary_pid 和 temporaray_epoch 都是 0，但他的 failed_cid 是个有意义的值，能保证避免在 failed_cid 上的失败副本被 lsm 回收。
+
+special recover 的 src cid 是（有损）临时副本所在 chunk，dst 是失败副本所在 chunk。
+
+由于允许发起 special recover 的前提是所有副本都 dead，所以 special recover 中的 replace cid 一定会被填充。当使用的临时副本是 lossy 时，必须要让 force_recover_from_temporary_replia 和 rollback_failed_replica 其中一个为 true。
+
+
+
+所有副本都 dead 的时候才允许 special recover rpc 执行
+
+1. normal special recover like agile recover
+2. force_recover_from_temporary_replica, base on normal special  recover, but we ignore the validity check of  temporary replica 
+3. rollback_failed_replica, just set temporary replica's failed_cid  as pextent's location
+
+一般情况下，如果不能直接通过 normal special recover 恢复的，需要分析日志再决定采用强制恢复还是回滚。
+
+force recover from tmeporary replica 直接从临时副本上读数据，不管他的  gen 是多少，然后写入到失败副本，然后把这个副本当成正常副本来用。
+
+rollback_failed_replica 是丢弃临时副本上的数据，直接把失败副本当正常副本来用，rollback 是一种更兜底的做法，大部分情况是在集群因为空间不足没法为临时副本分配副本的时候用的。
+
+
+
+临时副本不会产生迁移命令，且由于 temporary pid 不在 chunk table 的 cap / perf pids，所以移除节点迁移时，即使不迁移临时副本，但最终也认为他移除完了，实际上这个移除节点上的临时副本全都丢失了，不过一般来说不会在有数据恢复的情况下移除节点，所以应该还好。
+
+
+
+临时副本以一个单副本的形式保存了失败副本（通过 RemoveReplica rpc 被剔除的副本）在剔除之后增量 IO，在失败副本恢复可用之后（常见于节点升级、服务重启，网络中断等存储介质本身没有损失的场景），失败副本中的 原始数据和临时副本中的增量数据能够组合成一份完整数据。
+
+在分配临时副本时（AllocTemporaryReplica），会在集群中所有的健康节点中选一个节点（是的，因为是单个副本）
+
+must meet
+
+1. 不是这个 pextent 的其他临时副本所在 chunk；
+2. 不是这个 pextent 的失败副本所在 chunk；
+3. 不是这个 pextent 的 location 中的 chunk；
+4. 已使用空间没有超过 95% 的 chunk
+
+should meet
+
+1. 不是 isolated 节点；
+
+2. 跟这个 pextent 的失败副本所在 chunk 还有 location 中的 chunk 的 topo distance 最远的；
+
+    双活下的规则特殊点：
+
+    1. 健康副本剩余 2 个：若在同一个可用域，则优先选择与当前存活副本相同可用域的节点存放 Temporary Replica，否则优先选择 extent 自身 prefer local 所在可用域的节点存放 Temporary Replica；
+    2. 健康副本剩余 1 个，则优先选择与当前健康副本在同一个可用域内的节点；
+
+3. 正在 reposition 数量最少的；
+
+4. 剩余空间最大的。
+
+分配临时副本时，先默认分配一个 lossy 临时副本，如果空间充足，分配成功了会在 transaction commit 中把它设成 false 的，否则还是分配一个 lossy 临时副本，不会不分配（因为想尽可能保留失败副本，有临时副本的失败副本，不会在 lsm 被 GC）。
+
+除了集群无法为临时副本分配空间时它的 lossy 属性是 True，已分配的临时副本有 IO 错误时为 True（在 RemoveReplica rpc 移除副本时可能也会夹带着移除有 IO 错误的临时副本 ），有损临时副本不参与 IO，仅可用作恢复，多为有损恢复。除开这 2 种情况，临时副本的  lossy 都是 False。
+
+在 RemoveReplica rpc 时，如果在 request 里也指定了要移除的临时副本，那么只是把这些临时副本 lossy 设为 true，而不去标记待 gc，这是因为 IO 过程出错的临时副本已经写了一部分数据，想保留这部分数据（临时副本这一功能的核心是尽力保留所有已经写入的数据），不到万不得已不丢弃数据。
+
+失败副本及其临时副本什么时候才认为可以被 gc？比如 3 副本的 extent，降级为 1 副本+ 2 临时副本，等这个 extent 恢复成 2 副本后，调用 ReplaceReplica rpc 告知 meta，其中 request 的 src_chunk 是 recover cmd 中的 replace cid ，这个 rpc 中会调用 RemoveTemporaryReplicaOnReplace 来移除 1 个临时副本（dst cid 上的优先，否则是 lossy 和 ever exist = false 的临时副本，最后才是 gen 最大的那个副本）
+
+
+
+失败副本在写失败时就在 meta 侧设成待 gc 了，但是在 lsm 侧，只有对应的临时副本 gc 后，这个失败副本才会被 gc（代码体现在一个副本如果有对应的临时副本，那么 meta 不会下发 gc cmd）。
+
+
+
+临时副本的 pentry 被删除一定发生在他所附属的那个普通 pentry 被删除
+
+```
+// PhysicalExtentTable::ScanByPidRefs
+{
+	...
+	MarkAndClearGarbageUnlocked(pid);
+	MarkAndClearAllTemporaryReplicaGarbageUnlocked(pid);
+}
+
+```
+
 ### prometheus 使用
+
+4k app io 没被统计在 local io handler ，access handler 中显示 app iops / bps = 0，显示在 perf layer，因为 4k 会先写 perf layer
 
 开启 prometheus：在 meta leader 上执行 nc -k -l -p 9093 -c "nc 10.0.180.183 9090"
 
@@ -1174,6 +923,8 @@ zbs_volume_logical_size_bytes{_volume!~"7697f.*|56e7e.*|130478.*|6ac3588.*"}
 # 按值过滤
 zbs_volume_logical_size_bytes{} > 1 and zbs_volume_logical_size_bytes{} < 536870912000
 ```
+
+tower 首页的存储性能图标对应 zbs 的哪些 metric？
 
 ### 网络相关日志
 
@@ -1207,13 +958,28 @@ rdma 的网络环境测试由自己的 ib 测试方法，不能只看 ping 的�
 
 ### reposition 性能测试
 
+考虑一个被写满的 extent，从理论上分析：
+
+* 如果他是 ec，recover 读的数据总量是 256 MiB / k * (k - 1)，从 k - 1 个节点上读，写是 256 MiB / k；migrate 读写都是 256 MiB / k。
+* 如果他是 replica，recover / migrate 读写都是 256 MiB。
+
+实验设定：
+
+ring id 一开始是 1 4 2 3 的顺序（值要分散点），副本超时时间配成 1 min，fio 在 cid1 上做，对应 ip 213
+
+1. 一开始 segment 在 [1, 4, 2]，修改 cid 3 的 ring id 到 4 和 2 之间，产生 src = 2，dst = 3，replace = 2 的 migrate cmd（因为 ec src = ec replace），统计时间，之后 loc = [1, 4, 3]
+2. 把 cid 4 的 chunk stop 掉，统计时间，之后 loc = [1, 2, 3]
+3. ring id 改成 1 4 2 3 的顺序，把 ec 卷删掉，再开始创建一个 prefer local 也是 1 的 replica 卷，fio 写全盘后，主动多次 sink；
+4. 一开始 segment 在 [1, 4, 2]，修改 cid 3 的 ring id 到 4 和 2 之间，产生 src = 1，dst = 3，replace = 2 的 migrate cmd（因为 replica replace 会优选 lease owner），统计时间，之后 loc = [1, 4, 3]
+5. 把 cid 4 的 chunk stop 掉，统计时间，之后 loc = [1, 2, 3]
+
+
+
+
+
 顺序写 nvme 盘
 
 cgexec -g cpuset:. taskset -c 11 fio -ioengine=libaio -invalidate=1 -iodepth=128  -direct=1 -bs=256k -filename=/dev/nvme4n1 -name=write_128_4k_fio -rw=write
-
-
-
-
 
 
 

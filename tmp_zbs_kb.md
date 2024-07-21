@@ -1,6 +1,43 @@
 > 待整理的 zbs 零碎知识
 
-疑惑
+VLOG(VLOG_INFO) 级别的日志怎么开启，zbs-meta vlog -h 的用法
+
+```shell
+# 在 meta 配置文件里加上
+GLOG_vmodule="tcp=4, data_channel=4"
+```
+
+如果是 chunk 的 vlog，需要在 chunk 配置文件里加上吗？有了这个之后，可以通过 zbs-meta vlog -h 来不重启的状态下调节。
+
+ zbs-meta memory heap_profiler_start /root/yiwu/heap_profiler && zbs-meta memory heap_profiler_stop 收集到的文件如何使用
+
+```
+# 在对应 docker （oe1 或 el7）里安装 pprof
+./pprof_linux_amd64 -h
+# 测试环境的话，可以直接在节点上 wget http://192.168.91.19/bin/x86_64/pprof_linux_amd64
+./pprof_linux_amd64 -text /usr/sbin/zbs-metad heap_profiler.0002.heap
+```
+
+查看集群空间占用
+
+```
+zbs-tool space show 
+```
+
+可以通过在目标节点上的 /var/log/message 里搜索 Abort Task 来检查是否有物理磁盘 IO 异常的信息。如果有则通常是磁盘损坏或者磁盘固件版本不对，如果多个磁盘均有出现则有可能是 HBA 卡异常或者固件版本不对。
+
+```shell
+# 磁盘消除"隔离中"状态
+zbs-chunk partition set-healthy /dev/sdx
+# 磁盘消除"亚健康/不健康"状态
+zbs-node set_disk_healthy sdx
+```
+
+
+
+
+
+### 疑惑
 
 1. access handler 中为啥都以事件回调的形式来注册 Session Handler 的相关接口
 2. ZBS 中的一个 extent，读的同时不允许写？为啥不用多版本机制来管理（块存储覆盖写的原因？还是块存储没必要提供）
