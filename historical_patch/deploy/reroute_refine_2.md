@@ -67,14 +67,17 @@ xen io reroute 获取/更新 session 的方式从 ssh 改成 wget 的安装包�
 
 
 
+
+
+
 删除进程
 
 ```
 xen 中删除 reroute 进程
 ps -ef | grep scvm_failure_loop.sh  |grep -v grep | grep -v vi | awk '{print $2}' | xargs /bin/kill
 esxi 中删除 reroute 进程
-ps -c| grep scvm_failure_loop.sh | grep -v grep | grep -v vi | awk '{print $1}' | xargs /bin/kill
-ps -c| grep reroute.py | grep -v grep | grep -v vi | awk '{print $1}' | xargs /bin/kill
+ps -c | grep scvm_failure_loop.sh | grep -v grep | grep -v vi | awk '{print $1}' | xargs /bin/kill
+ps -c | grep reroute.py | grep -v grep | grep -v vi | awk '{print $1}' | xargs /bin/kill
 ```
 
 

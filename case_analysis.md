@@ -1,3 +1,94 @@
+### Reroute 进程卡住不工作
+
+
+
+可以验证文件锁是没有问题的，进程卡住时，crontab 新起的进程会被拦住，且主线程确实停了，没有打印每次循环开始都会打印的 log，ping 线程还在工作。
+
+```
+[PID:2631427] 2024-07-21 00:24:41 reroute.py:1853 INFO start reroute checking 12328
+[PID:2631427] 2024-07-21 00:24:43 reroute.py:1853 INFO start reroute checking 12329
+[PID:3060995] 2024-07-21 00:25:00 reroute.py:1816 WARNING lock file is locked, reroute service is already running, process 3060995 exit actively
+[PID:3061516] 2024-07-21 00:26:00 reroute.py:1816 WARNING lock file is locked, reroute service is already running, process 3061516 exit actively
+// 在主动 kill 之后，发现主进程继续工作了
+[PID:2631427] 2024-07-21 04:09:49 reroute.py:732 WARNING child pid: 3060822 run cmd: ['esxcfg-route', '-l'], timeout: 2, cmd_retcode: -9, cmd_stdout: , cmd_stderr:
+[PID:2631427] 2024-07-21 04:09:49 reroute.py:1879 WARNING dst ip is unknown, skip this round
+[PID:2631427] 2024-07-21 04:09:51 reroute.py:1853 INFO start reroute checking 12330
+```
+
+但是诡异的是，此时多次连续执行 ps -c | grep reroute，可以看到很多主进程有超过 2 + 4 个的线程，不过先不管，不是重点。
+
+
+
+
+
+处理售后 case，出问题的 3 个节点表现一致：ESXI 上 Reroute 进程仍存在，但不打印日志，跟 zbs insight 心跳失联。单节点的多个 Reroute 进程中大部分都能响应 SIGTERM 立马被 kill，但会剩一个 Reroute 进程需要通过 SIGKILL 才能完全杀死。上去排查日志看到退出栈停在 run_cmd 的 execute_child 上，Reroute 每个周期（2s）会通过起子进程的方式来在 ESXi 上执行 shell 命令如查看路由表、网卡信息，这里怀疑有可能是频繁创建/销毁子进程时卡住了。CPU 在不兼容性列表里
+
+
+
+把 log size 调大些
+
+下次如果还发现这个情况，试着执行 esxcfg-route -l 或 esxcfg-vmknic -l，看看是不是这 2 条命令卡在驱动上
+
+python 有没有办法不开子进程去 run cmd 
+
+除了 CPU 的差异，节点间可能还有其他配置/网卡差异导致软件运行上的不一致。这么上层的问题直接怀疑 CPU 不太科学。
+
+```
+import os
+import shlex
+import signal
+import subprocess
+import time
+
+from threading import Timer as timer
+
+def kill_process(pid, signal_type=signal.SIGKILL):
+    try:
+        print('kill %s active' % pid)
+        os.kill(pid, signal_type)
+    except OSError:
+        pass
+
+
+def run_cmd(cmd, shell=False, timeout=2):
+    if not shell:
+        cmd = shlex.split(cmd)
+
+    cmd_proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=shell)
+
+    timeout_handler = None
+    if timeout > 0:
+        timeout_handler = timer(timeout, lambda: kill_process(cmd_proc.pid))
+        timeout_handler.setDaemon(True)
+        timeout_handler.start()
+    try:
+        cmd_std_result = cmd_proc.communicate()
+        cmd_retcode = cmd_proc.returncode
+    finally:
+        if timeout_handler:
+            timeout_handler.cancel()
+
+    cmd_stdout = cmd_std_result[0].decode("utf-8")
+    cmd_stderr = cmd_std_result[1].decode("utf-8")
+    if cmd_retcode != 0:
+        print('execute cmd: %s, timeout: %s, parent pid: %s, child pid: %s' % (cmd, timeout, os.getpid(), cmd_proc.pid))
+        print('cmd_retcode: %s, cmd_stdout: %s, cmd_stderr: %s' % (cmd_retcode, cmd_stdout, cmd_stderr))
+    return cmd_retcode, cmd_stdout, cmd_stderr
+
+for i in range(100000000):
+    time.sleep(1)
+    print(i, end='\t', flush=True)
+    run_cmd("dd if=/dev/random of=/scratch/log/yiwu8m.log bs=1k count=8192", timeout=0)
+    run_cmd("esxcfg-route -l")
+    run_cmd("esxcfg-vmknic -l")
+
+    run_cmd("cp -f /scratch/log/yiwu8m.log /scratch/log/yiwu8m.log.bak", timeout=0)
+    run_cmd("esxcfg-vmknic -l")
+    run_cmd("esxcfg-route -l")
+```
+
+
+
 ### 集群升级过程中能力协商不兼容
 
 access manager
@@ -13,6 +104,32 @@ access handler
 1. ChunkServer::Start() --> AccessHandler::Start() --> AccessHandler::CreateSession()
 2. SessionFollower::CreateSession()，先调用 SessionClient::CreateSession()，创建成功后调用 SessionCreatedCb()，这里面会通过 HandleNegotiatedResponse() 在 keep alive 之前先协商一次，然后调用 KeepAliveLoop()
 3. KeepAliveLoop 中通过 KeepAliveCb() 消化上一轮的包含能力协商信息的心跳返回内容（对应函数 HandleAccessResponse / HandleChunkResponse），并设置这一轮的包含能力协商信息的心跳上传内容（ComposeAccessKeepAliveRequest / ComposeChunkRequest），最后通过 SessionClient::KeepAlive 调用 session master 的 KeepAlive rpc，实际上就是 HandleKeepAlive rpc
+
+光大集群从 505 升级到 513 recover 很慢
+
+本身磁盘延迟也高，有 lsm slow io，大概在 100 - 300 ms，但还没触发 recover timeout，所以可以把 cmd slots 调高
+
+recover dst 都选了同一个
+
+瓶颈不在 chunk 侧，因为从 recover handler 开始执行 recover cmd 到结束，基本不超过 2 min，虽然有 lsm slow io，但基本上就 100 - 200 ms
+
+
+
+17:44:24 想进维护模式
+
+17:49:16 才下发 recover cmd，这些 recover cmd 的 replace cid 都是 2，在这之前，下发了一波 dst = 2 的 migrate cmd，把 cid 2 的 avail cmd slot 用满了。
+
+replace cid 都是 2，比较像是他们真的 10 min 没有被 data report，数据本身是好的，gen 也对，所以 access handler 侧的 recover cmd 基本上也是执行失败，关键还会把健康的副本置为 invalid，这样副本就真没了，触发了一个 dst = 5 的 recover cmd，这次会成功，但是已经浪费了 3 min。
+
+（不过为啥没有被 data report 很奇怪）
+
+这些 recover cmd 的 replace 和 dst 都是 2，recover cmd 是因为有 dead replica，但给到 dst = 2 的这条 recover cmd 并没有成功，重试了 dst = 5 成功，前后耗时 3min
+
+17:50:17 才开始下发 replace = 0 的 recover cmd（这中间 1min 下发了 15 次，都是 replace 和 dst = 2 的 recover cmd），但他们的 dst 又都是 5 了。
+
+18:15:45 附近开始穿插一些 dst = 2 && replace = 5 的 recover cmd，且数量也很多，这两类 recover cmd 都有发
+
+19:16:05 才真正进入维护模式
 
 ### 快速切出切回路由出现 IO 重试
 

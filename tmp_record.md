@@ -1,3 +1,110 @@
+这个问题这两天有新的发现，具体调查分析过程在这，https://docs.google.com/document/d/1_8BvTnJFWMjFEI3umdp2mCG7vLO9wljK5QofTojuE1k/edit
+
+结论是：在 ESXi 上 reroute 进程创建用于查看路由表/网卡信息的子进程存在一定概率卡住，进而导致父进程卡住，对外表象为 Reroute 进程不工作。
+
+
+
+在 ESXi 上 reroute 进程中通过 subprocess.Popen 创建的子进程，存在一定概率，它的 parent pid 是自己，并且躲过了父进程对它的 2s 超时击杀，reroute 进程一直等着子进程的返回结果，但子进程一直没有返回（没有干预的情况下，会一直卡住），于是 reroute 进程一直卡着。
+
+
+
+
+
+esxi 中的 ptrace 默认 disable 了，没法 gdb attach 一个正在运行的 python 进程
+
+
+
+通过 ps -c| grep reroute.py | grep -v grep | grep -v vi | awk '{print $1}' | xargs /bin/kill 来把所有的都 kill，但其实 1725208 还在，因为他不响应 15 信号，不过不影响新的 reroute 进程的拉起，这个进程变成僵尸进程，一直在了
+
+```
+[PID:1189743] 2024-07-20 02:09:23 reroute.py:1263 WARNING get local hypervisor ip list failed
+[PID:1189743] 2024-07-20 02:09:25 reroute.py:1280 INFO send heartbeat to 10.157.20.207 succeed
+[PID:1189743] 2024-07-20 14:48:41 reroute.py:1187 WARNING signal signum: 15 received, traceback stack:   File "/vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py", line 1976, in <module>
+    if parse_args():
+  File "/vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py", line 1963, in parse_args
+    return loop_main()
+  File "/vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py", line 1872, in loop_main
+    previous_heartbeat_result = heartbeat(previous_heartbeat_result, current_dst_ip)    # pragma: no cover
+  File "/vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py", line 1261, in heartbeat
+    hyper_ip_list = get_local_ip_list(RerouteConfig.host_type)
+  File "/vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py", line 919, in get_local_ip_list
+    retcode, stdout, stderr = run_cmd("esxcfg-vmknic -l")
+  File "/vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py", line 707, in run_cmd
+    cmd_proc = subprocess.Popen(
+  File "/lib64/python3.8/subprocess.py", line 858, in __init__
+  File "/lib64/python3.8/subprocess.py", line 1660, in _execute_child
+
+[PID:1189743] 2024-07-20 14:48:41 reroute.py:692 WARNING kill process id: 1189743 actively
+[PID:1995729] 2024-07-20 14:49:03 reroute.py:692 WARNING kill process id: 1995730 actively
+[PID:1995729] 2024-07-20 14:49:03 reroute.py:731 WARNING child pid: 1995730 run cmd: ['rm', '-f', '/var/log/scvm_failure.log'], timeout: 2, cmd_retcode: -9, cmd_stdout: , cmd_stderr:
+[PID:1995729] 2024-07-20 14:49:06 reroute.py:1480 INFO session has changed, persistent and reload scvm ip list
+[PID:1995729] 2024-07-20 14:49:06 reroute.py:1481 INFO new session info:
+                new_local_data_ip_set: {'10.157.20.199', '10.157.20.197', '10.157.20.207', '10.157.20.205', '10.157.20.203', '10.157.20.201'}
+                new_local_manage_ip_set: {'172.20.134.164', '172.20.134.165', '172.20.134.166', '172.20.134.161', '172.20.134.162', '172.20.134.163'}
+                new_remote_data_ip_set: set()
+                new_remote_manage_ip_set: set()
+
+[PID:1995729] 2024-07-20 14:49:06 reroute.py:1280 INFO send heartbeat to 10.157.20.207 succeed
+[PID:1995729] 2024-07-20 14:49:09 reroute.py:615 INFO dst ip is always: 10.157.20.207, status: normal and is local scvm data ip, times: 1
+```
+
+主动 kill 1725208
+
+为啥即使是正常的 reroute 进程，也会出现某个时刻会有多个线程的状态？这已经是协程使用模式了
+
+```
+1189743  1189743  python                                                            python /vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py loop esxi
+1189748  1189743  python                                                            python /vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py loop esxi
+1725208  1725208  python                                                            python /vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py loop esxi
+1995102  1189743  python                                                            python /vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py loop esxi
+\n\n
+1189743  1189743  python                                                            python /vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py loop esxi
+1189748  1189743  python                                                            python /vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py loop esxi
+1725208  1725208  python                                                            python /vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py loop esxi
+\n\n
+1189743  1189743  python                                                            python /vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py loop esxi
+1189748  1189743  python                                                            python /vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py loop esxi
+1725208  1725208  python                                                            python /vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py loop esxi
+\n\n
+1995130  1189743  python                                                            python /vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py loop esxi
+1995131  1189743  python                                                            python /vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py loop esxi
+1995132  1189743  python                                                            python /vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py loop esxi
+1995133  1189743  python                                                            python /vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py loop esxi
+1995134  1189743  python                                                            python /vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py loop esxi
+1995135  1189743  python                                                            python /vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py loop esxi
+1995136  1189743  python                                                            python /vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py loop esxi
+1995137  1189743  python                                                            python /vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py loop esxi
+1995138  1189743  python                                                            python /vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py loop esxi
+1995139  1189743  python                                                            python /vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py loop esxi
+1995140  1189743  python                                                            python /vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py loop esxi
+1995141  1189743  python                                                            python /vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py loop esxi
+1995142  1189743  python                                                            python /vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py loop esxi
+1189743  1189743  python                                                            python /vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py loop esxi
+1189748  1189743  python                                                            python /vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py loop esxi
+1725208  1725208  python                                                            python /vmfs/volumes/6699d0ec-c46ca600-bb1f-005056ab917b/vmware_scvm_failure/reroute.py loop esxi
+```
+
+有问题的 reroute 进程，总是有多个，这个也不太符合预期，预期只会有一个运行，手动把他 kill 掉就好了
+
+这个 2115326，理论上应该是 
+
+当子进程（WID）的 CID 不是 reroute 主进程的话，就会出现卡死的现象
+
+```
+2115326  2115326  python                                                            python /vmfs/volumes/6699d0f3-ce1e3666-9b9e-005056ab2622/vmware_scvm_failure/reroute.py loop esxi
+1295201  1295201  python                                                            python /vmfs/volumes/6699d0f3-ce1e3666-9b9e-005056ab2622/vmware_scvm_failure/reroute.py loop esxi
+1295206  1295201  python                                                            python /vmfs/volumes/6699d0f3-ce1e3666-9b9e-005056ab2622/vmware_scvm_failure/reroute.py loop esxi
+```
+
+
+
+考虑一个被写满的 extent，从理论上分析：
+
+* 如果他是 ec，recover 读的数据总量是 256 MiB / k * (k - 1)，从 k - 1 个节点上读，写是 256 MiB / k；migrate 读写都是 256 MiB / k。
+* 如果他是 replica，recover / migrate 读写都是 256 MiB。
+
+实验设定：
+
 ring id 一开始是 1 4 2 3 的顺序（值要分散点），副本超时时间配成 1 min，fio 在 cid1 上做，对应 ip 213
 
 1. 一开始 segment 在 [1, 4, 2]，修改 cid 3 的 ring id 到 4 和 2 之间，产生 src = 2，dst = 3，replace = 2 的 migrate cmd（因为 ec src = ec replace），统计时间，之后 loc = [1, 4, 3]
@@ -65,50 +172,6 @@ W0712 14:06:58.351882 19128 rpc_server.cc:186] [RPC] Undone message socket: 0x56
 
 
 
-https://docs.google.com/document/d/17H6WVHB3fWr_JnyNutRkycpXSIZbWKujS6oybFZhR64/edit
-
-写这个文档和 meta in zbs 文档
-
-
-
-
-
-移除节点和 recover 的 dst，针对 perf thin，只允许选 recover dst 已使用空间比例 < 95% 的，避免 recover 用满所有的 perf 空间，app io 写不下去，这样留个缓冲地带，给下沉留出时间。
-
-perf thick 也不会下沉，cap 基本不会用满，所以不用做这个限制
-
-
-
-主要是三件事：完善迁移策略、优先卷 reposition 适配分层、提高集群 reposition 的效率
-
-一开始就是改迁移策略，一边是适配分层，一边在 560 测试的过程暴露了过去各个迁移子策略都有些 cornor case 没考虑到的问题，就修了一下。然后在优先卷适配分层的故事里，发现 3 种类型的 pextent 基本可以复用相同的副本分配/迁移/恢复策略，就调整了一下。另外这里也有些无用功，在 5.6.0 周期一开始做的优先卷迁移策略改进有一些代码就都删掉了。
-
-拔盘故障性能测试中暴露的 recover 的问题，恢复目的地没有优选本地，recover 后的读没有优先读本地（recover metric 要调整）
-
-集群升级测试中数据恢复过长的问题，这里踩了一些 recover 相关字段和 rpc 的更改引发的兼容性问题，另外恢复慢主要是 2 个原因：
-
-1.  meta 侧恢复命令下发的慢，可用命令槽位的限制、下发频率的限制；
-2. access 侧恢复速率设置的过慢，不同硬件能提供给 internal io 使用的值、动态调节的依据可以更准确；
-
-测了一些经验值，同时也对外暴露一些 rpc 来兜底。
-
-另外就是通过批处理和缓存来减少迁移/恢复定时扫描拿各种锁的耗时，总之还是围绕迁移和恢复开展工作。
-
-穿插处理一些 io reroute 的售后问题（ssh 异常处理、锁处理、超时时间设定）
-
-
-
-
-
-考虑一个被写满的 extent，从理论上分析：
-
-* 如果他是 ec，recover 读的数据总量是 256 MiB，写是 256 MiB / k；migrate 读是 256 MiB / k，
-* 如果他是 replica，recover 读写都是 256 MiB。
-
-
-
-
-
 1. 从 5.0.5 升级到 5.6.0，感受一下敏捷恢复的触发效率（或者直接找 qe 借个环境）
 1. recover perf 按 pid 顺序，cap 按 pid 逆序，提高 recover 成功率
 3. 测试 replica 和 ec 的 migrate 时间上的区别
@@ -137,23 +200,17 @@ GLOG_vmodule="tcp=4, data_channel=4"
 ./pprof_linux_amd64 -text /usr/sbin/zbs-metad heap_profiler.0002.heap
 ```
 
-
-
 查看集群空间占用
 
 ```
 zbs-tool space show 
 ```
 
-
-
 chunk table 改成读写锁
 
 
 
 可以通过在目标节点上的 /var/log/message 里搜索 Abort Task 来检查是否有物理磁盘 IO 异常的信息。如果有则通常是磁盘损坏或者磁盘固件版本不对，如果多个磁盘均有出现则有可能是 HBA 卡异常或者固件版本不对。
-
-
 
 ```shell
 # 磁盘消除"隔离中"状态
@@ -164,302 +221,33 @@ zbs-node set_disk_healthy sdx
 
 
 
-
-
-5.6.0 中采集日志，也把 zbs-meta cluster summary 采集一下，其实是关注 alloced_pids 
-
-prometheus 用法 
-
-```shell
-# 过滤掉不想看的 volume 
-zbs_volume_logical_size_bytes{_volume!~"7697f.*|56e7e.*|130478.*|6ac3588.*"}
-# 按值过滤
-zbs_volume_logical_size_bytes{} > 1 and zbs_volume_logical_size_bytes{} < 536870912000
-```
-
-
-
-
-
-volume 级别的 metric 中各空间字段含义
-
-* logical_size = vtable_size * 256 MiB，vtable_size 就是一个 volume 里 lid 的数量，每个 lextent 只算单个分片，且是固定的 256 MiB。
-
-* logical_used_size = 对每个 lid，取他的 cap / perf pextent 中 logical_used_size 最大的那个。
-
-    对于每个 pextent 的 logical_used_size：（PhysicalExtentTableEntry::GetLogicalUsedSpace）
-
-    * thick，不论 replica 还是 ec shard，都是 256 MiB；
-    * thin，对于 replica 是 lsm 汇报的所有 replica space / get_replica_num(location)  ，对于 ec shard 是  lsm 汇报的所有 ec shard space / 数据块个数（不是数据块 + 检验块），算的平均每个分片的 lsm 汇报的空间占用，是 256 KiB 的倍数。
-
-* perf_unique_size = 持有的所有 perf pextent 独占的所有分片的 allocated size 总和
-
-* perf_shared_size = 持有的所有 cap pextent 共享的所有分片的 allocated size 总和，如果一个卷不曾发生过克隆/快照，shared_size 始终为 0。
-
-logical 不考虑分片数量，physical 考虑分片数
-
-
-
 vtable_id 就是 volume_id，vtable_size 就是这个 volume 持有的 lextent 的个数。lextent 先 gc，跟他对应的 cap / perf pextent 才会被 gc
 
-
-
 gc 中的 ScanByPidRefs 会拷贝出一个 pid_perf_map 到 gc 线程中，migrate scan 也可以这么做，这样 next_scan_migrate_pid 才会比较准确，避免无效的访问。
-
-
-
-
-
-
 
 这个函数不仅标记了可以被 gc 的 lextent，而且更新了所有 pid 的 ref_status，后续计算 unique_size 和 shared_size 也会有变化
 
 GcManager::ScanAndProcessLExtents
 
-
-
-计算 logical_size_bytes 相关的两个函数
-
-GcManager::CountVolumeSize()
-
-PhysicalExtentTable::ScanByPidRefs()
+计算 logical_size_bytes 相关的两个函数：GcManager::CountVolumeSize()、PhysicalExtentTable::ScanByPidRefs()
 
 
 
+MLAG 集群中不同节点能力有差，有时候升级慢是在重启某个 chunk 后的恢复慢，这种情况下 meta 侧智能调节下发窗口就显得很有必要了。
 
 
-集群中不同节点能力有差，有时候升级慢是在重启某个 chunk 后的恢复慢，这种情况下 meta 侧智能调节下发窗口就显得很有必要了。
-
-
-
-本身磁盘延迟也高，有 lsm slow io，大概在 100 - 300 ms，但还没触发 recover timeout，所以可以把 cmd slots 调高
-
-recover dst 都选了同一个
-
-agile recover 的触发概率很低
-
-
-
-瓶颈不在 chunk 侧，因为从 recover handler 开始执行 recover cmd 到结束，基本不超过 2 min，虽然有 lsm slow io，但基本上就 100 - 200 ms
-
-旧 chunk log 中会在 setup recover 的时候调用 remove replica，这一次的 recover 就失败了
-
-```
-zbs-chunkd.log.20240629-085734.8475:208516:I0703 16:57:26.751508  8491 recover_handler.cc:477] [RECOVER] Setup for pid: 63917
-zbs-chunkd.log.20240629-085734.8475:208532:W0703 16:57:26.763597  8491 meta.cc:1099] [REMOVE REPLICA]: pid: 63917 cid: 2 gen: 105725
-zbs-chunkd.log.20240629-085734.8475:208551:I0703 16:57:26.770462  8491 recover_handler.cc:712] [NORMAL RECOVER START] pid: 63917 state: START cur_block: 4294967295 src_cid: 1 dst_cid: 2 is_migrate: false silence_ms: 0 replace_cid: 2 epoch: 92472 gen: 105725
-zbs-chunkd.log.20240629-085734.8475:208594:E0703 16:57:26.786450  8491 recover_handler.cc:583] failed to recover a pextent. pid: 63917 state: START cur_block: 4294967295 src_cid: 1 dst_cid: 2 is_migrate: false silence_ms: 0 replace_cid: 2 epoch: 92472 gen: 105725
-```
-
-
-
-
-
-17:44:24 想进维护模式
-
-17:49:16 才下发 recover cmd，这些 recover cmd 的 replace cid 都是 2，在这之前，下发了一波 dst = 2 的 migrate cmd，把 cid 2 的 avail cmd slot 用满了。
-
-replace cid 都是 2，比较像是他们真的 10 min 没有被 data report，数据本身是好的，gen 也对，所以 access handler 侧的 recover cmd 基本上也是执行失败，关键还会把健康的副本置为 invalid，这样副本就真没了，触发了一个 dst = 5 的 recover cmd，这次会成功，但是已经浪费了 3 min。
-
-（不过为啥没有被 data report 很奇怪）
-
-这些 recover cmd 的 replace 和 dst 都是 2，recover cmd 是因为有 dead replica，但给到 dst = 2 的这条 recover cmd 并没有成功，重试了 dst = 5 成功，前后耗时 3min
-
-17:50:17 才开始下发 replace = 0 的 recover cmd（这中间 1min 下发了 15 次，都是 replace 和 dst = 2 的 recover cmd），但他们的 dst 又都是 5 了。
-
-18:15:45 附近开始穿插一些 dst = 2 && replace = 5 的 recover cmd，且数量也很多，这两类 recover cmd 都有发
-
-19:16:05 才真正进入维护模式
-
-
-
-
-
-recover 慢，要检查网络情况，看看是否有大包丢包，如果不是所有节点都差的情况下，可以适当选择切换 bond
-
-查看网络的方式有哪些？
-
-* 网卡异常探测（节点层面） /var/log/zbs/netbouncer/l2ping@storage.INFO
-
-  https://docs.google.com/document/d/1cNja_rnJ3fQglBqfouPvx8Ss82qzIiObN6cN_wYUs3s/edit#heading=h.xjzjaz3p8u9t
-
-  https://docs.google.com/document/d/1nB270ymaYNWK_b_WVShtJ79yGWW5bi76/edit
-
-* 网络亚健康探测（集群层面） /var/log/zbs/network-monitor.log
-
-  https://docs.google.com/document/d/1MK0VRK5WcRF14N36PpJ_O0Y-HUHG-fxe9q-usfAAevk/edit#heading=h.jz7vtdo3hm60
-
-* data channel 探测（chunk 层面）/var/log/zbs/zbs-chunkd.INFO
-
-网络延迟发生在中间网络或者发生在 L2 层以上，网络亚健康探测的 fping 发现异常，而网卡异常探测 L2Ping 没有发现异常，此时也只能依靠 Fail Slow 机制隔离节点。
 
 tower 首页的存储性能图标对应 zbs 的哪些 metric
-
-怎么查看是否 bonding 以及切换 bond 的方式
-
-
-
-ELF 克隆虚拟机有 2 种：
-
-* 快速克隆
-
-  COW 出来的 pextent 与 origin 的 loc 是一样的
-
-  有的用户也会习惯于将应用装在系统盘，因此克隆后应用所使用的数据盘并不一定是新建的
-
-  我们的 VM 盘会被局部化，写操作造成的 COW 又集中在这个母盘所在的机器上，导致性能差。
-
-  调用 metad 提供的 Copy
-
-* 完全克隆
-
-  对 src volume 创建临时快照，调用 zbs taskd 提供的 CopyVolume(src_cid, dst_cid, src_snapshot, dst_volume)，全量备份后，删除临时快照。
-  
-  https://docs.google.com/document/d/1HyJ7uJpT0K3zSoAFKEX_m2gKNRYDlzWTXNoLNFTY0ac/edit#heading=h.umizx61uu46q
-
-
-
-
-
-看 fio 给出的延迟
-
-zbs-perf-tools volume show < volume id > 给出的延迟
-
-zbs-perf-tools chunk access summary 给出的延迟
-
-zbs-perf-tools chunk lsm summary 看存储引擎给出的延迟
-
-iostat -xm 1 看物理磁盘给出的延迟
-
-
-
-rdma 的网络环境测试由自己的 ib 测试方法，不能只看 ping 的结果。
 
 
 
 1. 升级中心静态恢复速率的设置：zbs 自己先按 cap / perf 各一半的比例向前兼容，给升级中心提需求，让他们在 1.1 的版本中适配层次化改动后的静态限速设置；
 2. 节点移除迁移中对 migrate src 的选择策略有问题，COW 后没写过的 pexent 迁移过的场景。
 3. recover lease owner 上的 access metric 没有值，recover 路径上只对 counter 埋点，没有针对 metric 埋点；
-4. 处理售后 case，出问题的 3 个节点表现一致：ESXI 上 Reroute 进程仍存在，但不打印日志，跟 zbs insight 心跳失联。单节点的多个 Reroute 进程中大部分都能响应 SIGTERM 立马被 kill，但会剩一个 Reroute 进程需要通过 SIGKILL 才能完全杀死。上去排查日志看到退出栈停在 run_cmd 的 execute_child 上，Reroute 每个周期（2s）会通过起子进程的方式来在 ESXi 上执行 shell 命令如查看路由表、网卡信息，这里怀疑有可能是频繁创建/销毁子进程时卡住了。CPU 在不兼容性列表里
 
 
 
-背景信息
 
-希望在 SMTXOS 6.1.0 中包含。
-
-从 zbs 5.6.0 开始，为适应层次化改造，zbs-client-py 提供了新命令来执行静态恢复速率的设置。
-
-```shell
-# after zbs 5.6.0（下文简称新命令）
-zbs-meta internal_io update --static_cap_internal_io_speed_limit xxx --static_perf_internal_io_speed_limit xxx
-# before zbs 5.6.0（下文简称旧命令）
-zbs-meta recover set_mode_info 1 --static_recover_speed_limit xxx
-```
-
-集群升级前，在升级中心上设置的静态恢复速率，执行时机是在 zbs-meta 升级后，zbs-client-py 更新前，所以是用低版本的 zbs-client-py 通过 rpc 访问新版本的 zbs-meta leader。
-
-那么当升级前后的版本不同时，需要有不同的行为表现
-
-1. before < 5.6.0，after < 5.6.0
-
-   无需改动。
-
-2. before < 5.6.0，after >= 5.6.0
-
-   zbs meta 做了适配，所以升级中心自身无需改动。
-
-   由于 zbs-client-py 还处于老版本，所以 tuna 只能通过旧命令设置恢复速率，在 zbs meta leader 上会按默认比例分配 cap / perf 各自的限速值。
-
-   1. 若不开分层，全部给到 cap static_internal_io_speed_limit；
-   2. 若开启分层，按照 0.5 : 0.5 分别给到 cap / perf static_internal_io_speed_limit。
-
-3. before >= 5.6.0，after >= 5.6.0
-
-   由于 zbs-client-py 已经支持新版本的命令，虽然 zbs-meta leader 也兼容旧命令，但希望 tuna 通过新命令设置恢复速率。
-
-   升级中心的界面上不区分 cap / perf 静态恢复速率，由 tuna 来识别集群部署形态（是否开启分层），给出 cap / perf 的分配比例
-
-   期望改动如下：
-
-   1. 升级中心的前端允许静态恢复设置范围从 [100, 500] 改成  [100, 2000]。
-
-      即使 perf 层磁盘能力一般情况下比 cap 层强很多，但二者都需要受限于集群网络带宽能够提供的恢复能力，2000 是一个足够大的上限，大于一般情况下 cap / perf 层硬件能够提供的恢复能力。
-
-   2. 升级中心的后端识别集群部署形态（是否开启分层），给出 cap / perf 的期望比例，通过新命令设置恢复速率。
-
-      举个例子，比如前端给了一个 1000 的值，分层场景下  cap : perf = 4 : 6，通过执行 `zbs-meta internal_io update --static_cap_internal_io_speed_limit 400 --static_perf_internal_io_speed_limit 600 ` 来达到这个效果。
-
-
-
-把 log size 调大些
-
-下次如果还发现这个情况，试着执行 esxcfg-route -l 或 esxcfg-vmknic -l，看看是不是这 2 条命令卡在驱动上
-
-python 有没有办法不开子进程去 run cmd 
-
-除了 CPU 的差异，节点间可能还有其他配置/网卡差异导致软件运行上的不一致。这么上层的问题直接怀疑 CPU 不太科学。
-
-
-
-```
-LOG(INFO, 5) << "yiwu pt: " << PExtentType_Name(type) << " app_io_iops: " << business_io_iops
-<< " app_io_bps: " << (uint64_t(business_io_bandwidth) >> 20)
-<< " limit_iops: " << limit.normal_io_busy_iops_throttle
-<< " limit_bps: " << (limit.normal_io_busy_bps_throttle >> 20)
-<< " internal_iops: " << internal_io_iops
-<< " internal_bps: " << (uint64_t(internal_io_bandwidth) >> 20)
-<< " last_speed_limit: " << (last_speed_limit >> 20)
-<< " 0.8 * tmp: " << ((uint64_t)(last_speed_limit * FLAGS_internal_io_busy_ratio) >> 20);
-```
-
-
-
-iscsi io 流
-
-1. submitter_receiver.cc 中的 eventfd_read / eventfd_write 使用
-2. zbs client proxy 和 v2 的区别
-
-一次写操作
-
-一直走到 zbs client 侧
-
-ZbsClient::DoIO --> ZbsClientProxyV2::DoIO --> IOReceiver::HandleIO（消费队列元素） --> ZbsClientProxyV2::IOSplit （放入一个 polling 队列中，之后被塞到 chunk 主线程） --> ZbsClientProxyV2::IOSubmit --> zbs_aio_write --> blockdev_zbs_writev -->  _blockdev_zbs_submit_request（在这区分 bdev io type，有 read / write / unmap / flush / reset / abort / CAW 等） --> blockdev_zbs_submit_request （注册在 zbs_fn_table 上） --> __submit_request --> spdk_bdev_io_submit --> spdk_bdev_writev --> spdk_bdev_scsi_readwrite --> spdk_bdev_scsi_process_block --> spdk_bdev_scsi_execute --> spdk_scsi_lun_execute_tasks --> spdk_scsi_dev_queue_task --> spdk_iscsi_queue_task --> spdk_iscsi_op_scsi / spdk_iscsi_op_data --> spdk_iscsi_execute --> spdk_iscsi_conn_handle_incoming_pdus --> spdk_iscsi_conn_execute --> spdk_iscsi_conn_full_feature_do_work --> spdk_iscsi_conn_full_feature_migrate （在这起了一个 timer 循环执行 do_work） 
-
-初始化过程
-
-spdk_iscsi_conn_full_feature_migrate --> spdk_iscsi_conn_login_do_work --> spdk_iscsi_conn_construct --> spdk_iscsi_portal_accept --> spdk_iscsi_portal_grp_open --> spdk_iscsi_portal_grp_open_all --> spdk_iscsi_setup --> ISCSIServer::SetupPortal --> ISCSIServer::UpdateConfig --> SetupChunkServerCtx（到了 zbs chunk 侧了）
-
-ISCSIServer 在这执行注册多个回调，如 UpdateLuns / RefreshConfig / ListConnection。
-
-iSCSI initiator 和 ZBS Chunk server 进行交互，iSCSI 配置信息要在 Chunk 上落地才算真正生效。
-
-
-
-1. ZbsClientProxyV2::DoIO
-2. ZbsClient::Write / Unmap
-3. ZbsClient::DoIO
-4. ZbsClient::SplitIO
-5. ZbsClient::ProcessIO
-6. ZbsClient::SubmitIO
-7. InternalIOClient::SubmitIO
-   1. InternalIOClient::DoLocalIO
-      1. AccessIOHandler::WriteVExtent
-   2. InternalIOClient::DoRemoteIO
-      1. DataChannelClient::WriteVExtent
-      2. DataChannelClient::Impl::WriteVExtent
-      3. AccessIOHandler::SubmitWriteVExtent，Access IO Handler 中注册了该回调
-      4. AccessIOHandler::WriteVExtent
-8. AccessIOHandler::WriteVExtent
-9. 
-10. access io handler
-11. replica io handler
-    1. 
-12. 
-
-
-
-开启 prometheus：在 meta leader 上执行 nc -k -l -p 9093 -c "nc 10.0.180.183 9090"
 
 ssh -p 2222 yiwu.cai@jump.smartx.com 输入 MFA Code 后，直接输入要登陆的主机 IP
 
@@ -1374,6 +1162,49 @@ vscode 中用 vim 插件，这样可以按区域替换代码
 
 
 
+### prometheus 使用
+
+开启 prometheus：在 meta leader 上执行 nc -k -l -p 9093 -c "nc 10.0.180.183 9090"
+
+prometheus 语法
+
+```shell
+# 过滤掉不想看的 volume 
+zbs_volume_logical_size_bytes{_volume!~"7697f.*|56e7e.*|130478.*|6ac3588.*"}
+# 按值过滤
+zbs_volume_logical_size_bytes{} > 1 and zbs_volume_logical_size_bytes{} < 536870912000
+```
+
+### 网络相关日志
+
+查看网络的方式有哪些？
+
+* 网卡异常探测（节点层面） /var/log/zbs/netbouncer/l2ping@storage.INFO
+
+    https://docs.google.com/document/d/1cNja_rnJ3fQglBqfouPvx8Ss82qzIiObN6cN_wYUs3s/edit#heading=h.xjzjaz3p8u9t
+
+    https://docs.google.com/document/d/1nB270ymaYNWK_b_WVShtJ79yGWW5bi76/edit
+
+* 网络亚健康探测（集群层面） /var/log/zbs/network-monitor.log
+
+    https://docs.google.com/document/d/1MK0VRK5WcRF14N36PpJ_O0Y-HUHG-fxe9q-usfAAevk/edit#heading=h.jz7vtdo3hm60
+
+* data channel 探测（chunk 层面）/var/log/zbs/zbs-chunkd.INFO
+
+网络延迟发生在中间网络或者发生在 L2 层以上，网络亚健康探测的 fping 发现异常，而网卡异常探测 L2Ping 没有发现异常，此时也只能依靠 Fail Slow 机制隔离节点。
+
+recover 慢，要检查网络情况，看看是否有大包丢包，如果不是所有节点都差的情况下，可以适当选择切换 bond。怎么查看是否 bonding 以及切换 bond 的方式？
+
+rdma 的网络环境测试由自己的 ib 测试方法，不能只看 ping 的结果。
+
+### app io 性能调查
+
+1. 看 fio 给出的延迟
+2. zbs-perf-tools volume show < volume id > 给出的延迟
+3. zbs-perf-tools chunk access summary 给出的延迟
+4. zbs-perf-tools chunk lsm summary 看存储引擎给出的延迟
+5. iostat -xm 1 看物理磁盘给出的延迟
+
 ### reposition 性能测试
 
 顺序写 nvme 盘
@@ -1925,6 +1756,25 @@ COW PEXTENT 的触发时机是 GetVExtentLease rpc，如果 access/chunk 那里 
 COW 之后，child alive loc 不一定等于 parent alive loc。实际上，COW 在 Transaction Prepare 的 CowPExtent 时只会只会复制 parent 的 loc，然后在 Commit -> PersistExtents -> UpdateMetaContextWhenSuccess -> SetPExtents 时会将 loc 上的每一个副本的 last_report_ms 设为当前时间，所以 child alive loc = child loc = parent loc，但是不一定等于 parent alive loc。
 
 ### 560 空间计算
+
+volume 级别的 metric 中各空间字段含义
+
+* logical_size = vtable_size * 256 MiB，vtable_size 就是一个 volume 里 lid 的数量，每个 lextent 只算单个分片，且是固定的 256 MiB。
+
+* logical_used_size = 对每个 lid，取他的 cap / perf pextent 中 logical_used_size 最大的那个。
+
+    对于每个 pextent 的 logical_used_size：（PhysicalExtentTableEntry::GetLogicalUsedSpace）
+
+    * thick，不论 replica 还是 ec shard，都是 256 MiB；
+    * thin，对于 replica 是 lsm 汇报的所有 replica space / get_replica_num(location)  ，对于 ec shard 是  lsm 汇报的所有 ec shard space / 数据块个数（不是数据块 + 检验块），算的平均每个分片的 lsm 汇报的空间占用，是 256 KiB 的倍数。
+
+* perf_unique_size = 持有的所有 perf pextent 独占的所有分片的 allocated size 总和
+
+* perf_shared_size = 持有的所有 cap pextent 共享的所有分片的 allocated size 总和，如果一个卷不曾发生过克隆/快照，shared_size 始终为 0。
+
+logical 不考虑分片数量，physical 考虑分片数
+
+
 
 5.6.0 中，lsm 对外暴露 GetPerfSpaceInfo，其中引入 PerfSpaceInfo 给 access 限流/下沉使用（meta 没用）
 

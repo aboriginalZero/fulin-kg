@@ -1,5 +1,83 @@
 > 待整理的 zbs 零碎知识
 
+疑惑
+
+1. access handler 中为啥都以事件回调的形式来注册 Session Handler 的相关接口
+2. ZBS 中的一个 extent，读的同时不允许写？为啥不用多版本机制来管理（块存储覆盖写的原因？还是块存储没必要提供）
+3. gtest 如何开启 VLOG DLOG 部分的日志
+4. CreateSession 这个过程 SessionMaster 做什么
+
+zbs cli 如何快速查看集群负载情况？用 zbs-meta chunk list 看每个节点的负载然后自己手动算
+
+Meta 与 chunk 如何交互？问题来源[减少数据恢复量](https://docs.google.com/document/d/1rDN0bNa-Dw6xo9yCN_gtVg1qrrDx1LVzc5_Dz_23dW8/edit#)
+
+1. 为什么需要 Extent Lease
+
+2. 为什么第一次拿到 Lease 之后需要 Sync Generation
+
+3. 为什么 Meta 需要保存一份 generation，什么时候会使用和更新这个 generation
+
+4. ZBS 如何保证多个副本之间的一致性
+
+    1. Meta 如何分配副本
+
+        Allocation
+
+    2. ZBS 如何进行写操作
+
+    3. 当有副本发生错误时，ZBS 如何保证数据安全
+
+    4. Meta 中记录的副本和 LSM 中的本地副本之间的关系
+
+    5. Meta 中记录的 location 和 alive_location 的含义
+
+        前者是 pextent table  中记录的，后者是跟随心跳上报动态变动
+
+    6. 当 snapshot 和 clone volume 的时候 Meta 和 LSM 的元数据发生了什么
+
+    7. Sync Gen 失败的副本是否必须立即从 meta 中剔除
+
+    8. 写失败的副本是否必须立即从 meta 中剔除
+
+### iscsi io 流
+
+1. submitter_receiver.cc 中的 eventfd_read / eventfd_write 使用
+2. zbs client proxy 和 v2 的区别
+
+一次写操作
+
+一直走到 zbs client 侧
+
+ZbsClient::DoIO --> ZbsClientProxyV2::DoIO --> IOReceiver::HandleIO（消费队列元素） --> ZbsClientProxyV2::IOSplit （放入一个 polling 队列中，之后被塞到 chunk 主线程） --> ZbsClientProxyV2::IOSubmit --> zbs_aio_write --> blockdev_zbs_writev -->  _blockdev_zbs_submit_request（在这区分 bdev io type，有 read / write / unmap / flush / reset / abort / CAW 等） --> blockdev_zbs_submit_request （注册在 zbs_fn_table 上） --> __submit_request --> spdk_bdev_io_submit --> spdk_bdev_writev --> spdk_bdev_scsi_readwrite --> spdk_bdev_scsi_process_block --> spdk_bdev_scsi_execute --> spdk_scsi_lun_execute_tasks --> spdk_scsi_dev_queue_task --> spdk_iscsi_queue_task --> spdk_iscsi_op_scsi / spdk_iscsi_op_data --> spdk_iscsi_execute --> spdk_iscsi_conn_handle_incoming_pdus --> spdk_iscsi_conn_execute --> spdk_iscsi_conn_full_feature_do_work --> spdk_iscsi_conn_full_feature_migrate （在这起了一个 timer 循环执行 do_work） 
+
+初始化过程
+
+spdk_iscsi_conn_full_feature_migrate --> spdk_iscsi_conn_login_do_work --> spdk_iscsi_conn_construct --> spdk_iscsi_portal_accept --> spdk_iscsi_portal_grp_open --> spdk_iscsi_portal_grp_open_all --> spdk_iscsi_setup --> ISCSIServer::SetupPortal --> ISCSIServer::UpdateConfig --> SetupChunkServerCtx（到了 zbs chunk 侧了）
+
+ISCSIServer 在这执行注册多个回调，如 UpdateLuns / RefreshConfig / ListConnection。
+
+iSCSI initiator 和 ZBS Chunk server 进行交互，iSCSI 配置信息要在 Chunk 上落地才算真正生效。
+
+1. ZbsClientProxyV2::DoIO
+2. ZbsClient::Write / Unmap
+3. ZbsClient::DoIO
+4. ZbsClient::SplitIO
+5. ZbsClient::ProcessIO
+6. ZbsClient::SubmitIO
+7. InternalIOClient::SubmitIO
+    1. InternalIOClient::DoLocalIO
+        1. AccessIOHandler::WriteVExtent
+    2. InternalIOClient::DoRemoteIO
+        1. DataChannelClient::WriteVExtent
+        2. DataChannelClient::Impl::WriteVExtent
+        3. AccessIOHandler::SubmitWriteVExtent，Access IO Handler 中注册了该回调
+        4. AccessIOHandler::WriteVExtent
+8. AccessIOHandler::WriteVExtent
+9. access io handler
+10. replica io handler
+
+### PExtent / Chunk 状态
+
 chunk 视角的 PExtentStatus
 
 ```cpp
@@ -88,7 +166,7 @@ enum ChunkStatus {
 
 
 
-zbs 端口使用
+### zbs 端口使用
 
 | 服务名            | 使用网络           | 使用端口         | 备注                       |
 | ----------------- | ------------------ | ---------------- | -------------------------- |
@@ -114,77 +192,7 @@ zbs 端口使用
 | zbs-chunkd        |                    | 10207            | meta proxy status service  |
 | zbs-chunkd        |                    | 10208            | chunk grpc server          |
 
-
-
-
-
-疑惑
-
-1. FOREACH_SAFE 和 FOREACH 的区别？怎么体现 safe 了？迭代器失效问题。
-2. access handler 中为啥都以事件回调的形式来注册 Session Handler 的相关接口
-3. ZBS 中的一个 extent，读的同时不允许写？为啥不用多版本机制来管理（块存储覆盖写的原因？还是块存储没必要提供）
-5. gtest 如何开启 VLOG DLOG 部分的日志
-6. CreateSession 这个过程 SessionMaster 做什么
-
-zbs cli 如何快速查看集群负载情况？用 zbs-meta chunk list 看每个节点的负载然后自己手动算
-
-Meta 与 chunk 如何交互？问题来源[减少数据恢复量](https://docs.google.com/document/d/1rDN0bNa-Dw6xo9yCN_gtVg1qrrDx1LVzc5_Dz_23dW8/edit#)
-
-1. 为什么需要 Extent Lease
-
-2. 为什么第一次拿到 Lease 之后需要 Sync Generation
-
-3. 为什么 Meta 需要保存一份 generation，什么时候会使用和更新这个 generation
-
-4. ZBS 如何保证多个副本之间的一致性
-
-    1. Meta 如何分配副本
-
-        Allocation
-
-    2. ZBS 如何进行写操作
-
-    3. 当有副本发生错误时，ZBS 如何保证数据安全
-
-    4. Meta 中记录的副本和 LSM 中的本地副本之间的关系
-
-    5. Meta 中记录的 location 和 alive_location 的含义
-
-        前者是 pextent table  中记录的，后者是跟随心跳上报动态变动
-
-    6. 当 snapshot 和 clone volume 的时候 Meta 和 LSM 的元数据发生了什么
-
-    7. Sync Gen 失败的副本是否必须立即从 meta 中剔除
-
-    8. 写失败的副本是否必须立即从 meta 中剔除
-
-
-
-用户操作虚拟机行为
-
-创建空白虚拟机：
-
-从模板创建虚拟机：不存在虚拟机，根据模板创建一个虚拟机；
-
-从快照重建虚拟机：不存在虚拟机，根据快照创建一个虚拟机；
-
-从虚拟机克隆虚拟机：等效为对虚拟机配置做快照，磁盘是直接调用的 ZBS volume 克隆来实现；
-
-导入 OVF 创建虚拟机：根据 OVF 创建一个虚拟机；
-
-从快照回滚虚拟机：存在虚拟机，回到快照状态；
-
-从虚拟机克隆为虚拟机模板：虚拟机还保留着，同时生成一个不可变更的虚拟机模板；
-
-从虚拟机转化为虚拟机模板：虚拟机没了，同时生成一个不可变更的虚拟机模板；
-
-虚拟机快照不会被快照/克隆。
-
-当一个虚拟卷快照被克隆 10 次或一个虚拟机转化为虚拟机模板时，对应的副本会均匀分配。
-
-
-
-
+### ZBS Chunk 磁盘
 
 chunk 侧有慢盘标记，早在网络亚健康之前就有了，副本分配策略会考虑节点容量，这个容量是有效数据空间比例，看的是比例，慢盘不算有效数据空间，如果有慢盘，这个值会比较低，所以这个 chunk 被选中的优先级会低一些。
 
@@ -203,6 +211,8 @@ chunk 侧有慢盘标记，早在网络亚健康之前就有了，副本分配�
 即当慢盘 II / 健康盘上都有同一个 pid 副本且所有的副本都写失败，才会去写慢盘 II，对应代码 GenerationSyncor::MarkPidIOHard()
 
 
+
+### ZBS Lease
 
 Access 持有的 Lease 包括三种类型：
 
@@ -236,7 +246,7 @@ ZBS 保持副本一致性的方式的是在整体设计中采用了单一接入�
 
 
 
-
+### ZBS Client
 
 ZBS Client 的核心功能是处理来自用户的 IO 请求。是 ZBS 内部数据对象 Volume 的访问入口，同时也集成了 Libmeta 作为集群 RPC 的访问代理（meta.cc，包含 Lease 管理和集群 RPC 接口两部分功能）。
 
@@ -274,8 +284,7 @@ ZBS 副本机制采用 Lease Owner + Generation 方式实现数据一致性。1.
 
 
 
-
-IO 流
+### IO 流
 
 Access 提供的是外部客户端进入 ZBS 系统内的接入点功能。在数据请求达到 Access 后，它将负责把它转化为 ZBS 内部请求。处理的基本过程如下：
 
@@ -288,3 +297,48 @@ Access 提供的是外部客户端进入 ZBS 系统内的接入点功能。在�
     2. 写请求，并发的向所有副本发出写命令，确认所有副本均写入成功才返回，如果部分失败，则执行副本剔除，保证副本列表中的所有副本数据一致，如果全部失败，则不剔除，返回异常等待上层重试；
 
         TODO 这部分代码可以看一下，是收集到所有副本的写结果后才下发指令还是只要收到任意一个副本写成功就可以？
+
+
+
+### ELF 行为
+
+用户操作虚拟机行为
+
+创建空白虚拟机：
+
+从模板创建虚拟机：不存在虚拟机，根据模板创建一个虚拟机；
+
+从快照重建虚拟机：不存在虚拟机，根据快照创建一个虚拟机；
+
+从虚拟机克隆虚拟机：等效为对虚拟机配置做快照，磁盘是直接调用的 ZBS volume 克隆来实现；
+
+导入 OVF 创建虚拟机：根据 OVF 创建一个虚拟机；
+
+从快照回滚虚拟机：存在虚拟机，回到快照状态；
+
+从虚拟机克隆为虚拟机模板：虚拟机还保留着，同时生成一个不可变更的虚拟机模板；
+
+从虚拟机转化为虚拟机模板：虚拟机没了，同时生成一个不可变更的虚拟机模板；
+
+虚拟机快照不会被快照/克隆。
+
+当一个虚拟卷快照被克隆 10 次或一个虚拟机转化为虚拟机模板时，对应的副本会均匀分配。
+
+ELF 克隆虚拟机有 2 种：
+
+* 快速克隆
+
+    COW 出来的 pextent 与 origin 的 loc 是一样的
+
+    有的用户也会习惯于将应用装在系统盘，因此克隆后应用所使用的数据盘并不一定是新建的
+
+    我们的 VM 盘会被局部化，写操作造成的 COW 又集中在这个母盘所在的机器上，导致性能差。
+
+    调用 metad 提供的 Copy
+
+* 完全克隆
+
+    对 src volume 创建临时快照，调用 zbs taskd 提供的 CopyVolume(src_cid, dst_cid, src_snapshot, dst_volume)，全量备份后，删除临时快照。
+
+    https://docs.google.com/document/d/1HyJ7uJpT0K3zSoAFKEX_m2gKNRYDlzWTXNoLNFTY0ac/edit#heading=h.umizx61uu46q
+
