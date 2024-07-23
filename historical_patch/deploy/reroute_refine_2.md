@@ -123,6 +123,27 @@ ps -c | grep reroute.py | grep -v grep | grep -v vi | awk '{print $1}' | xargs /
 
 
 
+reroute 2.2.1 之后，因为 ping 不通而切换路由的可能原因
+
+1. esxi 的 dmsg -T 里会显示是否跟其他 ip 冲突；
+
+   ```
+   arp: 00:50:56:6d:f4:6e is using my IP address 10.20.127.137 on vmk2
+   ```
+
+2. 没有开启防火墙的 ssh 服务。
+
+   ```
+   # 开启
+   esxcli network firewall ruleset set --ruleset-id=sshClient --enabled=true
+   esxcli network firewall refresh
+   
+   # 检查是否生效
+   esxcli network firewall ruleset list | grep ssh 
+   ```
+
+
+
 
 
 如果在同一个网络平面中，由于大流量的 I/O 切换而导致某些数据包在传输过程中出现延迟、丢失或重新排序，TCP 协议可能会根据内部的超时定时器或接收方的 ACK 触发重传。但是，通常情况下，网络设备的内部处理（例如内部的缓冲、队列、调度机制等）不会触发 TCP 的重传机制。总的来说，TCP 协议更关注于网络的端到端通信质量，对于网络设备内部的 I/O 切换并不敏感。如果这种切换并未导致数据包在传输路径中出现丢失或延迟，TCP 通常不会主动触发重传机制。

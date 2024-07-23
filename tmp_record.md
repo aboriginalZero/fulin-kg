@@ -958,10 +958,42 @@ rdma 的网络环境测试由自己的 ib 测试方法，不能只看 ping 的�
 
 ### reposition 性能测试
 
+对于一个被写满的 extent，从理论上分析，cap recover，ec 会比 replica 慢吗？
+
 考虑一个被写满的 extent，从理论上分析：
 
-* 如果他是 ec，recover 读的数据总量是 256 MiB / k * (k - 1)，从 k - 1 个节点上读，写是 256 MiB / k；migrate 读写都是 256 MiB / k。
-* 如果他是 replica，recover / migrate 读写都是 256 MiB。
+
+
+ec
+
+recover：从 k - 1 个节点读，每个节点读 256 MiB / k；写到 1 个节点上，写 256 MiB / k；
+
+考虑
+
+
+
+* recover 读：
+* recover 写：写到 1 个节点上，写 256 MiB / k；
+
+虽然
+
+* migrate 读：从 1 个节点读，读 256 MiB / k；
+* migrate 写：写到 1 个节点上，写 256 MiB / k；
+
+replica
+
+不论 migrate / recover，不论读还是写，都是从 1 个节点到另一个节点，数据量是 256 MiB
+
+
+
+
+
+* 如果是 ec，recover 读的数据总量是 256 MiB / k * (k - 1)，从 k - 1 个节点上读，写是 256 MiB / k；migrate 读写都是 256 MiB / k。
+* 如果是 replica，recover / migrate 读写都是 256 MiB。
+
+读写
+
+
 
 实验设定：
 
