@@ -103,6 +103,7 @@ xen io reroute 获取/更新 session 的方式从 ssh 改成 wget 的安装包�
 
 1. 任选一个 scvm 节点，修改 /usr/share/tuna/script/scvm_failure_common/reroute.py 和 reroute_version
 2. 执行 zbs-deploy-manage update_reroute_version
+3. 如果 SCVM 未开启 / 网络不稳定 / 开启防火墙，该命令会返回一个错误的 volume path
 
 删除/添加路由
 

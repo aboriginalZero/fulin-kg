@@ -992,12 +992,49 @@ replica
 ring id 一开始是 1 4 2 3 的顺序（值要分散点），副本超时时间配成 1 min，fio 在 cid1 上做，对应 ip 213
 
 1. 一开始 segment 在 [1, 4, 2]，修改 cid 3 的 ring id 到 4 和 2 之间，产生 src = 2，dst = 3，replace = 2 的 migrate cmd（因为 ec src = ec replace），统计时间，之后 loc = [1, 4, 3]
+
+    日志里搜 UPDATE TOPOOBJ c26160d8-3dd1-4fca-b895-294d612c91b2 new ring id 5，看之后第一条 migrate cmd 下发时间到最后一个 replace replica 接受时间
+
+    0723 22:25:44 - 0723 22:28:38，174s
+
+    Current generate cmds per round limit: 4096，Current cap distribute cmds per chunk limit: 500
+
+    0724 00:03:08 - 0724 00:04:40，92s
+
 2. 把 cid 4 的 chunk stop 掉，统计时间，之后 loc = [1, 2, 3]
+
+    日志里搜 cid 4 session expired， 要减去 1 min，因为分片要 1min 才超时
+
+    0723 22:29:52 - 0723 22:31:45，113s
+
+    Current generate cmds per round limit: 4096，Current cap distribute cmds per chunk limit: 500
+
+    0724 00:06:48 - 0724 00:08:45，117s
+
 3. ring id 改成 1 4 2 3 的顺序，把 ec 卷删掉，再开始创建一个 prefer local 也是 1 的 replica 卷，fio 写全盘后，主动多次 sink；
+
 4. 一开始 segment 在 [1, 4, 2]，修改 cid 3 的 ring id 到 4 和 2 之间，产生 src = 1，dst = 3，replace = 2 的 migrate cmd（因为 replica replace 会优选 lease owner），统计时间，之后 loc = [1, 4, 3]
+
+    0723 22:53:09 - 0723 22:56:24，195s
+
+    Current generate cmds per round limit: 4096，Current cap distribute cmds per chunk limit: 500
+
+    0723 23:36:43 - 0723 23:39:47，184s
+
 5. 把 cid 4 的 chunk stop 掉，统计时间，之后 loc = [1, 2, 3]
 
+    0723 22:57:53 - 0723 23:01:12，199s 
 
+    Current generate cmds per round limit: 4096，Current cap distribute cmds per chunk limit: 500
+
+    0723 23:42:31 - 0723 23:45:36，185s
+
+
+
+
+
+1. ec volume 的下沉比 replica volume 来的快
+2. 2 + 1 ec volume 在 perf 层只会有 2 个 replica
 
 
 
