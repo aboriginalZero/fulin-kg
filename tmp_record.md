@@ -2,9 +2,11 @@
 
 
 
+io reroute 多久没给 insight 心跳，他就会报警
+
 判断 IO reroute 不工作的方式是没有按一定频率跟 insight 心跳，如果超过 n 次没有跟 insight 心跳，主动退出程序？
 
-zbs-insight 每收到一次日志有可能打印一下吗？
+zbs-insight 每收到一次日志有可能打印一下吗？zbs-insight 如果没有收到心跳或者跟上一次收到的不一样，打印一下
 
 
 
@@ -950,24 +952,14 @@ rdma 的网络环境测试由自己的 ib 测试方法，不能只看 ping 的�
 
 ### reposition 性能测试
 
-对于一个被写满的 extent，从理论上分析，cap recover，ec 会比 replica 慢吗？
-
 考虑一个被写满的 extent，从理论上分析：
-
-
 
 ec
 
 recover：从 k - 1 个节点读，每个节点读 256 MiB / k；写到 1 个节点上，写 256 MiB / k；
 
-考虑
-
-
-
 * recover 读：
 * recover 写：写到 1 个节点上，写 256 MiB / k；
-
-虽然
 
 * migrate 读：从 1 个节点读，读 256 MiB / k；
 * migrate 写：写到 1 个节点上，写 256 MiB / k；
@@ -975,8 +967,6 @@ recover：从 k - 1 个节点读，每个节点读 256 MiB / k；写到 1 个节
 replica
 
 不论 migrate / recover，不论读还是写，都是从 1 个节点到另一个节点，数据量是 256 MiB
-
-
 
 
 
