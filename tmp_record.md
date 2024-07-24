@@ -1,13 +1,5 @@
 先弄一下性能测试，然后开始搞 [ZBS-19788](http://jira.smartx.com/browse/ZBS-19788)
 
-ssh -p 2222 yiwu.cai@jump.smartx.com 输入 MFA Code 后，直接输入要登陆的主机 IP
-
-```
-sdf() {
-    ssh -p 2222 yiwu.cai@jump.smartx.com
-}
-```
-
 
 
 判断 IO reroute 不工作的方式是没有按一定频率跟 insight 心跳，如果超过 n 次没有跟 insight 心跳，主动退出程序？
