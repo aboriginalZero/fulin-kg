@@ -207,6 +207,20 @@ pattern 处除了用正则表达式还可以用其他条件筛选行
     ```shell
     awk '$1 > 10 && $2=="true" {print $0}'
     ```
+    
+* 二次筛选指定范围内的数量
+
+    ```shell
+    # 先找到要看的指定范围 13177 - 329825
+    # grep -wn "pid: 274663" /var/log/zbs/zbs-chunkd.log.20240725-103605.4697
+    13177:I0725 10:55:14.234416  4708 reposition_concurrency_controller.cc:221] pid: 274663, cmd has paused, src_cid: 3, src concurrency: 8, src limit: 8, dst_cid: 1, dst concurrency: 0, dst limit: 13, cmd start ms: 164001769, pextent type: PT_CAP
+    329825:I0725 11:08:45.838366  4708 reposition_concurrency_controller.cc:228] pid: 274663, cmd has resumed, src_cid: 3, src concurrency: 10, src limit: 10, dst_cid: 1, dst concurrency: 1, dst limit: 13, cmd start ms: 164001769, pextent type: PT_CAP
+    
+    # 查看这个区间内的其他恢复运行的 reposition io
+    # grep -wn 'resumed' /var/log/zbs/zbs-chunkd.log.20240725-103605.4697 | awk -F: '$1 >= 313177 && $1 <= 329825' | wc -l
+    313261:I0725 10:55:22.061730  4708 reposition_concurrency_controller.cc:228] pid: 6687659, cmd has resumed, src_cid: 3, src concurrency: 8, src limit: 8, dst_cid: 4, dst concurrency: 8, dst limit: 13, cmd start ms: 163933769, pextent type: PT_CAP
+    313526:I0725 10:55:44.597299  4708 reposition_concurrency_controller.cc:228] pid: 6687708, cmd has resumed, src_cid: 3, src concurrency: 8, src limit: 8, dst_cid: 4, dst concurrency: 8, dst limit: 13, cmd start ms: 163933769, pextent type: PT_CAP
+    ```
 
 ### sort 排序与 uniq 去重
 
