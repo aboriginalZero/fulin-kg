@@ -103,13 +103,13 @@ xen io reroute 获取/更新 session 的方式从 ssh 改成 wget 的安装包�
 
 1. 任选一个 scvm 节点，修改 /usr/share/tuna/script/scvm_failure_common/reroute.py 和 reroute_version
 2. 执行 zbs-deploy-manage update_reroute_version
-3. 如果 SCVM 未开启 / 网络不稳定 / 开启防火墙，该命令会返回一个错误的 volume path
+3. 如果 SCVM 未开启 / 网络不稳定  开启防火墙，该命令会返回一个错误的 volume path
 
 删除/添加路由
 
 ```
 esxcfg-route -d 192.168.33.2/32 10.0.0.22;
-esxcfg-route -a 192.168.33.2/32 10.0.0.21;
+ esxcfg-route -a 192.168.33.2/32 10.0.0.21;
 ```
 
 删除进程
@@ -122,28 +122,25 @@ ps -c | grep scvm_failure_loop.sh | grep -v grep | grep -v vi | awk '{print $1}'
 ps -c | grep reroute.py | grep -v grep | grep -v vi | awk '{print $1}' | xargs /bin/kill
 ```
 
+如果 SCVM 未开启 / 网络不稳定 / 开启防火墙，该命令会返回一个错误的 volume path
 
 
-reroute 2.2.1 之后，因为 ping 不通而切换路由的可能原因
 
-1. esxi 的 dmsg -T 里会显示是否跟其他 ip 冲突；
+esxi 日志
 
-   ```
-   arp: 00:50:56:6d:f4:6e is using my IP address 10.20.127.137 on vmk2
-   ```
+1. /var/log/vmkernel.log 内核日志，用以查看路由设置情况、NFS IO 是否重试
 
-2. 没有开启防火墙的 ssh 服务。
+2. /vmfs/volumes/66a0ba6a-6d9f4d64-ca9e-005056abb843/yiwu-fio-test/vmware.log 虚拟机日志， 用以查看虚拟机活动日志
 
-   ```
-   # 开启
-   esxcli network firewall ruleset set --ruleset-id=sshClient --enabled=true
-   esxcli network firewall refresh
-   
-   # 检查是否生效
-   esxcli network firewall ruleset list | grep ssh 
-   ```
+3. /var/log/shell.log  shell 日志，记录已执行过的所有的 shell 命令
 
+4. /var/log/auth.log 身份验证，用以查看 ssh 相关的日志是否执行，比如是否部署/清理 reroute 
 
+5. /var/log/vmkwarning.log，VMKernel 警告，记录了虚拟机有关的活动
+
+6. /var/log/syslog.log 消息信息，用以查看 crontab 定时任务是否执行
+
+    
 
 
 
