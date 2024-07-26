@@ -1,3 +1,11 @@
+关注 zbs_chunk_cap_io_throttle_migrate_io_cur_io_depth metric 可以作证升级期间的慢是不是因为 migrate 抢了 recover 的 cap 并发度限制。
+
+
+
+
+
+
+
 先弄一下性能测试，然后开始搞 [ZBS-19788](http://jira.smartx.com/browse/ZBS-19788)
 
 
