@@ -92,6 +92,7 @@ alias s7=ssh_172_20_node
 * 在 [Preferences - Profile - Keys] 删除已有的并添加新快捷键 [option + ←] 选择 Action 为 “Send Escape Sequence” 以及 [ESC + b]，向右同理，为 [ESC + f]
 * [Shift + cmd + enter] 最大化/最小化 table
 * [cmd + [ / ] ] 在 table 间移动
+* [shiflt + cmd + i] 多窗口同时输入
 
 #### Chrome
 

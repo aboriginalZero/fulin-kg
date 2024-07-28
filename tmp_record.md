@@ -1,3 +1,15 @@
+7.26 18:00
+
+
+
+1. 通过 os._exit(1) 退出，看运行效果还可以，但这种方式退出不会调用清理处理程序，不会刷新 stdio 等
+
+     `https://docs.python.org/zh-cn/3.8/library/os.html#os._exit` 
+
+
+
+
+
 关注 zbs_chunk_cap_io_throttle_migrate_io_cur_io_depth metric 可以作证升级期间的慢是不是因为 migrate 抢了 recover 的 cap 并发度限制。
 
 
