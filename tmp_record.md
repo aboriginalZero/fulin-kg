@@ -1,20 +1,4 @@
-7.26 18:00
-
-
-
-1. 通过 os._exit(1) 退出，看运行效果还可以，但这种方式退出不会调用清理处理程序，不会刷新 stdio 等
-
-     `https://docs.python.org/zh-cn/3.8/library/os.html#os._exit` 
-
-
-
-
-
 关注 zbs_chunk_cap_io_throttle_migrate_io_cur_io_depth metric 可以作证升级期间的慢是不是因为 migrate 抢了 recover 的 cap 并发度限制。
-
-
-
-
 
 
 
@@ -38,7 +22,6 @@ zbs-insight 每收到一次日志有可能打印一下吗？zbs-insight 如果�
 
 1. 从 5.0.5 升级到 5.6.0，感受一下敏捷恢复的触发效率（或者直接找 qe 借个环境）
 1. recover perf 按 pid 顺序，cap 按 pid 逆序，提高 recover 成功率
-3. 测试 replica 和 ec 的 migrate 时间上的区别
 4. 感觉下沉，access 怎么写 ec shard 的
 5. 更新 meta 文档中 reposition 部分
 5. chunk table 改成读写锁
