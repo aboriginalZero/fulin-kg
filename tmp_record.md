@@ -1,3 +1,17 @@
+如果是重新部署，执行完 clear hypervisor 之后要尽快执行 deploy hypervisor，否则可能会引起 IO 中断，在文档中提醒。
+
+
+
+正常不打印日志，不正常才打印，默认在 scvm 上执行的命令能成功，
+
+不正常日志以 fail to 开头
+
+
+
+
+
+
+
 关注 zbs_chunk_cap_io_throttle_migrate_io_cur_io_depth metric 可以作证升级期间的慢是不是因为 migrate 抢了 recover 的 cap 并发度限制。
 
 
