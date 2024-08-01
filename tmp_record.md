@@ -6,6 +6,14 @@
 
 不正常日志以 fail to 开头
 
+尽量合并到一条 ssh cmd 中
+
+
+
+把立即执行 reroute.py 的 patch 拆出来
+
+强烈怀疑 /etc/rc.local.d/local.sh 没法直接修改，所以要先写到临时文件？
+
 
 
 
@@ -16,7 +24,9 @@
 
 
 
-先弄一下性能测试，然后开始搞 [ZBS-19788](http://jira.smartx.com/browse/ZBS-19788)
+需要测一下
+
+然后开始搞 [ZBS-19788](http://jira.smartx.com/browse/ZBS-19788)
 
 
 

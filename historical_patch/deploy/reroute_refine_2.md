@@ -1,3 +1,14 @@
+SMTX OS 升级到 5.0.6 之后可以将 APD 统一设置为 1 。在 5.0.5 及之前的版本需要保持 0 。
+
+补充 VMware 官方针对 [APD 介绍](https://docs.vmware.com/cn/VMware-vSphere/7.0/com.vmware.vsphere.storage.doc/GUID-54F4B360-F32D-41B0-BDA8-AEBE9F01AC72.html)如下：
+
+- ESXi 主机上的存储全部路径异常 (APD) 处理功能为 1 时处于开启状态。如果启用了该功能，主机会在有限的一段时间内持续向处于 APD 状态的存储设备重试非虚拟机 I/O 命令。时限到期后，主机将停止重试尝试，并终止所有非虚拟机 I/O。
+- 如果禁用了 APD 处理功能也就是设置为 0 时，主机将无限期持续重试发出命令，尝试重新连接到 APD 设备。该行为可能导致主机上的虚拟机超过其内部 I/O 超时值而无响应或发生故障。主机可能与 vCenter Server 断开连接。
+
+
+
+
+
 五一期间 ESXi 升级后 SCVM 所在主机的 IO 重路由服务停止工作
 
 8 个节点有 2 个出现问题，看 ESXi 的日志发现这两个节点在 4 月中旬做 scvm 的升级的时候 io reroute 就有问题了，scvm 升级之后，在 io reroute 升级时，scvm 会通过 ssh 的方式在每台 ESXi 上执行多个 cli 用以杀死旧进程，更换最新的 reroute 脚本，使用新的 reroute 文件并更新 crontab。
