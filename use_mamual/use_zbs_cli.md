@@ -30,7 +30,7 @@ zrt zbs3 FunctionalTest.WriteResize
 ```shell
 # 首次编译/子模块如 spdk 更新，需要删除 build 目录，进到 Docker 内部执行
 docker run --rm --privileged=true -it -v /home/code/zbs3:/zbs -w /zbs registry.smtx.io/zbs/zbs-buildtime:el7-x86_64
-mkdir build && cd build && source /opt/rh/devtoolset-7/enable && cmake -DBUILD_MOLD_LINKER=ON -DCMAKE_BUILD_TYPE=RELWITHDEBINFO -G Ninja ..
+rm -rf build && mkdir build && cd build && source /opt/rh/devtoolset-7/enable && cmake -DBUILD_MOLD_LINKER=ON -DCMAKE_BUILD_TYPE=RELWITHDEBINFO -G Ninja ..
 # 编译时给定参数，比如要同时编译 bench，cmake -DBUILD_BENCHMARKS=ON -G Ninja ..
 # -DBUILD_TARGET_PLATFORM=hygon 编译海光下的
 ninja -j20 zbs_test
@@ -154,7 +154,7 @@ zbs-meta snapshot list target2 1a8df188-6d4d-4ed5-8759-6324b2dacc98
 指定 meta leader 节点位置
 
 ```shell
-zbs-tool service set_priority --force meta 10.0.0.222:10100:2
+zbs-tool service set_priority --force meta 10.0.0.222:10100:9
 zbs-tool service set_priority meta ""
 ```
 

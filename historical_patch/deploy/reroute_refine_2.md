@@ -1,3 +1,57 @@
+insight metric
+
+1. zbs_ioreroute_cluster_total_num 表示集群中的 scvm 个数，不论是否健康，只关注 SCVM 是否在集群中；
+2. zbs_ioreroute_cluster_connected_num 表示 reroute 还在工作的 esxi 个数（还在工作指的是 reroute 还能跟 insight 发送心跳，33.2 不一定指向本地）；
+3. zbs_ioreroute_cluster_normal_num 表示 33.2 指向 local scvm data ip 的 esxi 个数，一定小于等于 zbs_ioreroute_cluster_connected_num。
+
+不过这些 metric 目前没有被用于报警，报警用的是 zbs_ioreroute_server_status，它的大小等于 zbs_ioreroute_cluster_total_num，初始值是 1，如果他的 reroute 还在工作且指向本地，那么值是 0，如果还在工作但没有指向本地，那么值是 2。zbs_ioreroute_server_status 中存在值为 1 或 2 的 item，tower 上就会有报警。
+
+升级中心的判断依据是 zbs_ioreroute_cluster_connected_num < 存储节点个数（比如仲裁节点上就没有 chunk，不算是个存储节点）
+
+
+
+
+
+shell 版本 reroute 手动切换路由，用于已知的运维动作（比如 SCVM 节点下线修改内存值后重启）前的主动切换
+
+1. 停止 crond
+
+   ```
+   # 待重启节点上
+   # 在 /var/spool/cron/crontabs/root 文件中注释 scvm_failure_loop.sh 所在行
+   cat /var/run/crond.pid | xargs /bin/kill;
+   crond
+   ```
+
+2. 停止当前正在运行的 reroute；
+
+   ```
+   ps -c | grep scvm_failure_loop.sh | grep -v grep | grep -v vi | awk '{print $2}' | xargs /bin/kill -9
+   ```
+
+3. 执行  change_route.sh 到指定节点
+
+   ```
+   find / -name "*route.sh"
+   sh /<path>/change_route.sh <no-local scvm data ip>
+   # 查看路由表上 192.168.33.2 的下一跳是否是 <no-local scvm data ip>
+   esxcfg-route -l
+   ```
+
+4. 重启 SCVM
+
+5. 把 reroute 添加回 crontab 中
+
+   ```
+   # 解除步骤 1 中的注释
+   cat /var/run/crond.pid | xargs /bin/kill;
+   crond
+   ```
+
+   等待 1 min，观察 tail -f scvm_failure.log 有持续输出，单个节点操作完毕。
+
+
+
 SMTX OS 升级到 5.0.6 之后可以将 APD 统一设置为 1 。在 5.0.5 及之前的版本需要保持 0 。
 
 补充 VMware 官方针对 [APD 介绍](https://docs.vmware.com/cn/VMware-vSphere/7.0/com.vmware.vsphere.storage.doc/GUID-54F4B360-F32D-41B0-BDA8-AEBE9F01AC72.html)如下：

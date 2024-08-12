@@ -118,7 +118,7 @@ prometheus prometheus HC!r0cks ，http://meta_leader_mgt_ip:9090
 
     ```shell
     yum -y install zookeeper rpcbind
-    service zookeeper start
+    systemctl start zookeeper 
     
     # 创建所需目录
     mkdir -p /etc/zbs && mkdir -p /var/log/zbs && mkdir -p /var/lib/zbs/chunkd && mkdir -p /var/lib/zbs/iscsid && mkdir -p /var/lib/zbs/metad && mkdir -p /var/lib/zbs/registry && mkdir -p /var/lib/zbs/zbs-nfsd && chmod -R 1777 /var/log/zbs /var/lib/zbs
