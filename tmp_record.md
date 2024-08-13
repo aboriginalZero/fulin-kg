@@ -1,3 +1,31 @@
+要写关于两边判断逻辑一致的单测
+
+去掉 std::list< int> 的使用
+
+MigrateOpt 改成位运算
+
+ec 的维护模式里可以考虑丢了 k 个后才恢复
+
+
+
+```
+// 共用的 api
+AliveReplicaNum()
+ReplicaNum()
+NeedRecover()
+GetReplica()
+GetLocation()
+GetAliveLocation()
+
+// recover 专用的 api
+GetECShardIdx()
+ShouldNotMigrate()
+GetDeadReplica()
+NeedRepairECShardIndices()
+```
+
+区分什么是 recover mgr 才使用，什么是都会用
+
 
 
 
