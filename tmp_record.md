@@ -6,6 +6,14 @@ MigrateOpt 改成位运算
 
 ec 的维护模式里可以考虑丢了 k 个后才恢复
 
+以 pid + epoch 的形式建立 recover dst mgr
+
+如果有必要，再把 special recover 中的 GetPhysicalExtentTableEntry 替换掉
+
+RepositionElem::DebugString() 可以补充上，另外，在 recover 失败时，也可以打印这个
+
+RepositionLockGuard 挪位置
+
 
 
 ```
