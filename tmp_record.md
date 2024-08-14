@@ -1,24 +1,60 @@
+
+
+
+
+
+
+
+
 ec 的维护模式里可以考虑丢了 k 个后才恢复
+
+
+
+让 access 侧 recover 的优先级一定高于 migrate，那么假设在升级过程中，还有 recover，但此时业务 io 比较猛，把单节点撑满了，此时如果 migrate 一直被 recover 抑制的话，也还好？perf 会有限流，cap 写也是下沉到其他节点。
+
+
+
+让同一个 lid 的 pid recover cmd 能够相对于 migrate cmd 后来居上
+
+1. meta 生成：在 RecoverFilterByExistCmd 中，如果发现在 distribute cmds 中的 pid / paired pid 是 migrate，那么还是允许生成 recover；
+
+2. meta 下发：recover 和 migrate 共享同一个 avail cmd slots，但让 recover 的判断阈值略高于 migrate；
+
+3. access 接受：如果 pid / paired pid 的 migrate cmd 只是在 pending，还没开始 running（后续粒度可以改成更细的，比如已经 running，但是处于 paused），那么可以 erase migrate cmd 并 insert recover cmd（std::map，排序依旧是 start_ms，可以用 insert_or_assign 来做 value 覆盖）
+
+    如果有 recover cmd 在 pending，不允许同一个 lid 的 recover cmd 进入 pending 队列
+
+    如果有 recover cmd 在 pending，不允许同一个 lid 的 migrate cmd 进入 pending 队列
+
+    如果有 migrate cmd 在 pending，不允许同一个 lid 的 migrate cmd 进入 pending 队列
+
+    如果有 migrate cmd 在 pending，允许同一个 lid 的 recover cmd 进入 pending 队列并替换掉
 
 
 
 https://smartx1.slack.com/archives/C06B3AWUU9M/p1721875571237189
 
-1. access 并发度控制在 FIFO 的基础上，若同时有 recover / migrate， 先执行 recover [ZBS-28060](http://jira.smartx.com/browse/ZBS-28060)
-
-2. 允许 recover 比 migrate 使用更多的 cmd slots [ZBS-27730](http://jira.smartx.com/browse/ZBS-27730)
+1. 允许 recover 比 migrate 使用更多的 cmd slots [ZBS-27730](http://jira.smartx.com/browse/ZBS-27730)
 
    允许的阈值大一点点，保证有可执行的 Recover 命令产生的时候可以抑制迁移就好了
 
    还是同一个队列，recover 和 migrate 使用不同的判定阈值即可。
 
-3. 在 migrate 结束的之后可以简单的判定一下是否 need recover，和 remove replica 一样，在 replace replica 之后按需加入到 recover 队列。
+2. 在 migrate 结束的之后可以简单的判定一下是否 need recover，和 remove replica 一样，在 replace replica 之后按需加入到 recover 队列。
 
    同属于一个 lid 的 perf pid 已经下发，那它的 cap pid 就不会进入队列，因为认为就算进入了，也会因为同一个 lid 一次只执行一个 cap 或 perf pid 而下发失败。
 
    所以有可能出现有一个 pid 需要 recover，但是它的 paired pid 在 migrate，他就一直生成不了。
 
+   即使生成并下发了，但是 access 侧由于 migrate cmd 已经在执行了，所以会被直接退出？
+
+3. access 并发度控制在 FIFO 的基础上，若同时有 recover / migrate， 先执行 recover ZBS-28060
+
+    指的是
+
 4. 在并发度已经很低的情况下，如果开始执行命令的时候超时时间已经很长，就主动放弃。等待 Meta 下发一个新的。
+
+    在 recover layer common 的 CheckRepositionConcurrency 中，如果发现 reposition_ratio = 0 并且只有 1 min 就超时了，那么主动失败，等待 meta 发新的。
 
 
 
