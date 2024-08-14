@@ -1,96 +1,29 @@
-要写关于两边判断逻辑一致的单测
-
-去掉 std::list< int> 的使用
-
-MigrateOpt 改成位运算
-
 ec 的维护模式里可以考虑丢了 k 个后才恢复
 
-以 pid + epoch 的形式建立 recover dst mgr
-
-如果有必要，再把 special recover 中的 GetPhysicalExtentTableEntry 替换掉
-
-RepositionElem::DebugString() 可以补充上，另外，在 recover 失败时，也可以打印这个
-
-RepositionLockGuard 挪位置
 
 
+https://smartx1.slack.com/archives/C06B3AWUU9M/p1721875571237189
 
-```
-// 共用的 api
-AliveReplicaNum()
-ReplicaNum()
-NeedRecover()
-GetReplica()
-GetLocation()
-GetAliveLocation()
+1. access 并发度控制在 FIFO 的基础上，若同时有 recover / migrate， 先执行 recover [ZBS-28060](http://jira.smartx.com/browse/ZBS-28060)
 
-// recover 专用的 api
-GetECShardIdx()
-ShouldNotMigrate()
-GetDeadReplica()
-NeedRepairECShardIndices()
-```
+2. 允许 recover 比 migrate 使用更多的 cmd slots [ZBS-27730](http://jira.smartx.com/browse/ZBS-27730)
 
-区分什么是 recover mgr 才使用，什么是都会用
+   允许的阈值大一点点，保证有可执行的 Recover 命令产生的时候可以抑制迁移就好了
 
+   还是同一个队列，recover 和 migrate 使用不同的判定阈值即可。
 
+3. 在 migrate 结束的之后可以简单的判定一下是否 need recover，和 remove replica 一样，在 replace replica 之后按需加入到 recover 队列。
 
+   同属于一个 lid 的 perf pid 已经下发，那它的 cap pid 就不会进入队列，因为认为就算进入了，也会因为同一个 lid 一次只执行一个 cap 或 perf pid 而下发失败。
 
+   所以有可能出现有一个 pid 需要 recover，但是它的 paired pid 在 migrate，他就一直生成不了。
 
-segment_num_ 也可以干掉？它的值只有这 2 种情况。但提升有限
-
-```
-if (resiliency_type_ == ResiliencyType::RT_EC) {
-        location = pextent->ec_location();
-        // 如果这边提升了呢？
-        segment_num_ = expected_replica_num_;
-        ec_info_ = ec_info;
-    } else {
-        location = pextent->location();
-        segment_num_ = kMaxReplicaNum;
-    }
-    replica_ = std::make_unique<PExtentReplica[]>(segment_num_);
-```
-
-
-
-```
-CO_TEST_F(RecoverManagerTest, YIWU) {
-    auto func = [&](int size) {
-        std::list<RecoverCmd> lst;
-        LOOP(size) {
-            RecoverCmd cmd;
-            cmd.set_pid(i);
-            lst.emplace_back(std::move(cmd));
-        }
-
-        StopWatch sw;
-        sw.Start();
-        int size1 = lst.size();
-        auto elapsed_ms = sw.ElapsedTimeMS();
-        LOG(INFO) << "yiwu elapsed_ms: " << elapsed_ms << " size: " << size1;
-    };
-
-    func(100);
-    func(10000);
-    func(1000000);
-    func(100000000);
-}
-```
-
-
+4. 在并发度已经很低的情况下，如果开始执行命令的时候超时时间已经很长，就主动放弃。等待 Meta 下发一个新的。
 
 
 
 1. flat_hash_map to btree_map
-2. std::list 的更改
 3. cid map 改成 std::vector，这样从内存上更有顺序性
-4. 改用 memcpy，效果提升有限
-
-
-
-
 
 
 
@@ -133,25 +66,6 @@ CO_TEST_F(RecoverManagerTest, YIWU) {
 
 
 
-
-
-
-
-如果是重新部署，执行完 clear hypervisor 之后要尽快执行 deploy hypervisor，否则可能会引起 IO 中断，在文档中提醒。
-
-测试升级过程中的 IO 中断时间
-
-
-
-1. 立即运行 reroute process
-2. 改下 update_scvm_autostart
-
-
-
-
-
-
-
 关注 zbs_chunk_cap_io_throttle_migrate_io_cur_io_depth metric 可以作证升级期间的慢是不是因为 migrate 抢了 recover 的 cap 并发度限制。
 
 
@@ -177,8 +91,7 @@ zbs-insight 每收到一次日志有可能打印一下吗？zbs-insight 如果�
 
 
 1. 从 5.0.5 升级到 5.6.0，感受一下敏捷恢复的触发效率（或者直接找 qe 借个环境）
-1. recover perf 按 pid 顺序，cap 按 pid 逆序，提高 recover 成功率
-4. 感觉下沉，access 怎么写 ec shard 的
+4. 感受下下沉，access 怎么写 ec shard 的，看 access 文档
 5. 更新 meta 文档中 reposition 部分
 5. chunk table 改成读写锁
 
@@ -211,8 +124,6 @@ MLAG 集群中不同节点能力有差，有时候升级慢是在重启某个 ch
 1. 开了限速后，prometheus 中的 repositon speed bps 还是会有超过时刻会超过上限（是把全 0 统计进去了吗？）
 
     观察 perf app io 下降再上涨的时段，perf reposition io 的性能曲线。
-
-2. jiewei 提到，可以考虑 perf 层可供 recover 使用的副本空间不超过 95%，以避免大量 recover 占据了 app io 的空间出现 IO 无法写入的问题。
 
 2. perf 和 cap inernal io 除了考虑磁盘能力，还需要考虑他两加起来不能超过网络带宽的 50%，如果只有单层数据待恢复，那应该允许他用满 50%。
 
