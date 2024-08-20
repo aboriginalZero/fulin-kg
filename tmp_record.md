@@ -1,3 +1,23 @@
+```
+# 用以检查某个 chunk 上在 < 90% 负载下为何没有迁移
+[root@dogfood-idc-elf-103 12:04:23 yiwu]$ cat 2.sh 
+#!/bin/bash
+
+pid_list=$(zbs-meta -ftable chunk list_pid 10.255.0.103 10200 | grep "perf thin pid" | grep -o -E '[0-9]+')
+for pid in $pid_list; do
+    output=$(zbs-meta -fjson pextent show "$pid")
+    prefer_local=$(echo "$output" | jq '{"Prefer Local"}')
+    ever_exist=$(echo "$output" | jq '{"Ever Exist"}')
+    if [[ "$ever_exist" == "True" ]] && [[ "$prefer_local" != *"10"* ]]; then
+        echo "pid: $pid"
+    fi   
+done
+```
+
+
+
+
+
 ec 的维护模式里可以考虑丢了 k 个后才恢复
 
 
