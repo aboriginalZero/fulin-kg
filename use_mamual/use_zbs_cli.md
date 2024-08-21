@@ -11,7 +11,7 @@ cd /home/code/zbs3 && ./script/format.sh && cd build && mold -run ninja zbs_test
 
 # 首次编译，默认是 DEBUG 模式，程序运行速率会比较慢（比如影响 load pextent table 的时间）
 cd /home/code/zbs3 && rm -rf build/ && mkdir build && cd build && cmake -DBUILD_MOLD_LINKER=ON -DCMAKE_BUILD_TYPE=RELWITHDEBINFO -G Ninja ..
-mold -run ninja zbs_test zbs-metad
+mold -run ninja -j20 zbs_test zbs-metad
 
 # 清空缓存，显示缓存统计信息
 ccache -z; 	ccache -s;
