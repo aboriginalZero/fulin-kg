@@ -1,3 +1,14 @@
+也不是按照 start_ms 来看谁先执行的，所以可以按 pid 来展示？perf 和 cap 分开。
+
+展示按照 pid 排序有意义吗？因为是按照 start_ms 来决定谁
+
+
+
+1. 去掉 paused_recover_cmds_，用 running  - in_reover 就是还没执行的
+
+2. 重命名
+3. in_recover_pids 的赋值，只用在一个地方，AccessHandler::HandleAccessResponse 这里应该可以不用填充，因为 一定会在 pending + running pids 中。
+
 
 
 ```
@@ -44,7 +55,7 @@ ec 的维护模式里可以考虑丢了 k 个后才恢复
 
     如果有 migrate cmd 在 pending，不允许同一个 lid 的 migrate cmd 进入 pending 队列
 
-    如果有 migrate cmd 在 pending，允许同一个 lid 的 recover cmd 进入 pending 队列并替换掉
+    如果有 migrate cmd 在 pending，允许同一个 lid 的 recover cmd 进入 pending 队列并替换掉（pid 或 paired pid 都允许，但是）
     
     [ZBS-28060](http://jira.smartx.com/browse/ZBS-28060)
     
@@ -1597,6 +1608,12 @@ transaction 中，判断 thin/thick 的依据，cap 用 thin_provision_ ，perf 
 分配 pid 跟分配 location 的时期应该不同。
 
 分层之后，创建一个 lextent 时，会马上分配 perf / cap pextent，一定会给 perf 分配 location，如果 cap 的 origin pid 是 0，而且是 thick pextent，也要为 cap 分配 location，否则不分配
+
+分配 pid 是先一个 lextent 中的所有 cap pid 都分配出来，再在有需要时分配 perf pid
+
+
+
+
 
 ### Clone, Snapshot, COW
 
