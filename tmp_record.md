@@ -1,3 +1,49 @@
+pid  = A 的 recover cmd （paired pid  = B ）生命周期与冲突检查
+
+1. 命令在 meta 生成与下发
+
+   仅当存在已下发的 B migrate cmd，允许生成并下发新的 A  recover cmd，其他情况下，不论是 recover 还是 migrate，一个 lid 只允许生成并下发一个 reposition cmd。
+
+   所以只需要针对这种特殊情况单独处理，但是这个处理也是在 access 处理，meta 上不需要做啥。
+
+2. 命令被 access 接受
+
+   仅当 pending 队列中存在 A 的 reposition cmd，拒绝接受新的 A  reposition cmd，与当前保持一致。
+
+3. 命令在 access 上执行
+
+   当 access 要执行新的 A recover cmd，在 GetLease 之后，可以知道 A 的 paired pid = B，检查若有 B migrate cmd 正在执行，将其 cancel，并在 B migrate cmd 从 running 队列中删除后，才将 A recover cmd 放入 running 队列，以此保证 running 队列中，一个 lid 始终只有一个 reposition cmd 在执行。
+
+   若检查发现有旧的 A recover cmd 或 B recover cmd 正在执行（小概率事件，因此这种情况 meta 就不会下发 A recover cmd），主动放弃，不进入 running 队列。
+
+   不论命令执行直接失败 / 超时失败 / 成功，都不在 pending + running 队列中。access 每次心跳都会上报在 pending + running 队列的 reposition pid，meta 会据此清除已下发命令队列中不在 access 上报列表中的命令。
+
+
+
+补充说明下：
+
+1. 始终保证 access 上一个 lid 始终只有一个 reposition cmd 在执行，这个我跟你想法是一致的。
+2. 目前 meta 没法要求 access 取消 reposition 的机制，若要实现，需要在心跳机制上加个 revoke reposition 功能，即使有了还要再等待至少 2 次心跳和 1 次 recover scan。
+3. 如果要扩展到同一个 pid，首先需要允许 pending 队列接受 pid 相同的多个元素，但如果节点空间快满了，显然是不希望 migrate 被 cancel，但 access 没法主动感知到集群负载，这个集群要从 meta 传过去就复杂了。
+
+
+
+
+
+从 local io handler 调整到 recover handler，在 recover handler 做 Block 移动的时候做限流，会涉及到分布式配额。
+
+
+
+从 pextent io handler 发来的，用的是 AsyncInterceptRecoverIO，为啥是放在 PExtentIODone 里
+
+从 local io handler 发来的，用的是 InterceptRecoverIO，是在 do io 之前
+
+
+
+
+
+
+
 也不是按照 start_ms 来看谁先执行的，所以可以按 pid 来展示？perf 和 cap 分开。
 
 展示按照 pid 排序有意义吗？因为是按照 start_ms 来决定谁
