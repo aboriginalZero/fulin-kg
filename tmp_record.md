@@ -16,6 +16,10 @@
 
 Flow Controller 运行在 Access Lease Owner 上，控制下发 NeedAlloc IO 的速度；Flow Manager 运行在 Local IO Handler 上，负责分配 Token
 
+1.  Data Channel 是怎么实现的保序性质，协调 Token 和 IO 的顺序
+2. 怎么说更恰当的方式是感知到当前 Recover 的进度
+3. 为啥普通写时，需要考虑到 recover dst，而 recover 写时就可以不考虑走 InterceptIO 接口
+
 
 
 
