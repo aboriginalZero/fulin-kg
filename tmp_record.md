@@ -1,4 +1,62 @@
+LSM 在处理写 IO 时，有三个性能拐点：
+
+1. LSM 以 8KB 为单位存储 Checksum，这意味着任意一个小于 8KB 的写操作，都需要从硬盘中读取整个 8KB，更新 Checksum 后再重新写入磁盘，这种读后写会损害小 IO 的性能。**如果我们的编码块小于 8K，每次对数据块的更新都会有读后写问题，对性能损害是非常大的**。
+2. 当写入的块为 256KB 时，LSM 可以将 IO 直接写入磁盘而不用先写入 Journal。
+3. LSM 支持 512e 磁盘，写入大小小于 4k 时，物理磁盘会有读后写问题。
+
+
+
+1. sink io 的 dst 在 CheckAndGetLeaseForDrain 之后能知道，但它是从 perf 读，写到 cap
+
+2. reposition io 的 dst 在 meta cmd 中知道，replica src 也可以从 meta cmd 中知道，但是 ec src 只能在最终的 io_res.succ_cids 中查到
+
+3. 为啥 access 中允许并发写同一个 block？
+
+   给到 lsm 内部执行时，有可能在 pblob 层面的并发。
+
+   access 按一个 pextent 的 gen 不降序的方式顺序下发 io co 给 lsm（有这么个保序机制），lsm 收到后内部并发执行 io co，在 lsm 内部，如果这些 io co 写的是同一个 pblob，还是需要加锁，如果是不同 pblob，就可以并发执行。
+
+4. 目前的 internal io 是按什么来限制的，能把这个信息通过 fc token 给出去吗？
+
+   internal io throttle 中是按照一级 / 二级 / 三级分别是 4 / 2 / 1 个 blocksize 的方式来给的，先把一级中的 4 blocksize 额度用完，才开始用二级/三级中的。直到重新用完才 resetToken，重置一次额度。
+
+   重点是协调 io 的优先级，即不同 pid 的 不同类型 io 的先后顺序。
+
+   那如果把他挪到 access 的话，额度不需要重
+
+   
+
+perf recover src = A，dst = B，当 read A block ，已经过了 block write barrier，在 internal io throttle 处由于有 speed limit 的限制，所以可能会被阻塞， 在阻塞期间，app io 过不了 block read barrier，所以 app io 没法写。
+
+要改成，如果发现已经快到 speed limit 上限，需要用 fc 机制传递每台 chunk 的 internal io iops/bps，或者是每台 chunk 的可用 internal io 带宽，那么在 access 拿 block write barrier 之前，先判断只有 src 和 dst 的 internal io bps 都有额度时，才允许下发。
+
+如果没有额度，那么 recover 阻塞在恢复这个 block 前，还没有越过 block write barrier，对外表现是这个 recover 正在执行这个 block。此时如果有 app io，那么 app io 是可以越过 block read barrier 继续执行的。
+
+怎么体现此时 app io 要让 internal io 去 break through
+
+
+
+是否需要所有的 internal io 在下发前都进入 access internal io throttle，以避免突变？
+
+
+
+
+
+fc 的 intercept io，是在 access io handler 处拦截 perf app io。
+
+cap io throttle，是在 local io handler 处拦截 internal cap io + app cap io。
+
+
+
+
+
+目前 layer_throttle 传给 recover_handler 根本没用上
+
+
+
 从 local io handler 调整到 recover handler，在 recover handler 做 Block 移动的时候做限流，会涉及到分布式配额。
+
+
 
 
 
@@ -16,11 +74,21 @@
 
 Flow Controller 运行在 Access Lease Owner 上，控制下发 NeedAlloc IO 的速度；Flow Manager 运行在 Local IO Handler 上，负责分配 Token
 
-1.  Data Channel 是怎么实现的保序性质，协调 Token 和 IO 的顺序
-2. 怎么说更恰当的方式是感知到当前 Recover 的进度
-3. 为啥普通写时，需要考虑到 recover dst，而 recover 写时就可以不考虑走 InterceptIO 接口
+1. Data Channel 是怎么实现的保序性质，协调 Token 和 IO 的顺序？
+
+2. 怎么说更恰当的方式是感知到当前 Recover 的进度？
+
+3. 为啥普通写时，需要考虑到 recover dst，而 recover 写时就可以不考虑走 InterceptIO 接口？
+
+4. 全闪不分层集群不会开启限流，这个在代码的哪里体现？
+
+5. 为了避免内部 Cap IO 抢不到并发度，当 APP Cap IO 较高时，会采用 APP Cap IO 的并发度的一半作为内部 Cap IO 并发度的总上限。这个好像也解决不了内部 cap io 被饿死的问题？
+
+   能不能把 FLAGS_cap_io_depth_limit_app_io 在升级之后开启呢？
 
 
+
+Access 在 Sync perf extent 时，从 LSM 获取 perf extent valid bitmap，并以 256k 为粒度组织成一个个 BlockInfo。BlockInfo 也会加入到 BlockLRU。 IO 过程中， BlockLRU 感知 BlockInfo 的冷热。Access 在适当时机下沉冷的 BlockInfo 至 capacity extent。
 
 
 
@@ -1511,7 +1579,7 @@ LSMCmdQueue 中的元素在哪被消费呢？
 
 access 中 app io 写需要拿读屏障，recover io （recover io 读写是一体的）用写屏障，这会使得多个 app io 写之间不会互斥，而 recover io 会跟 app io 写以及其它 recover io 互斥。
 
-1. app io 读不需要拿读屏障，所以 app io 读可以和 app io 写、recover io 并发；
+1. app io 读不需要拿读/写屏障，所以 app io 读可以和 app io 写、recover io 并发；
 
 2. 允许多个 app io 写并发是因为块设备不需要保证同一个 lba 上 inflight io 的先来后到；
 
@@ -1527,11 +1595,11 @@ access 中 app io 写需要拿读屏障，recover io （recover io 读写是一�
 3. 若当前正在 recover block a：
    1. app read block a 无需阻塞即可执行；
    2. app write block a 需要阻塞等待 recover 完成才能执行；
-   3. 另一个 recover block a 需要阻塞等待前一个 recover 完成才能执行（recover iodepth = 1，只有前一个  block read/write 都执行完才会执行下一个 block 的 read/write）；
+   3. 另一个 recover block a 需要阻塞等待前一个 recover 完成才能执行（不过 recover iodepth = 1，只有前一个  block read/write 都执行完才会执行下一个 block 的 read/write，理论上不存在这种情况）；
 
-具体搜 block_barrier_guard< true/ false> 代码，在 replica_io_handler 和 replica_recover_handler 之间起作用。
+具体在代码里搜 extent_io_barrier，在 replica_io_handler 和 replica_recover_handler 之间起作用。
 
-另外，access io handler 内部负责非 recover IO 的 3 种类型的 IO 互斥。sink io 会跟 app io 互斥，具体通过代码 LockBlock 和 WaitBlockUnlock 分析 sink io 的读还是写与 app io 的读还是写互斥，LockBlock 和 WaitBlockUnlock 可以看成同一个读写锁，前者像读锁，后者像读锁。
+另外，access io handler 内部负责非 recover IO 的 3 种类型的 internal IO 以及 app io 间互斥。sink io 会跟 app io 互斥，具体通过代码 LockBlock 和 WaitBlockUnlock 分析 sink io 的读还是写与 app io 的读还是写互斥，LockBlock 和 WaitBlockUnlock 可以看成同一个读写锁，前者像读锁，后者像读锁。
 
 access 按一个 pextent 的 gen 不降序的方式顺序下发 io co 给 lsm（有这么个保序机制），lsm 收到后内部并发执行 io co，在 lsm 内部，如果这些 io co 写的是同一个 pblob，还是需要加锁，如果是不同 pblob，就可以并发执行。
 
