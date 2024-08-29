@@ -32,7 +32,25 @@ perf recover src = A，dst = B，当 read A block ，已经过了 block write ba
 
 如果没有额度，那么 recover 阻塞在恢复这个 block 前，还没有越过 block write barrier，对外表现是这个 recover 正在执行这个 block。此时如果有 app io，那么 app io 是可以越过 block read barrier 继续执行的。
 
-怎么体现此时 app io 要让 internal io 去 break through
+怎么体现此时 app io 要让 internal io 去 break through？应该不需要了吧
+
+
+
+
+
+另外就是，还是保留 local io handler throttle，只针对 reposition 搞一个 access throttle，只管 recover，但其实 sink/elevate 也存在 from a to b 的两端（不过他会拿锁吗，read 不拿锁，write 也只是拿 block read barrier，不影响到 app io，不对，还有对 perf block 的 LockBlock，所以此时没法 unmap / CAW，也会导致从 sink 开始到结束之前，同一个 block 没法 readVExtent / ProxyRead / PromoteForElevate / WriteVExtent，所以是不是应该也把 sink 考虑进来，否则可能出现 app io 被 sink io block 的场景）
+
+1. 如果有 sink io，因为优先级比 recover 低，所以还好
+2. 会不会出现上报的 avail bytes（上报每个 chunk 里可用于 recover 的 bytes） 不准，每次 resetToken 都会突变一次，100ms 的汇报频率够用吗？
+3. 如果被限制的  有突发的 app io，会让 
+
+
+
+
+
+如果 local io handler 侧没有 throttle 的话，过了 access io throttle 之后，就会直接下发，
+
+
 
 
 
