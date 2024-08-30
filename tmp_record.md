@@ -2,7 +2,7 @@ app write extent，是每写其中一个 block 就对 extent gen 加一次 1
 
 所以处于 recovering 状态的 extent，如果在 recover 结束前有 app write（recover dst lsm 上处于 recovering 的 extent 是不允许被 app read），会对 track_gen ++，这样在 normal RecoverEnd 的 gen verify 才能对得上。
 
-
+recover write 与 app write 带来的 gen 在 lsm 中是如何变化，access 怎么跟 lsm 校对的
 
 
 
