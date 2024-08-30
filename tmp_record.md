@@ -1,3 +1,11 @@
+app write extent，是每写其中一个 block 就对 extent gen 加一次 1
+
+所以处于 recovering 状态的 extent，如果在 recover 结束前有 app write（recover dst lsm 上处于 recovering 的 extent 是不允许被 app read），会对 track_gen ++，这样在 normal RecoverEnd 的 gen verify 才能对得上。
+
+
+
+
+
 LSM 在处理写 IO 时，有三个性能拐点：
 
 1. LSM 以 8KB 为单位存储 Checksum，这意味着任意一个小于 8KB 的写操作，都需要从硬盘中读取整个 8KB，更新 Checksum 后再重新写入磁盘，这种读后写会损害小 IO 的性能。**如果我们的编码块小于 8K，每次对数据块的更新都会有读后写问题，对性能损害是非常大的**。
@@ -41,14 +49,24 @@ perf recover src = A，dst = B，当 read A block ，已经过了 block write ba
 另外就是，还是保留 local io handler throttle，只针对 reposition 搞一个 access throttle，只管 recover，但其实 sink/elevate 也存在 from a to b 的两端（不过他会拿锁吗，read 不拿锁，write 也只是拿 block read barrier，不影响到 app io，不对，还有对 perf block 的 LockBlock，所以此时没法 unmap / CAW，也会导致从 sink 开始到结束之前，同一个 block 没法 readVExtent / ProxyRead / PromoteForElevate / WriteVExtent，所以是不是应该也把 sink 考虑进来，否则可能出现 app io 被 sink io block 的场景）
 
 1. 如果有 sink io，因为优先级比 recover 低，所以还好
-2. 会不会出现上报的 avail bytes（上报每个 chunk 里可用于 recover 的 bytes） 不准，每次 resetToken 都会突变一次，100ms 的汇报频率够用吗？
+2. 会不会出现上报的 avail bytes（上报每个 chunk 里可用于 recover 的 bytes） 不准，每次 resetToken 都会突变一次，100ms 的汇报频率够用吗？够用的
 3. 如果被限制的  有突发的 app io，会让 
+
+
+
+在 pextent io handler 中有 from_local_io_stats，在 local io handler 中有 from_remote_io_stats，二者的合构成了 internal io load，这两个 stats 都是每 1s 更新一次值。
+
+已有的 internal io throttle 还是得保持在 local io handler / pextent io handler，
+
+access 层面的 stats 
 
 
 
 
 
 如果 local io handler 侧没有 throttle 的话，过了 access io throttle 之后，就会直接下发，
+
+还是得保留，只在 access 侧限流没法保证 lsm 侧的限流情况，因为数据是采集上来的，很可能不准。
 
 
 
@@ -102,7 +120,11 @@ Flow Controller 运行在 Access Lease Owner 上，控制下发 NeedAlloc IO 的
 
 5. 为了避免内部 Cap IO 抢不到并发度，当 APP Cap IO 较高时，会采用 APP Cap IO 的并发度的一半作为内部 Cap IO 并发度的总上限。这个好像也解决不了内部 cap io 被饿死的问题？
 
-   能不能把 FLAGS_cap_io_depth_limit_app_io 在升级之后开启呢？
+   能不能把 FLAGS_cap_io_depth_limit_app_io 在升级之后开启呢？meta 目前没法感知是否在升级
+
+
+
+一个普通 read / write 从 nfs server 到 lsm，过程中经历了多少次线程切换？如果是读取本地和读取远程数据参与的服务线程分别是谁？请求与包含的数据本身是如何在线程间安全的传递的？整个流程有多少次内存复制？ 承载数据的内存是谁申请的又是谁释放的？
 
 
 
