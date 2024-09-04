@@ -1,3 +1,12 @@
+针对 internal io 搞 cap / perf internal token
+
+先不考虑 ec，都按申请一个 kBlockSize 来估计。这里的误差包含：
+
+1. ec recover 实际的 block size 是 pextent_info->ec_param()->block_size() 
+2. sink 写 ec 的时候，cap loc 上各个 cid 也不是真的写 kBlockSize，另外还有可能要先 promote
+
+
+
 app write extent，是每写其中一个 block 就对 extent gen 加一次 1
 
 所以处于 recovering 状态的 extent，如果在 recover 结束前有 app write（recover dst lsm 上处于 recovering 的 extent 是不允许被 app read），会对 track_gen ++，这样在 normal RecoverEnd 的 gen verify 才能对得上。

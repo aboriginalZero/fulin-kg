@@ -246,7 +246,7 @@ scvm
 
    1. 1.4 版本开始把 zbs cli 都替换成 restful 的形式，并设有 timeout 机制
    2. 1.5 版本开始使用 reroute.py，1.5 到 1.6 之间修了一些小 bug，所以对外形式可以理解成，1.5 开始一定是用的 reroute.py
-   3. smtx 5.x 开始用的 reroute 脚本都是 2.x，这样 4.x 再打 patch 的话可以从 1.6 开始接着用，另外，2.1 到 2.2 变化并不大
+   3. smtx 5.1.x 开始用的 reroute 脚本都是 2.x，这样 4.x 再打 patch 的话可以从 1.6 开始接着用，另外，2.1 到 2.2 变化并不大
 
 8. 为啥要对 target_ip send heartbeat？
 
