@@ -3,12 +3,13 @@
 先不考虑 ec，都按申请一个 kBlockSize 来估计。这里的误差包含：
 
 1. ec recover 实际的 block size 是 pextent_info->ec_param()->block_size() 
-
 2. sink 写 ec 的时候，cap loc 上各个 cid 也不是真的写 kBlockSize，另外还有可能要先 promote
-
 3. ec 中实在没得读，还是会去读 isolated 节点的
 
-   
+
+
+
+把 internal io 的实时速度显示在 cli
 
 
 
