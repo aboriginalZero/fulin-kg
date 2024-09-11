@@ -1,3 +1,8 @@
+1. 把 internal io / business io 的实时速度显示在 cli
+2. cli 中 mgr / ctrl token 的数量对不上
+
+
+
 针对 internal io 搞 cap / perf internal token
 
 先不考虑 ec，都按申请一个 kBlockSize 来估计。这里的误差包含：
@@ -8,8 +13,9 @@
 
 
 
-
 把 internal io 的实时速度显示在 cli
+
+也可以参考 app_enable_fc，可以节省计算。
 
 
 

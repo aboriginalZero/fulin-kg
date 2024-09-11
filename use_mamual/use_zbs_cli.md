@@ -27,6 +27,8 @@ zrt zbs3 FunctionalTest.WriteResize
 
 用 docker 能比较好解决要切换多个 zbs 版本混跑的问题，zbs-buildtime:oe1-x86_64
 
+zbs-buildtime:oe1-aarch64 编译 kunpeng 环境，需要在 arm 开发机上使用
+
 ```shell
 # 首次编译/子模块如 spdk 更新，需要删除 build 目录，进到 Docker 内部执行
 docker run --rm --privileged=true -it -v /home/code/zbs3:/zbs -w /zbs registry.smtx.io/zbs/zbs-buildtime:el7-x86_64
@@ -309,7 +311,7 @@ zbs-nvmf ns create <subsystem_name> <ns_id_0-256> <Gib_size>
 
    ```shell
    ssh smartx@192.168.27.37
-   zbs-iscsi target create zp-iscsi
+   zbs-iscsi target create yiwu-tgt
    # 创建 zp-iscsi 下的 lun_id 为 1，size = 3 GB 的 LUN
    zbs-iscsi lun create zp-iscsi 1 3
    ```
