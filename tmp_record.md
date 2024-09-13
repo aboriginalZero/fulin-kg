@@ -1,3 +1,311 @@
+1. 创建 3GiB、 2 副本、thick volume1，prefer local 设置为 1，并写 volume1 的前 2 GiB 的每前 256 KiB，共 8 * 256 KiB = 2 MiB 大小
+
+   集群信息
+
+   ```
+   summary space allocated : 6 GiB
+   ```
+
+   节点信息
+
+   ```
+   cid 1, allocated: 3 GiB, pid: 1 2 3 4 5 6 7 8 9 10 11 12
+   cid 2, allocated: 3 GiB, pid: 1 2 3 4 5 6 7 8 9 10 11 12
+   ```
+
+   卷信息
+
+   volume1, shared size: 6 GiB, unique size: 0 GiB
+
+   ```
+   pid [1 - 8] 满足：
+   origin pid: 0 is_thin: 0 ever_exist: 1 allocated: 512 MiB loc: [1 2 ] alive loc: [1 2 ]
+   
+   pid [9 - 12] 满足：
+   origin pid: 0 is_thin: 0 ever_exist: 0 allocated: 512 MiB loc: [1 2 ] alive loc: [1 2 ]
+   ```
+
+2. 对 volume1 打快照得到 snap1
+
+   集群信息
+
+   ```
+   summary space allocated : 6 GiB
+   ```
+
+   节点信息
+
+   ```
+   cid 1, allocated: 3 GiB, pid: 1 2 3 4 5 6 7 8 9 10 11 12
+   cid 2, allocated: 3 GiB, pid: 1 2 3 4 5 6 7 8 9 10 11 12
+   ```
+
+   卷信息
+
+   volume1, shared size: 6 GiB, unique size: 0 GiB
+
+   ```
+   pid [1 - 8] 满足：
+   origin pid: 0 is_thin: 0 ever_exist: 1 allocated: 512 MiB loc: [1 2 ] alive loc: [1 2 ]
+   
+   pid [9 - 12] 满足：
+   origin pid: 0 is_thin: 0 ever_exist: 0 allocated: 512 MiB loc: [1 2 ] alive loc: [1 2 ]
+   ```
+
+   snap1, shared size: 6 GiB, unique size: 0 GiB
+
+   ```
+   pid [1 - 8] 满足：
+   origin pid: 0 is_thin: 0 ever_exist: 1 allocated: 512 MiB loc: [1 2 ] alive loc: [1 2 ]
+   
+   pid [9 - 12] 满足：
+   origin pid: 0 is_thin: 0 ever_exist: 0 allocated: 512 MiB loc: [1 2 ] alive loc: [1 2 ]
+   ```
+
+3. 写 volume1 的前 2 GiB 的每前 256 KiB，共 8 * 256 KiB = 2 MiB 大小
+
+   1. 刚写完，未 gc scan 前
+
+      集群信息
+
+      ```
+      summary space allocated : 10 GiB
+      ```
+
+      节点信息
+
+      ```
+      cid 1, allocated: 3 GiB, pid: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20
+      cid 2, allocated: 3 GiB, pid: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20
+      ```
+
+      卷信息
+
+      volume1, shared size: 6 GiB, unique size: 0 GiB
+
+      ```
+      pid [13 - 20] 满足：
+      origin pid: <pid - 12> is_thin: 0 ever_exist: 1 allocated: 512 MiB loc: [1 2 ] alive loc: [1 2 ]
+      
+      pid [9 - 12] 满足：
+      origin pid: 0 is_thin: 0 ever_exist: 0 allocated: 512 MiB loc: [1 2 ] alive loc: [1 2 ]
+      ```
+
+      snap1, shared size: 6 GiB, unique size: 0 GiB
+
+      ```
+      pid [1 - 8] 满足：
+      origin pid: 0 is_thin: 0 ever_exist: 1 allocated: 512 MiB loc: [1 2 ] alive loc: [1 2 ]
+      
+      pid [9 - 12] 满足：
+      origin pid: 0 is_thin: 0 ever_exist: 0 allocated: 512 MiB loc: [1 2 ] alive loc: [1 2 ]
+      ```
+
+   2.  gc scan 后，pid [1 - 8] 从 thick 转成 thin，volume 的 share / unique size 更新
+
+      集群信息
+
+      ```
+      summary space allocated : 6 GiB
+      ```
+
+      （cid 1 2 给 meta 上报的 thin used data space 都是 0，此时 lsm 认为 pid [1 - 20] 都是 thick）
+
+      节点信息
+
+      ```
+      cid 1, allocated: 3 GiB, pid: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20
+      cid 2, allocated: 3 GiB, pid: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20
+      ```
+
+      卷信息
+
+      volume1, shared size: 2 GiB, unique size: 4 GiB
+
+      ```
+      pid [13 - 20] 满足：
+      origin pid: <pid - 12> is_thin: 0 ever_exist: 1 allocated: 512 MiB loc: [1 2 ] alive loc: [1 2 ]
+      
+      pid [9 - 12] 满足：
+      origin pid: 0 is_thin: 0 ever_exist: 0 allocated: 512 MiB loc: [1 2 ] alive loc: [1 2 ]
+      ```
+
+      snap1, shared size: 2 GiB, unique size: 4 MiB
+
+      ```
+      pid [1 - 8] 满足：
+      origin pid: 0 is_thin: 1 ever_exist: 1 allocated: 512 KiB loc: [1 2 ] alive loc: [1 2 ]
+      
+      pid [9 - 12] 满足：
+      origin pid: 0 is_thin: 0 ever_exist: 0 allocated: 512 MiB loc: [1 2 ] alive loc: [1 2 ]
+      ```
+
+4. 从 snap1 克隆出 volume2，dst pool 是 thick，副本数是 2
+
+   1. 刚克隆完，未 gc scan 前
+
+      集群信息
+
+      ```
+      summary space allocated : 6 GiB
+      ```
+
+      节点信息
+
+      ```
+      cid 1, allocated: 3 GiB, pid: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20
+      cid 2, allocated: 3 GiB, pid: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20
+      ```
+
+      卷信息
+
+      volume1, shared size: 2 GiB, unique size: 4 GiB
+
+      ```
+      pid [13 - 20] 满足：
+      origin pid: <pid - 12> is_thin: 0 ever_exist: 1 allocated: 512 MiB loc: [1 2 ] alive loc: [1 2 ]
+      
+      pid [9 - 12] 满足：
+      origin pid: 0 is_thin: 0 ever_exist: 0 allocated: 512 MiB loc: [1 2 ] alive loc: [1 2 ]
+      ```
+
+      snap1, shared size: 2 GiB, unique size: 4 MiB
+
+      ```
+      pid [1 - 8] 满足：
+      origin pid: 0 is_thin: 1 ever_exist: 1 allocated: 512 KiB loc: [1 2 ] alive loc: [1 2 ]
+      
+      pid [9 - 12] 满足：
+      origin pid: 0 is_thin: 0 ever_exist: 0 allocated: 512 MiB loc: [1 2 ] alive loc: [1 2 ]
+      ```
+
+      volume2, shared size: -1, unique size: -1 （-1 代表未被计算）
+
+      ```
+      pid [1 - 8] 满足：
+      origin pid: 0 is_thin: 1 ever_exist: 1 allocated: 512 KiB loc: [1 2 ] alive loc: [1 2 ]
+      
+      pid [9 - 12] 满足：
+      origin pid: 0 is_thin: 0 ever_exist: 0 allocated: 512 MiB loc: [1 2 ] alive loc: [1 2 ]
+      ```
+
+   2. gc scan 后，pid [1 - 8] 从 thin 转成 thick，volume 的 share / unique size 更新
+
+      集群信息
+
+      ```
+      summary space allocated : 10 GiB
+      ```
+
+      节点信息
+
+      ```
+      cid 1, allocated: 3 GiB, pid: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20
+      cid 2, allocated: 3 GiB, pid: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20
+      ```
+
+      卷信息
+
+      volume1, shared size: 2 GiB, unique size: 4 GiB
+
+      ```
+      pid [13 - 20] 满足：
+      origin pid: <pid - 12> is_thin: 0 ever_exist: 1 allocated: 512 MiB loc: [1 2 ] alive loc: [1 2 ]
+      
+      pid [9 - 12] 满足：
+      origin pid: 0 is_thin: 0 ever_exist: 0 allocated: 512 MiB loc: [1 2 ] alive loc: [1 2 ]
+      ```
+
+      snap1, shared size: 6 GiB, unique size: 0
+
+      ```
+      pid [1 - 8] 满足：
+      origin pid: 0 is_thin: 0 ever_exist: 1 allocated: 512 MiB loc: [1 2 ] alive loc: [1 2 ]
+      
+      pid [9 - 12] 满足：
+      origin pid: 0 is_thin: 0 ever_exist: 0 allocated: 512 MiB loc: [1 2 ] alive loc: [1 2 ]
+      ```
+
+      volume2, shared size: 6 GiB, unique size: 0 （-1 代表未被计算）
+
+      ```
+      pid [1 - 8] 满足：
+      origin pid: 0 is_thin: 0 ever_exist: 1 allocated: 512 MiB loc: [1 2 ] alive loc: [1 2 ]
+      
+      pid [9 - 12] 满足：
+      origin pid: 0 is_thin: 0 ever_exist: 0 allocated: 512 MiB loc: [1 2 ] alive loc: [1 2 ]
+      ```
+
+   3. lsm 重置 pid [1 - 8] 的 provision 为 thin
+
+      ```
+      // 对应日志，pid [1 - 8]
+      [UPDATE EXTENT] reset extent provision status: EXTENT_STATUS_ALLOCATED pid: 8 epoch: 8 generation: 1 bucket_id: 8 einode_id: 1 sick_flag: 0 provision: thin root_id: 1 read_only: true
+      ```
+
+      集群信息
+
+      ```
+      summary space allocated : 10 GiB + 4 MiB
+      ```
+
+      （cid 1 2 给 meta 上报的 thin used data space 都是 2 MiB，此时 lsm 认为 pid [1 - 8] 都是 thin）
+
+      节点信息
+
+      ```
+      cid 1, allocated: 3 GiB, pid: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20
+      cid 2, allocated: 3 GiB, pid: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20
+      ```
+
+      卷信息
+
+      volume1, shared size: 2 GiB, unique size: 4 GiB
+
+      ```
+      pid [13 - 20] 满足：
+      origin pid: <pid - 12> is_thin: 0 ever_exist: 1 allocated: 512 MiB loc: [1 2 ] alive loc: [1 2 ]
+      
+      pid [9 - 12] 满足：
+      origin pid: 0 is_thin: 0 ever_exist: 0 allocated: 512 MiB loc: [1 2 ] alive loc: [1 2 ]
+      ```
+
+      snap1, shared size: 6 GiB, unique size: 0
+
+      ```
+      pid [1 - 8] 满足：
+      origin pid: 0 is_thin: 0 ever_exist: 1 allocated: 512 MiB loc: [1 2 ] alive loc: [1 2 ]
+      
+      pid [9 - 12] 满足：
+      origin pid: 0 is_thin: 0 ever_exist: 0 allocated: 512 MiB loc: [1 2 ] alive loc: [1 2 ]
+      ```
+
+      volume2, shared size: 6 GiB, unique size: 0 （-1 代表未被计算）
+
+      ```
+      pid [1 - 8] 满足：
+      origin pid: 0 is_thin: 0 ever_exist: 1 allocated: 512 MiB loc: [1 2 ] alive loc: [1 2 ]
+      
+      pid [9 - 12] 满足：
+      origin pid: 0 is_thin: 0 ever_exist: 0 allocated: 512 MiB loc: [1 2 ] alive loc: [1 2 ]
+      ```
+
+      
+
+   
+
+   
+
+   
+
+   
+
+
+
+
+
+
+
 1. 把 internal io / business io 的实时速度显示在 cli
 2. cli 中 mgr / ctrl token 的数量对不上
 
