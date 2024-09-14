@@ -1,3 +1,7 @@
+
+
+
+
 1. 创建 3GiB、 2 副本、thick volume1，prefer local 设置为 1，并写 volume1 的前 2 GiB 的每前 256 KiB，共 8 * 256 KiB = 2 MiB 大小
 
    集群信息
@@ -302,12 +306,29 @@
 
 
 
+一开始副本在 [1, 3]，停掉 cid 3，recover src = 1，dst = 2
+
+1. perf src 的 internal perf 的值一直为 0；
+
+2. app perf 的值 1s 40 MiB/s，1s 220 MiB/s；
+
+3. 试一下 finished ms 会不会影响到 app io，看起来不会
+
+   验证一下，没有 app io 的情况下，调整这个值，需要影响到 internal io 
+
+4. perf dst 值总是很小，原因大概率是因为 agile recover，也就是 recover read 能达到 limit，但是 recover write 不能。
+
+5. agile recover 虽然 recover write bps 减小了，但是 recover read bps 还是 256 KiB，所以 recover 整体还是慢，会被 internal io limit 限制，internal io limit 如果有 iops 来限制，iops 角度没用满的话，继续下发，应该也可以。
+
+
+
 
 
 
 
 1. 把 internal io / business io 的实时速度显示在 cli
 2. cli 中 mgr / ctrl token 的数量对不上
+3. recover 时，只有源端有限速，目的
 
 
 
