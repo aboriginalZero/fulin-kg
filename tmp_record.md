@@ -1,4 +1,18 @@
+```
+# 创建一个 100GiB 的卷，并通过 zbs-chunk volume write <pool-name> <volume-name> <offset> <len> -i input_file 向每个 400 个 pextent 的首 256 KiB 写入数据。
 
+#!/bin/bash
+
+for i in $(seq 1 400)
+do
+    extent_size=`expr 1024 \* 1024 \* 256`
+    len=`expr 1024 \* 256`
+    echo $len
+    offset=`expr $extent_size \* $i`
+    echo $offset
+    zbs-chunk volume write pool lp-dealloc-test $offset $len -i /var/log/zbs/zbs-taskd.INFO
+done
+```
 
 
 
