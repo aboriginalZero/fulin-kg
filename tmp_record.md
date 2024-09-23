@@ -316,8 +316,6 @@ done
 
    
 
-   
-
 
 
 一开始副本在 [1, 3]，停掉 cid 3，recover src = 1，dst = 2
@@ -333,6 +331,23 @@ done
 4. perf dst 值总是很小，原因大概率是因为 agile recover，也就是 recover read 能达到 limit，但是 recover write 不能。
 
 5. agile recover 虽然 recover write bps 减小了，但是 recover read bps 还是 256 KiB，所以 recover 整体还是慢，会被 internal io limit 限制，internal io limit 如果有 iops 来限制，iops 角度没用满的话，继续下发，应该也可以。
+
+5. 能力协商的部分
+
+
+
+```
+auto token_str = [=]() {
+        std::ostringstream oss;
+        oss << str() << " grant flow crtl: " << static_cast<uint32_t>(creq->dcc_cid);
+        LOOP(kTokenTypeSize) { oss << ", " << GetTokenTypeName(i) << " granted_num: " << granted_num[i]; }
+        oss << ", perf_thin_not_free_ratio: " << static_cast<uint32_t>(perf_thin_not_free_ratio)
+            << ", enable_accelerate_sink: " << enable_accelerate_sink;
+        return oss.str();
+    };
+
+VLOG(VLOG_INFO) << token_str();
+```
 
 
 
