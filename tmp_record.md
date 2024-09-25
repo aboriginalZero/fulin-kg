@@ -332,7 +332,11 @@ done
 
 5. agile recover 虽然 recover write bps 减小了，但是 recover read bps 还是 256 KiB，所以 recover 整体还是慢，会被 internal io limit 限制，internal io limit 如果有 iops 来限制，iops 角度没用满的话，继续下发，应该也可以。
 
-5. 能力协商的部分
+6. 能力协商的部分
+
+   5.6.1 的 meta leader 对于通过它注册进来的 chunk 都认为默认有 internal flow control 能力，会通过心跳下发，access 在 InternalFlowControlAbility::HandleNegotiatedConfig 中将 stage 设置为 ENABLE，并 start internal flow ctrl，然后在下一轮心跳的时候设置心跳字段中的 enable_internal_flow_control = true。
+
+5. 
 
 
 
@@ -368,6 +372,7 @@ VLOG(VLOG_INFO) << token_str();
 1. ec recover 实际的 block size 是 pextent_info->ec_param()->block_size() 
 2. sink 写 ec 的时候，cap loc 上各个 cid 也不是真的写 kBlockSize，另外还有可能要先 promote
 3. ec 中实在没得读，还是会去读 isolated 节点的
+3. 在 local io handler 中，ELSMNotAllocData 会被统计到 throttle，但不会算在 from_remote_io_stats
 
 
 
