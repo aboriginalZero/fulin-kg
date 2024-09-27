@@ -336,22 +336,23 @@ done
 
    5.6.1 的 meta leader 对于通过它注册进来的 chunk 都认为默认有 internal flow control 能力，会通过心跳下发，access 在 InternalFlowControlAbility::HandleNegotiatedConfig 中将 stage 设置为 ENABLE，并 start internal flow ctrl，然后在下一轮心跳的时候设置心跳字段中的 enable_internal_flow_control = true。
 
-5. 
+7. 在之前的场景里，因为 block_barrier_guard 的存在，不会有一个 block 同时发 sink 和 reposition io 到 internal io throttle。
+
+   有了 internal flow ctrl 之后，因为在拿 block 之前就被 intercept，那么即使是后到先执行，也没问题。
+
+8. reposition 只在单种 layer 之间流动，且是 1 对 1 的。但是 sink 可能是读  1 个 perf，写 k + m 个 cap，那么 quota 应该按什么粒度给呢？
+
+   按被唤醒才 quota --
+
+   以 cid 的视角，给到 ctrl 的 token，按 4 2 1 划分给 high mid low，这个是 cap / perf 粒度的，不管这个 waiter 是否被唤醒，因为 waiting list 的顺序性，所以能保证有限的资源一定先给到队列头几个。
+
+   如果 quota 不区分 cap / perf，可能会出现 quota 被 cap 都用完了，perf 一点都没能分配到。
+
+9. 不看 bytes，看 iops 呢？因为 internal flow ctrl 这边拿不到 bytes 信息，所以对于 granted token，如果用 throttle 的 avail iops 去算，会不会好一些。
+
+   但是对外暴露的，最终还是按 bps 去调节速率。
 
 
-
-```
-auto token_str = [=]() {
-        std::ostringstream oss;
-        oss << str() << " grant flow crtl: " << static_cast<uint32_t>(creq->dcc_cid);
-        LOOP(kTokenTypeSize) { oss << ", " << GetTokenTypeName(i) << " granted_num: " << granted_num[i]; }
-        oss << ", perf_thin_not_free_ratio: " << static_cast<uint32_t>(perf_thin_not_free_ratio)
-            << ", enable_accelerate_sink: " << enable_accelerate_sink;
-        return oss.str();
-    };
-
-VLOG(VLOG_INFO) << token_str();
-```
 
 
 
@@ -373,6 +374,7 @@ VLOG(VLOG_INFO) << token_str();
 2. sink 写 ec 的时候，cap loc 上各个 cid 也不是真的写 kBlockSize，另外还有可能要先 promote
 3. ec 中实在没得读，还是会去读 isolated 节点的
 3. 在 local io handler 中，ELSMNotAllocData 会被统计到 throttle，但不会算在 from_remote_io_stats
+3. 修改 internal 
 
 
 
