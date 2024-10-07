@@ -1,3 +1,12 @@
+1. 一个 ever exist = false 的副本，在 lsm 上真的存在吗？如果是快照/克隆后被迁移到其他节点的 PExtent，此时虽然还是 non ever exist，但在目的节点上真实存在，其健康状态会被定期上报。
+2. vextent no 对 FLAGS_meta_max_pextents 取余就是 lid。
+3. lid 与 pid 的 gc 是独立运行的？
+4. ShouldNotMigrate 也需要考虑 healthy cids
+5. recover src 也有可能总是选到同一个，此时若 lease owner 与 recover src 网络失联，但 recover src 与 meta leader 是可以正常通信的，会导致 recover 一直无法完成。
+6. 若数据块的 Lease owner 发生转移，恢复命令无法继续执行，recover mgr 应该可以对其主动失败处理。
+
+
+
 ```
 # 创建一个 100GiB 的卷，并通过 zbs-chunk volume write <pool-name> <volume-name> <offset> <len> -i input_file 向每个 400 个 pextent 的首 256 KiB 写入数据。
 
@@ -310,11 +319,6 @@ done
 
       
 
-   
-
-   
-
-   
 
 
 
@@ -1322,12 +1326,12 @@ gtest系列之事件机制
            1. 若二者活跃副本冗余度不相等，优选最小的，否则执行下一步；
            2. 若二者活跃副本冗余度都不等于 0 并且其中有一个的副本在维护模式节点上，优选不在维护模式节点上的，否则执行下一步；
            3. 若二者有一个是 prior，优选它，否则执行下一步；
-           4. 若二者有效副本冗余度不相等，优选最小的，否则执行下一步；
+           4. 若二者存活副本冗余度不相等，优选最小的，否则执行下一步；
            5. 若二者期望副本冗余度不相等，优选最大的，否则执行下一步；
            6. 若二者活跃副本冗余度都等于 0 并且其中有一个的副本在维护模式节点上，优选不在维护模式节点上的，否则执行下一步；
            7. 选 pid 最小的。
    
-           其中（活跃/有效/期望）副本冗余度根据冗余类型不同，计算方式如下：
+           其中（活跃/存活/期望）副本冗余度根据冗余类型不同，计算方式如下：
    
            1. replica： (alive_segment_num / segment_num / expected_segment_num) - 1；
            2. ec shard： (alive_segment_num / segment_num / expected_segment_num) - k，k 是数据块个数；
