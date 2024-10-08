@@ -1,9 +1,79 @@
+时刻 t - 1 的信息：
+
+1. granted num
+2. avail bucket level
+
+时刻 t 的信息：
+
+1. last used num
+2. over used num
+3. req num
+4. avail bucket level
+
+求时刻 t 的 granted num
+
+能够知道 t - 1 时刻颁发了多少 token，flow ctrl 消费了多少，
+
+上一时刻的 granted num - 这个时刻的 (last used num + over used num) 表明这个时段内 flow ctrl 消费了多少 token，即有多少 io 下发了，剩下的 token 回收并在下一次使用。
+
+这个时刻的 avail bucket level - 上一时刻的 avail bucket level ，如果是负数，表明可用额度变少了，时刻 t 给出的 granted num 应该要变小；如果是正数，
+
+
+
+ifm 计算给每个 ifc 的 current granted num 时，认为的所有 chunk 能用的 avail token 之和包含 2 部分：
+
+1. 这段时间内的 leak bytes
+2. 每个 ifc 的 prevent granted num - (current last used num + current over used num)，即上一轮未被消费的部分回收以供下一轮使用；
+
+这种方式需要考虑：
+
+1. 节点异常等不能提供 last used num 等信息时，需要及时回收之前发给他的 token；
+2. 收集到所有 ifc 的请求后再计算 avail tokens，目前已有这个逻辑。
+
+avail bucket level 的更新频率远低于 100ms，相比 local io stats 记录的更为精准。另外，这种方式不会有 inflight io 带来的误差，因为：
+
+1. 若新 io 下发且处于 inflight，体现在 current last used num ++，不影响 bucket level；
+2. 若新的 io 下发且完成，体现在 current last used num ++，bucket level --；
+3. 不关心旧的 inflight io 是否完成；
+
+
+
+时刻，发 100 个，对方只有 10 个要发，还剩 90，
+
+
+
+
+
+貌似不需要关注 inflight io，而是只看 avail bucket level。因为不管当前是否用满，io throttle 总是按自己的节奏每秒让 bucket level 减少 500 MiB。所以不一定要等 IO 完成，而是只要等足够长的时间（即使这个时间之后，旧 IO 还是没有完成），就能接着往下发。
+
+不可以，考虑 io throttle 每 10 ms 减一次 bucket level，ifm 每 100ms 管 io throttle 要一次 avail bucket level，那么正常情况下能拿到 10 个可用 bucket 空间，这轮 granted num = 10， ifc 据此发了 10 个 io，但都在 inflight，还没执行到 level ++，那么 ifm 下一个 100ms 去找 io throttle 要到的 avail bucket level 是 10 + 10 = 20 个，这轮的 granted num = 20，ifc 据此发送了 20 个 io。假设所有 io 都在 inflight，那 granted num 就会是 10，20，30，40 的递加，而实际上应该是 10，10，10，10。
+
+
+
+
+
+引入 internal flow ctrl 的目的是为了下发到 internal io throttle 的时候不会被卡住。
+
+reposition 动态并发度限制，对于 perf，默认限制是 32 个，最多会有 128 * 64（chunk 个数）= 8096 个 perf block flight io 打到同一个 local io handler 上，256 KiB/s * 8096 = 2 GiB/s。
+
+io throttle 和由此而来的 internal io throttle，若设置了限速是 100 MiB/s，每秒固定让 bucket leak 100 MiB 的 io bytes，不论前一秒下发的 io 是否完成。按目前的 from remote / local io stats 被更新的位置，current speed 是有可能超过 speed limit。
+
+之前是设想 internal io throttle 放在 io 开始前，但如果由于需要关注 ELSMNotAllocData 以及记录真实的 io bytes（而非固定的 block size）而把 internal io throttle 放在 io 完成后，他是否也可以根据 io done 的信息来限制？暂时不考虑改变 io throttle 机制。
+
+
+
+
+
+
+
+
+
 1. 一个 ever exist = false 的副本，在 lsm 上真的存在吗？如果是快照/克隆后被迁移到其他节点的 PExtent，此时虽然还是 non ever exist，但在目的节点上真实存在，其健康状态会被定期上报。
 2. vextent no 对 FLAGS_meta_max_pextents 取余就是 lid。
 3. lid 与 pid 的 gc 是独立运行的？
 4. ShouldNotMigrate 也需要考虑 healthy cids
 5. recover src 也有可能总是选到同一个，此时若 lease owner 与 recover src 网络失联，但 recover src 与 meta leader 是可以正常通信的，会导致 recover 一直无法完成。
-6. 若数据块的 Lease owner 发生转移，恢复命令无法继续执行，recover mgr 应该可以对其主动失败处理。
+6. 若数据块的 Lease owner 发生转移，恢复命令无法继续执行，recover mgr 可以对其主动失败处理，利用 access manager 里的 pid_owner 或 lid_owner
 
 
 
