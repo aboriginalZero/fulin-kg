@@ -28,7 +28,8 @@ ifm 计算给每个 ifc 的 current granted num 时，认为的所有 chunk 能�
 这种方式需要考虑：
 
 1. 节点异常等不能提供 last used num 等信息时，需要及时回收之前发给他的 token；
-2. 收集到所有 ifc 的请求后再计算 avail tokens，目前已有这个逻辑。
+2. 收集到所有 ifc 的请求后再计算 avail tokens，目前已有这个逻辑；
+3. 需要考虑回收的是 2 轮前的。
 
 avail bucket level 的更新频率远低于 100ms，相比 local io stats 记录的更为精准。另外，这种方式不会有 inflight io 带来的误差，因为：
 
@@ -50,13 +51,11 @@ avail bucket level 的更新频率远低于 100ms，相比 local io stats 记录
 
 
 
-
-
 引入 internal flow ctrl 的目的是为了下发到 internal io throttle 的时候不会被卡住。
 
 reposition 动态并发度限制，对于 perf，默认限制是 32 个，最多会有 128 * 64（chunk 个数）= 8096 个 perf block flight io 打到同一个 local io handler 上，256 KiB/s * 8096 = 2 GiB/s。
 
-io throttle 和由此而来的 internal io throttle，若设置了限速是 100 MiB/s，每秒固定让 bucket leak 100 MiB 的 io bytes，不论前一秒下发的 io 是否完成。按目前的 from remote / local io stats 被更新的位置，current speed 是有可能超过 speed limit。
+io throttle 和由此而来的 internal io throttle，若设置了限速是 100 MiB/s，每秒固定让 bucket leak 100 MiB 的 io bytes，不论前一秒下发的 io 是否完成。按目前的 io throttle 可用 level 的实现机制，以及 from remote / local io stats 被更新的位置，在有 inflight io 时，current speed 是有可能超过 speed limit。
 
 之前是设想 internal io throttle 放在 io 开始前，但如果由于需要关注 ELSMNotAllocData 以及记录真实的 io bytes（而非固定的 block size）而把 internal io throttle 放在 io 完成后，他是否也可以根据 io done 的信息来限制？暂时不考虑改变 io throttle 机制。
 
