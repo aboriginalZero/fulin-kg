@@ -39,12 +39,6 @@ avail bucket level 的更新频率远低于 100ms，相比 local io stats 记录
 
 
 
-时刻，发 100 个，对方只有 10 个要发，还剩 90，
-
-
-
-
-
 貌似不需要关注 inflight io，而是只看 avail bucket level。因为不管当前是否用满，io throttle 总是按自己的节奏每秒让 bucket level 减少 500 MiB。所以不一定要等 IO 完成，而是只要等足够长的时间（即使这个时间之后，旧 IO 还是没有完成），就能接着往下发。
 
 不可以，考虑 io throttle 每 10 ms 减一次 bucket level，ifm 每 100ms 管 io throttle 要一次 avail bucket level，那么正常情况下能拿到 10 个可用 bucket 空间，这轮 granted num = 10， ifc 据此发了 10 个 io，但都在 inflight，还没执行到 level ++，那么 ifm 下一个 100ms 去找 io throttle 要到的 avail bucket level 是 10 + 10 = 20 个，这轮的 granted num = 20，ifc 据此发送了 20 个 io。假设所有 io 都在 inflight，那 granted num 就会是 10，20，30，40 的递加，而实际上应该是 10，10，10，10。
@@ -73,6 +67,9 @@ io throttle 和由此而来的 internal io throttle，若设置了限速是 100 
 4. ShouldNotMigrate 也需要考虑 healthy cids
 5. recover src 也有可能总是选到同一个，此时若 lease owner 与 recover src 网络失联，但 recover src 与 meta leader 是可以正常通信的，会导致 recover 一直无法完成。
 6. 若数据块的 Lease owner 发生转移，恢复命令无法继续执行，recover mgr 可以对其主动失败处理，利用 access manager 里的 pid_owner 或 lid_owner
+6. 后续测试轮转调度是否有效，可以的方式是代码里指定给到 volume  A 的 io 一定带上 recover flag，B 的是 sink flag，然后用 fio 打到这两个 volume 上来模拟多种内部 IO 同时进行的场景，看此时的轮转调度是否有效。 
+6. 把 internal io 实时显示
+6. 把 ifc stas 实时显示
 
 
 
