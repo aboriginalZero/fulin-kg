@@ -1,3 +1,22 @@
+* zbs cli 是只有 snapshot 能更新 new_alloc_even 
+* zbs iscsi / nvmf / meta client 是可以更新 lun / volume / snapshot 的 new_alloc_even 属性
+* meta iscsi / nvmf server 支持在  UpdateLun / UpdateSnapshot 里更新
+* meta rpc server 里支持在 UpdateSnapshot / UpdateVolume里更新
+
+如果 volume 更新了 even，尽管把 volume 的 prefer local 请求了，但是如果还会写，那之后
+
+虽然 elf 用 lun_create 的接口，但是之后不会再去写这个 volume，但是这个 volume 会被下沉，而下沉分配出来的 cap extent 的 prefer local 在 cap pentry 没有 prefer local 时由发起下沉的 lease owner 决定。
+
+
+
+elf  一直以来创建虚拟卷模板，创建的是 volume 而不是 snapshot。我理解是因为它那边有虚拟机模板转化为虚拟机，以及反向操作的需求（tower 上有入口），但如果是 volume，理论上总是有可能被写，可以加上考虑在 UpdateVolume 的时候，除了将 new_alloc_even 设置为 true，也同时把 read_only 设置成 true（没问题的话把这个需求给到 elf）
+
+
+
+均匀卷由 even 属性被更新成 True 的卷/快照卷和克隆超过一定次数（默认为 10）的快照卷两部分组成（不支持直接创建出 even volume / snapshot）
+
+
+
 时刻 t - 1 的信息：
 
 1. granted num
