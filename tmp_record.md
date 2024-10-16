@@ -1,3 +1,32 @@
+没有 internal perf 的情况下，4k iodepth = 64 写，iops = 40k - 42k 波动
+
+* baseline avail_level_ratio 1.0，app perf 从 40k 下降到 34k - 36k 附近，短暂掉到 25k（不是稳定复现，当时的 waiting io num 还是 0，有可能是下层操作的影响），internal perf iops = 1430，waiting io 全程为 0，current level，28 MiB，current size，36 MiB
+* avail_level_ratio 0.5，app perf  36k - 38k 波动，但 internal perf iops = 710，没有 waiting io，current level，14 MiB，current size，36 MiB
+* avail_level_ratio 0.95，app perf 从 40k 下降到 36k - 37k 附近
+
+
+
+```
+I1016 15:26:59.823668 71071 access_handler.cc:332] Access handler run in host : yiwu2
+I1016 15:26:59.850793 71071 data_channel_manager.cc:376] yiwu error on GetMyChunkId:
+Traceback:
+[EMetaDisconnect]: meta ip and port are not set
+--
+I1016 15:26:59.852082 71071 data_channel_manager.cc:376] yiwu error on GetMyChunkId:
+Traceback:
+[EMetaDisconnect]: meta ip and port are not set
+--
+I1016 15:26:59.880328 71071 data_channel_manager.cc:376] yiwu error on GetMyChunkId:
+Traceback:
+[ERpcClientClosed]: proto async client closed
+```
+
+
+
+
+
+
+
 * zbs cli 是只有 snapshot 能更新 new_alloc_even 
 * zbs iscsi / nvmf / meta client 是可以更新 lun / volume / snapshot 的 new_alloc_even 属性
 * meta iscsi / nvmf server 支持在  UpdateLun / UpdateSnapshot 里更新
