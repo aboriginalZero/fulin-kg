@@ -6,27 +6,6 @@
 
 
 
-```
-I1016 15:26:59.823668 71071 access_handler.cc:332] Access handler run in host : yiwu2
-I1016 15:26:59.850793 71071 data_channel_manager.cc:376] yiwu error on GetMyChunkId:
-Traceback:
-[EMetaDisconnect]: meta ip and port are not set
---
-I1016 15:26:59.852082 71071 data_channel_manager.cc:376] yiwu error on GetMyChunkId:
-Traceback:
-[EMetaDisconnect]: meta ip and port are not set
---
-I1016 15:26:59.880328 71071 data_channel_manager.cc:376] yiwu error on GetMyChunkId:
-Traceback:
-[ERpcClientClosed]: proto async client closed
-```
-
-
-
-
-
-
-
 * zbs cli 是只有 snapshot 能更新 new_alloc_even 
 * zbs iscsi / nvmf / meta client 是可以更新 lun / volume / snapshot 的 new_alloc_even 属性
 * meta iscsi / nvmf server 支持在  UpdateLun / UpdateSnapshot 里更新
