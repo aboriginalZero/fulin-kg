@@ -118,6 +118,7 @@ io throttle 和由此而来的 internal io throttle，若设置了限速是 100 
 6. 后续测试轮转调度是否有效，可以的方式是代码里指定给到 volume  A 的 io 一定带上 recover flag，B 的是 sink flag，然后用 fio 打到这两个 volume 上来模拟多种内部 IO 同时进行的场景，看此时的轮转调度是否有效。 
 6. 把 internal io 实时显示
 6. 把 ifc stas 实时显示
+6. recover handler 给 RecoverLayerCommon 传入的 throttle，最后还是给了 recover handler 自己用，在这个 patch 里改一下。throttle 应该由 access handler 直接暴露比较合适。
 
 
 
@@ -671,7 +672,7 @@ done
 
 
 
-ec 的维护模式里可以考虑丢了 k 个后才恢复
+ec 的维护模式里可以考虑丢了 k 个后才恢复（需要先让 ec 支持设置 rim_cid）
 
 
 
