@@ -1,3 +1,15 @@
+ReadFromReplica： sink_io->lease->default_replica_pextent_info()
+
+
+
+ReplicaIOHandler::Read 能保证一定先读本地吗？
+
+如果 recover。
+
+
+
+
+
 没有 internal perf 的情况下，4k iodepth = 64 写，iops = 40k - 42k 波动
 
 * baseline avail_level_ratio 1.0，app perf 从 40k 下降到 34k - 36k 附近，短暂掉到 25k（不是稳定复现，当时的 waiting io num 还是 0，有可能是下层操作的影响），internal perf iops = 1430，waiting io 全程为 0，current level，28 MiB，current size，36 MiB
