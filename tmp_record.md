@@ -1,3 +1,13 @@
+均匀的 
+
+
+
+下沉如果读到的是 ELsmNotAllocData，或是全 0 数据，且满足对其要求（replica 4k，ec 编码块对齐），则可以向 cap extent 发送 unmap，以缩减 cap space。
+
+
+
+
+
 ReadFromReplica： sink_io->lease->default_replica_pextent_info()
 
 
