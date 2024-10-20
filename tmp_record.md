@@ -1,4 +1,46 @@
-均匀的 
+如果是 special recover，给到 pextent io handler 的 data len 不一定是 kBlockSize。
+
+replica recover src block 如果是 ELsmNotAllocData，block_not_alloc 置为 true，对 recover dst 的写会转换成 unmap
+
+
+
+access_stats_->layer_stats  的统计未必准确：
+
+1. data len
+2. IsRead() / IsWrite()
+
+影响到前端的展示。先不管，先让 LocalIOStats 准确。
+
+recover write 也有可能 unmap 写，这部分不需要统计进来。
+
+1. OP::VEXTENT_UNMAP 和 OP::PEXTENT_UNMAP 的区别，VEXTENT_UNMAP 是否也应该忽略
+
+2. access_stats_->layer_stats 中是否需要忽略 ELSMNotAllocData
+
+3. throttle_latency_ns_ 为啥只在 LocalIOHandler::LocalIOStart() 中更新
+
+4. RecoverIOStats::from_local_recover_counter 的更新可以放在 pextent io handler 吗？
+
+5. unmap 形式的 recover write 需要更新吗？
+
+    ```
+    layer_common_->UpdateCounter(ctx->replica_pextent_info, &RecoverIOStats::from_local_migrate_counter, ctx->cur_data_len);
+                                             
+    ```
+
+    
+
+local io pextent 没有这个问题吗？
+
+```
+// Usually the throttle should be added before the protected resource, but because the upper layer does
+// not know whether the IO request is sent to the local when executing sink io, if the throttle is added
+// before the LSM, it means that normal IO needs to be in order with the sink io to avoid
+// ECGenerationNotMatch, which will resulting in performance degradation. Because recover IO / sink IO /
+// migrate IO all have the maximum IO depth, adding throttle to LSM can limit the bandwidth.
+```
+
+
 
 
 
@@ -128,7 +170,7 @@ io throttle 和由此而来的 internal io throttle，若设置了限速是 100 
 
 #!/bin/bash
 
-for i in $(seq 1 400)
+for i in $(seq 0 400)
 do
     extent_size=`expr 1024 \* 1024 \* 256`
     len=`expr 1024 \* 256`
