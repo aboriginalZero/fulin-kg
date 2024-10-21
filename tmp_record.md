@@ -1,3 +1,7 @@
+
+
+
+
 如果是 special recover，给到 pextent io handler 的 data len 不一定是 kBlockSize。
 
 replica recover src block 如果是 ELsmNotAllocData，block_not_alloc 置为 true，对 recover dst 的写会转换成 unmap
@@ -6,7 +10,7 @@ replica recover src block 如果是 ELsmNotAllocData，block_not_alloc 置为 tr
 
 access_stats_->layer_stats  的统计未必准确：
 
-1. data len
+1. data len，特别是  special recover 传递的
 2. IsRead() / IsWrite()
 
 影响到前端的展示。先不管，先让 LocalIOStats 准确。
@@ -24,11 +28,21 @@ recover write 也有可能 unmap 写，这部分不需要统计进来。
 5. unmap 形式的 recover write 需要更新吗？
 
     ```
-    layer_common_->UpdateCounter(ctx->replica_pextent_info, &RecoverIOStats::from_local_migrate_counter, ctx->cur_data_len);
-                                             
+    layer_common_->UpdateCounter(ctx->replica_pextent_info, &RecoverIOStats::from_local_migrate_counter, ctx->cur_data_len);                  
     ```
-
     
+6. LocalIOStart 里面也需要对 recover dst 在用 MessageHeader::PEXTENT_UNMAP 的情况下特殊处理
+
+    recover src 如果满足这两种情况，都不会发起 recover write
+
+    1. block_not_alloc，即读的时候得到 ELSMNotAllocData
+    2. cap &&  is_buf_all_zero
+
+    如果是 agile recover，当 block_not_alloc 或者 force_unmap 时，还是需要 recover write，但是以 unmap 的形式写入。
+
+7.  recover start 不进 pextent io handler 吗？会进，但不会调用 PExtentIODone
+
+
 
 local io pextent 没有这个问题吗？
 
