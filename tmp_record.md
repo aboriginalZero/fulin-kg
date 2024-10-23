@@ -1,3 +1,7 @@
+sink 对应的并发度会不会超过 32 个，按目前 ifc 拦截的位置来看。
+
+
+
 internal io throttle 的位置
 
 1. 如果 pextent io handler 中把 throttle 放在 io 进入 lsm 前，那么需要 InterceptBusinessIO 来保 gen 序，否则可能出现，同一个 extent 的两个 block io。
