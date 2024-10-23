@@ -8,10 +8,6 @@ internal io throttle 的位置
 
 
 
-从 5.6.x pick 到 master
-
-
-
 如果是 special recover，给到 pextent io handler 的 data len 不一定是 kBlockSize。
 
 replica recover src block 如果是 ELsmNotAllocData，block_not_alloc 置为 true，对 recover dst 的写会转换成 unmap
@@ -38,51 +34,12 @@ recover write 也有可能 unmap 写，这部分不需要统计进来。
 5. unmap 形式的 recover write 需要更新吗？
 
     ```
-    layer_common_->UpdateCounter(ctx->replica_pextent_info, &RecoverIOStats::from_local_migrate_counter, ctx->cur_data_len);                  
+    layer_common_->UpdateCounter(ctx->replica_pextent_info, &RecoverIOStats::from_local_migrate_counter, ctx->cur_data_len);
     ```
-    
-6. LocalIOStart 里面也需要对 recover dst 在用 MessageHeader::PEXTENT_UNMAP 的情况下特殊处理
-
-    recover src 如果满足这两种情况，都不会发起 recover write
-
-    1. block_not_alloc，即读的时候得到 ELSMNotAllocData
-    2. cap &&  is_buf_all_zero
-
-    如果是 agile recover，当 block_not_alloc 或者 force_unmap 时，还是需要 recover write，但是以 unmap 的形式写入。
-
-7.  recover start 不进 pextent io handler 吗？会进，但不会调用 PExtentIODone
-
-
-
-local io pextent 没有这个问题吗？
-
-```
-// Usually the throttle should be added before the protected resource, but because the upper layer does
-// not know whether the IO request is sent to the local when executing sink io, if the throttle is added
-// before the LSM, it means that normal IO needs to be in order with the sink io to avoid
-// ECGenerationNotMatch, which will resulting in performance degradation. Because recover IO / sink IO /
-// migrate IO all have the maximum IO depth, adding throttle to LSM can limit the bandwidth.
-```
-
-
 
 
 
 下沉如果读到的是 ELsmNotAllocData，或是全 0 数据，且满足对其要求（replica 4k，ec 编码块对齐），则可以向 cap extent 发送 unmap，以缩减 cap space。
-
-
-
-
-
-ReadFromReplica： sink_io->lease->default_replica_pextent_info()
-
-
-
-ReplicaIOHandler::Read 能保证一定先读本地吗？
-
-如果 recover。
-
-
 
 
 
@@ -154,8 +111,6 @@ avail bucket level 的更新频率远低于 100ms，相比 local io stats 记录
 
 
 
-貌似不需要关注 inflight io，而是只看 avail bucket level。因为不管当前是否用满，io throttle 总是按自己的节奏每秒让 bucket level 减少 500 MiB。所以不一定要等 IO 完成，而是只要等足够长的时间（即使这个时间之后，旧 IO 还是没有完成），就能接着往下发。
-
 不可以，考虑 io throttle 每 10 ms 减一次 bucket level，ifm 每 100ms 管 io throttle 要一次 avail bucket level，那么正常情况下能拿到 10 个可用 bucket 空间，这轮 granted num = 10， ifc 据此发了 10 个 io，但都在 inflight，还没执行到 level ++，那么 ifm 下一个 100ms 去找 io throttle 要到的 avail bucket level 是 10 + 10 = 20 个，这轮的 granted num = 20，ifc 据此发送了 20 个 io。假设所有 io 都在 inflight，那 granted num 就会是 10，20，30，40 的递加，而实际上应该是 10，10，10，10。
 
 
@@ -164,13 +119,11 @@ avail bucket level 的更新频率远低于 100ms，相比 local io stats 记录
 
 reposition 动态并发度限制，对于 perf，默认限制是 32 个，最多会有 128 * 64（chunk 个数）= 8096 个 perf block flight io 打到同一个 local io handler 上，256 KiB/s * 8096 = 2 GiB/s。
 
-io throttle 和由此而来的 internal io throttle，若设置了限速是 100 MiB/s，每秒固定让 bucket leak 100 MiB 的 io bytes，不论前一秒下发的 io 是否完成。按目前的 io throttle 可用 level 的实现机制，以及 from remote / local io stats 被更新的位置，在有 inflight io 时，current speed 是有可能超过 speed limit。
+
 
 之前是设想 internal io throttle 放在 io 开始前，但如果由于需要关注 ELSMNotAllocData 以及记录真实的 io bytes（而非固定的 block size）而把 internal io throttle 放在 io 完成后，他是否也可以根据 io done 的信息来限制？暂时不考虑改变 io throttle 机制。
 
-
-
-
+local io handler 里难以保证是否会 yield，如果确保不会，可以添加。
 
 
 
@@ -183,9 +136,7 @@ io throttle 和由此而来的 internal io throttle，若设置了限速是 100 
 5. recover src 也有可能总是选到同一个，此时若 lease owner 与 recover src 网络失联，但 recover src 与 meta leader 是可以正常通信的，会导致 recover 一直无法完成。
 6. 若数据块的 Lease owner 发生转移，恢复命令无法继续执行，recover mgr 可以对其主动失败处理，利用 access manager 里的 pid_owner 或 lid_owner
 6. 后续测试轮转调度是否有效，可以的方式是代码里指定给到 volume  A 的 io 一定带上 recover flag，B 的是 sink flag，然后用 fio 打到这两个 volume 上来模拟多种内部 IO 同时进行的场景，看此时的轮转调度是否有效。 
-6. 把 internal io 实时显示
-6. 把 ifc stas 实时显示
-6. recover handler 给 RecoverLayerCommon 传入的 throttle，最后还是给了 recover handler 自己用，在这个 patch 里改一下。throttle 应该由 access handler 直接暴露比较合适。
+6. recover handler 给 RecoverLayerCommon 传入的 throttle，最后还是给了 recover handler 自己用，在这个 patch 里改一下。throttle 应该由 access handler 直接暴露比较合适。目前 layer_throttle 传给 recover_handler 根本没用上。
 
 
 
@@ -207,302 +158,6 @@ done
 
 
 
-1. 创建 3GiB、 2 副本、thick volume1，prefer local 设置为 1，并写 volume1 的前 2 GiB 的每前 256 KiB，共 8 * 256 KiB = 2 MiB 大小
-
-   集群信息
-
-   ```
-   summary space allocated : 6 GiB
-   ```
-
-   节点信息
-
-   ```
-   cid 1, allocated: 3 GiB, pid: 1 2 3 4 5 6 7 8 9 10 11 12
-   cid 2, allocated: 3 GiB, pid: 1 2 3 4 5 6 7 8 9 10 11 12
-   ```
-
-   卷信息
-
-   volume1, shared size: 6 GiB, unique size: 0 GiB
-
-   ```
-   pid [1 - 8] 满足：
-   origin pid: 0 is_thin: 0 ever_exist: 1 allocated: 512 MiB loc: [1 2 ] alive loc: [1 2 ]
-   
-   pid [9 - 12] 满足：
-   origin pid: 0 is_thin: 0 ever_exist: 0 allocated: 512 MiB loc: [1 2 ] alive loc: [1 2 ]
-   ```
-
-2. 对 volume1 打快照得到 snap1
-
-   集群信息
-
-   ```
-   summary space allocated : 6 GiB
-   ```
-
-   节点信息
-
-   ```
-   cid 1, allocated: 3 GiB, pid: 1 2 3 4 5 6 7 8 9 10 11 12
-   cid 2, allocated: 3 GiB, pid: 1 2 3 4 5 6 7 8 9 10 11 12
-   ```
-
-   卷信息
-
-   volume1, shared size: 6 GiB, unique size: 0 GiB
-
-   ```
-   pid [1 - 8] 满足：
-   origin pid: 0 is_thin: 0 ever_exist: 1 allocated: 512 MiB loc: [1 2 ] alive loc: [1 2 ]
-   
-   pid [9 - 12] 满足：
-   origin pid: 0 is_thin: 0 ever_exist: 0 allocated: 512 MiB loc: [1 2 ] alive loc: [1 2 ]
-   ```
-
-   snap1, shared size: 6 GiB, unique size: 0 GiB
-
-   ```
-   pid [1 - 8] 满足：
-   origin pid: 0 is_thin: 0 ever_exist: 1 allocated: 512 MiB loc: [1 2 ] alive loc: [1 2 ]
-   
-   pid [9 - 12] 满足：
-   origin pid: 0 is_thin: 0 ever_exist: 0 allocated: 512 MiB loc: [1 2 ] alive loc: [1 2 ]
-   ```
-
-3. 写 volume1 的前 2 GiB 的每前 256 KiB，共 8 * 256 KiB = 2 MiB 大小
-
-   1. 刚写完，未 gc scan 前
-
-      集群信息
-
-      ```
-      summary space allocated : 10 GiB
-      ```
-
-      节点信息
-
-      ```
-      cid 1, allocated: 3 GiB, pid: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20
-      cid 2, allocated: 3 GiB, pid: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20
-      ```
-
-      卷信息
-
-      volume1, shared size: 6 GiB, unique size: 0 GiB
-
-      ```
-      pid [13 - 20] 满足：
-      origin pid: <pid - 12> is_thin: 0 ever_exist: 1 allocated: 512 MiB loc: [1 2 ] alive loc: [1 2 ]
-      
-      pid [9 - 12] 满足：
-      origin pid: 0 is_thin: 0 ever_exist: 0 allocated: 512 MiB loc: [1 2 ] alive loc: [1 2 ]
-      ```
-
-      snap1, shared size: 6 GiB, unique size: 0 GiB
-
-      ```
-      pid [1 - 8] 满足：
-      origin pid: 0 is_thin: 0 ever_exist: 1 allocated: 512 MiB loc: [1 2 ] alive loc: [1 2 ]
-      
-      pid [9 - 12] 满足：
-      origin pid: 0 is_thin: 0 ever_exist: 0 allocated: 512 MiB loc: [1 2 ] alive loc: [1 2 ]
-      ```
-
-   2.  gc scan 后，pid [1 - 8] 从 thick 转成 thin，volume 的 share / unique size 更新
-
-      集群信息
-
-      ```
-      summary space allocated : 6 GiB
-      ```
-
-      （cid 1 2 给 meta 上报的 thin used data space 都是 0，此时 lsm 认为 pid [1 - 20] 都是 thick）
-
-      节点信息
-
-      ```
-      cid 1, allocated: 3 GiB, pid: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20
-      cid 2, allocated: 3 GiB, pid: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20
-      ```
-
-      卷信息
-
-      volume1, shared size: 2 GiB, unique size: 4 GiB
-
-      ```
-      pid [13 - 20] 满足：
-      origin pid: <pid - 12> is_thin: 0 ever_exist: 1 allocated: 512 MiB loc: [1 2 ] alive loc: [1 2 ]
-      
-      pid [9 - 12] 满足：
-      origin pid: 0 is_thin: 0 ever_exist: 0 allocated: 512 MiB loc: [1 2 ] alive loc: [1 2 ]
-      ```
-
-      snap1, shared size: 2 GiB, unique size: 4 MiB
-
-      ```
-      pid [1 - 8] 满足：
-      origin pid: 0 is_thin: 1 ever_exist: 1 allocated: 512 KiB loc: [1 2 ] alive loc: [1 2 ]
-      
-      pid [9 - 12] 满足：
-      origin pid: 0 is_thin: 0 ever_exist: 0 allocated: 512 MiB loc: [1 2 ] alive loc: [1 2 ]
-      ```
-
-4. 从 snap1 克隆出 volume2，dst pool 是 thick，副本数是 2
-
-   1. 刚克隆完，未 gc scan 前
-
-      集群信息
-
-      ```
-      summary space allocated : 6 GiB
-      ```
-
-      节点信息
-
-      ```
-      cid 1, allocated: 3 GiB, pid: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20
-      cid 2, allocated: 3 GiB, pid: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20
-      ```
-
-      卷信息
-
-      volume1, shared size: 2 GiB, unique size: 4 GiB
-
-      ```
-      pid [13 - 20] 满足：
-      origin pid: <pid - 12> is_thin: 0 ever_exist: 1 allocated: 512 MiB loc: [1 2 ] alive loc: [1 2 ]
-      
-      pid [9 - 12] 满足：
-      origin pid: 0 is_thin: 0 ever_exist: 0 allocated: 512 MiB loc: [1 2 ] alive loc: [1 2 ]
-      ```
-
-      snap1, shared size: 2 GiB, unique size: 4 MiB
-
-      ```
-      pid [1 - 8] 满足：
-      origin pid: 0 is_thin: 1 ever_exist: 1 allocated: 512 KiB loc: [1 2 ] alive loc: [1 2 ]
-      
-      pid [9 - 12] 满足：
-      origin pid: 0 is_thin: 0 ever_exist: 0 allocated: 512 MiB loc: [1 2 ] alive loc: [1 2 ]
-      ```
-
-      volume2, shared size: -1, unique size: -1 （-1 代表未被计算）
-
-      ```
-      pid [1 - 8] 满足：
-      origin pid: 0 is_thin: 1 ever_exist: 1 allocated: 512 KiB loc: [1 2 ] alive loc: [1 2 ]
-      
-      pid [9 - 12] 满足：
-      origin pid: 0 is_thin: 0 ever_exist: 0 allocated: 512 MiB loc: [1 2 ] alive loc: [1 2 ]
-      ```
-
-   2. gc scan 后，pid [1 - 8] 从 thin 转成 thick，volume 的 share / unique size 更新
-
-      集群信息
-
-      ```
-      summary space allocated : 10 GiB
-      ```
-
-      节点信息
-
-      ```
-      cid 1, allocated: 3 GiB, pid: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20
-      cid 2, allocated: 3 GiB, pid: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20
-      ```
-
-      卷信息
-
-      volume1, shared size: 2 GiB, unique size: 4 GiB
-
-      ```
-      pid [13 - 20] 满足：
-      origin pid: <pid - 12> is_thin: 0 ever_exist: 1 allocated: 512 MiB loc: [1 2 ] alive loc: [1 2 ]
-      
-      pid [9 - 12] 满足：
-      origin pid: 0 is_thin: 0 ever_exist: 0 allocated: 512 MiB loc: [1 2 ] alive loc: [1 2 ]
-      ```
-
-      snap1, shared size: 6 GiB, unique size: 0
-
-      ```
-      pid [1 - 8] 满足：
-      origin pid: 0 is_thin: 0 ever_exist: 1 allocated: 512 MiB loc: [1 2 ] alive loc: [1 2 ]
-      
-      pid [9 - 12] 满足：
-      origin pid: 0 is_thin: 0 ever_exist: 0 allocated: 512 MiB loc: [1 2 ] alive loc: [1 2 ]
-      ```
-
-      volume2, shared size: 6 GiB, unique size: 0 （-1 代表未被计算）
-
-      ```
-      pid [1 - 8] 满足：
-      origin pid: 0 is_thin: 0 ever_exist: 1 allocated: 512 MiB loc: [1 2 ] alive loc: [1 2 ]
-      
-      pid [9 - 12] 满足：
-      origin pid: 0 is_thin: 0 ever_exist: 0 allocated: 512 MiB loc: [1 2 ] alive loc: [1 2 ]
-      ```
-
-   3. lsm 重置 pid [1 - 8] 的 provision 为 thin
-
-      ```
-      // 对应日志，pid [1 - 8]
-      [UPDATE EXTENT] reset extent provision status: EXTENT_STATUS_ALLOCATED pid: 8 epoch: 8 generation: 1 bucket_id: 8 einode_id: 1 sick_flag: 0 provision: thin root_id: 1 read_only: true
-      ```
-
-      集群信息
-
-      ```
-      summary space allocated : 10 GiB + 4 MiB
-      ```
-
-      （cid 1 2 给 meta 上报的 thin used data space 都是 2 MiB，此时 lsm 认为 pid [1 - 8] 都是 thin）
-
-      节点信息
-
-      ```
-      cid 1, allocated: 3 GiB, pid: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20
-      cid 2, allocated: 3 GiB, pid: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20
-      ```
-
-      卷信息
-
-      volume1, shared size: 2 GiB, unique size: 4 GiB
-
-      ```
-      pid [13 - 20] 满足：
-      origin pid: <pid - 12> is_thin: 0 ever_exist: 1 allocated: 512 MiB loc: [1 2 ] alive loc: [1 2 ]
-      
-      pid [9 - 12] 满足：
-      origin pid: 0 is_thin: 0 ever_exist: 0 allocated: 512 MiB loc: [1 2 ] alive loc: [1 2 ]
-      ```
-
-      snap1, shared size: 6 GiB, unique size: 0
-
-      ```
-      pid [1 - 8] 满足：
-      origin pid: 0 is_thin: 0 ever_exist: 1 allocated: 512 MiB loc: [1 2 ] alive loc: [1 2 ]
-      
-      pid [9 - 12] 满足：
-      origin pid: 0 is_thin: 0 ever_exist: 0 allocated: 512 MiB loc: [1 2 ] alive loc: [1 2 ]
-      ```
-
-      volume2, shared size: 6 GiB, unique size: 0 （-1 代表未被计算）
-
-      ```
-      pid [1 - 8] 满足：
-      origin pid: 0 is_thin: 0 ever_exist: 1 allocated: 512 MiB loc: [1 2 ] alive loc: [1 2 ]
-      
-      pid [9 - 12] 满足：
-      origin pid: 0 is_thin: 0 ever_exist: 0 allocated: 512 MiB loc: [1 2 ] alive loc: [1 2 ]
-      ```
-
-      
-
-
-
 
 一开始副本在 [1, 3]，停掉 cid 3，recover src = 1，dst = 2
 
@@ -518,38 +173,6 @@ done
 
 5. agile recover 虽然 recover write bps 减小了，但是 recover read bps 还是 256 KiB，所以 recover 整体还是慢，会被 internal io limit 限制，internal io limit 如果有 iops 来限制，iops 角度没用满的话，继续下发，应该也可以。
 
-6. 能力协商的部分
-
-   5.6.1 的 meta leader 对于通过它注册进来的 chunk 都认为默认有 internal flow control 能力，会通过心跳下发，access 在 InternalFlowControlAbility::HandleNegotiatedConfig 中将 stage 设置为 ENABLE，并 start internal flow ctrl，然后在下一轮心跳的时候设置心跳字段中的 enable_internal_flow_control = true。
-
-7. 在之前的场景里，因为 block_barrier_guard 的存在，不会有一个 block 同时发 sink 和 reposition io 到 internal io throttle。
-
-   有了 internal flow ctrl 之后，因为在拿 block 之前就被 intercept，那么即使是后到先执行，也没问题。
-
-8. reposition 只在单种 layer 之间流动，且是 1 对 1 的。但是 sink 可能是读  1 个 perf，写 k + m 个 cap，那么 quota 应该按什么粒度给呢？
-
-   按被唤醒才 quota --
-
-   以 cid 的视角，给到 ctrl 的 token，按 4 2 1 划分给 high mid low，这个是 cap / perf 粒度的，不管这个 waiter 是否被唤醒，因为 waiting list 的顺序性，所以能保证有限的资源一定先给到队列头几个。
-
-   如果 quota 不区分 cap / perf，可能会出现 quota 被 cap 都用完了，perf 一点都没能分配到。
-
-9. 不看 bytes，看 iops 呢？因为 internal flow ctrl 这边拿不到 bytes 信息，所以对于 granted token，如果用 throttle 的 avail iops 去算，会不会好一些。
-
-   但是对外暴露的，最终还是按 bps 去调节速率。
-
-
-
-
-
-
-
-
-
-1. 把 internal io / business io 的实时速度显示在 cli
-2. cli 中 mgr / ctrl token 的数量对不上
-3. recover 时，只有源端有限速，目的
-
 
 
 针对 internal io 搞 cap / perf internal token
@@ -560,13 +183,6 @@ done
 2. sink 写 ec 的时候，cap loc 上各个 cid 也不是真的写 kBlockSize，另外还有可能要先 promote
 3. ec 中实在没得读，还是会去读 isolated 节点的
 3. 在 local io handler 中，ELSMNotAllocData 会被统计到 throttle，但不会算在 from_remote_io_stats
-3. 修改 internal 
-
-
-
-把 internal io 的实时速度显示在 cli
-
-也可以参考 app_enable_fc，可以节省计算。
 
 
 
@@ -596,55 +212,11 @@ LSM 在处理写 IO 时，有三个性能拐点：
 
    access 按一个 pextent 的 gen 不降序的方式顺序下发 io co 给 lsm（有这么个保序机制），lsm 收到后内部并发执行 io co，在 lsm 内部，如果这些 io co 写的是同一个 pblob，还是需要加锁，如果是不同 pblob，就可以并发执行。
 
-4. 目前的 internal io 是按什么来限制的，能把这个信息通过 fc token 给出去吗？
-
-   internal io throttle 中是按照一级 / 二级 / 三级分别是 4 / 2 / 1 个 blocksize 的方式来给的，先把一级中的 4 blocksize 额度用完，才开始用二级/三级中的。直到重新用完才 resetToken，重置一次额度。
-
-   重点是协调 io 的优先级，即不同 pid 的 不同类型 io 的先后顺序。
-
-   那如果把他挪到 access 的话，额度不需要重
-
    
-
-perf recover src = A，dst = B，当 read A block ，已经过了 block write barrier，在 internal io throttle 处由于有 speed limit 的限制，所以可能会被阻塞， 在阻塞期间，app io 过不了 block read barrier，所以 app io 没法写。
-
-要改成，如果发现已经快到 speed limit 上限，需要用 fc 机制传递每台 chunk 的 internal io iops/bps，或者是每台 chunk 的可用 internal io 带宽，那么在 access 拿 block write barrier 之前，先判断只有 src 和 dst 的 internal io bps 都有额度时，才允许下发。
-
-如果没有额度，那么 recover 阻塞在恢复这个 block 前，还没有越过 block write barrier，对外表现是这个 recover 正在执行这个 block。此时如果有 app io，那么 app io 是可以越过 block read barrier 继续执行的。
-
-怎么体现此时 app io 要让 internal io 去 break through？应该不需要了吧
-
-
-
-
-
-另外就是，还是保留 local io handler throttle，只针对 reposition 搞一个 access throttle，只管 recover，但其实 sink/elevate 也存在 from a to b 的两端（不过他会拿锁吗，read 不拿锁，write 也只是拿 block read barrier，不影响到 app io，不对，还有对 perf block 的 LockBlock，所以此时没法 unmap / CAW，也会导致从 sink 开始到结束之前，同一个 block 没法 readVExtent / ProxyRead / PromoteForElevate / WriteVExtent，所以是不是应该也把 sink 考虑进来，否则可能出现 app io 被 sink io block 的场景）
-
-1. 如果有 sink io，因为优先级比 recover 低，所以还好
-2. 会不会出现上报的 avail bytes（上报每个 chunk 里可用于 recover 的 bytes） 不准，每次 resetToken 都会突变一次，100ms 的汇报频率够用吗？够用的
-3. 如果被限制的  有突发的 app io，会让 
-
-
-
-在 pextent io handler 中有 from_local_io_stats，在 local io handler 中有 from_remote_io_stats，二者的合构成了 internal io load，这两个 stats 都是每 1s 更新一次值。
-
-已有的 internal io throttle 还是得保持在 local io handler / pextent io handler，
-
-access 层面的 stats 
-
-
-
-
 
 如果 local io handler 侧没有 throttle 的话，过了 access io throttle 之后，就会直接下发，
 
-还是得保留，只在 access 侧限流没法保证 lsm 侧的限流情况，因为数据是采集上来的，很可能不准。
-
-
-
-
-
-是否需要所有的 internal io 在下发前都进入 access internal io throttle，以避免突变？
+还是得保留，只在 access 侧限流没法保证 lsm 侧的限流情况，因为数据是采集上来的，很可能不准。且 internal io throttle 才有真正的 bytes 信息。
 
 
 
@@ -653,24 +225,6 @@ access 层面的 stats
 fc 的 intercept io，是在 access io handler 处拦截 perf app io。
 
 cap io throttle，是在 local io handler 处拦截 internal cap io + app cap io。
-
-
-
-
-
-目前 layer_throttle 传给 recover_handler 根本没用上
-
-
-
-从 local io handler 调整到 recover handler，在 recover handler 做 Block 移动的时候做限流，会涉及到分布式配额。
-
-
-
-
-
-从 pextent io handler 发来的，用的是 AsyncInterceptRecoverIO，为啥是放在 PExtentIODone 里
-
-从 local io handler 发来的，用的是 InterceptRecoverIO，是在 do io 之前
 
 
 
@@ -704,17 +258,8 @@ Access 在 Sync perf extent 时，从 LSM 获取 perf extent valid bitmap，并�
 
 
 
-
-
-也不是按照 start_ms 来看谁先执行的，所以可以按 pid 来展示？perf 和 cap 分开。
-
-展示按照 pid 排序有意义吗？因为是按照 start_ms 来决定谁
-
-
-
-1. 去掉 paused_recover_cmds_，用 running  - in_reover 就是还没执行的
-
-2. 重命名
+1. zbs-chunk migrate / recover list 可以按照  pid 来排序，perf 和 cap 分开，不是按照 start_ms 来看谁先执行。可以先按状态，状态里面再按 pid 排序
+2. 去掉 paused_recover_cmds_，用 running  - in_reover 就是还没执行的
 3. in_recover_pids 的赋值，只用在一个地方，AccessHandler::HandleAccessResponse 这里应该可以不用填充，因为 一定会在 pending + running pids 中。
 
 
@@ -734,12 +279,6 @@ for pid in $pid_list; do
     fi   
 done
 ```
-
-
-
-
-
-ec 的维护模式里可以考虑丢了 k 个后才恢复（需要先让 ec 支持设置 rim_cid）
 
 
 
@@ -777,7 +316,7 @@ https://smartx1.slack.com/archives/C06B3AWUU9M/p1721875571237189
 
 
 
-1. flat_hash_map to btree_map
+1. flat_hash_map to btree_map，从内存访问的角度更好
 3. cid map 改成 std::vector，这样从内存上更有顺序性
 
 
@@ -825,12 +364,6 @@ https://smartx1.slack.com/archives/C06B3AWUU9M/p1721875571237189
 
 
 
-需要测一下
-
-然后开始搞 [ZBS-19788](http://jira.smartx.com/browse/ZBS-19788)
-
-
-
 io reroute 多久没给 insight 心跳，他就会报警
 
 判断 IO reroute 不工作的方式是没有按一定频率跟 insight 心跳，如果超过 n 次没有跟 insight 心跳，主动退出程序？
@@ -846,8 +379,6 @@ zbs-insight 每收到一次日志有可能打印一下吗？zbs-insight 如果�
 
 
 1. 从 5.0.5 升级到 5.6.0，感受一下敏捷恢复的触发效率（或者直接找 qe 借个环境）
-4. 感受下下沉，access 怎么写 ec shard 的，看 access 文档
-5. 更新 meta 文档中 reposition 部分
 5. chunk table 改成读写锁
 
 
@@ -865,8 +396,6 @@ GcManager::ScanAndProcessLExtents
 
 
 MLAG 集群中不同节点能力有差，有时候升级慢是在重启某个 chunk 后的恢复慢，这种情况下 meta 侧智能调节下发窗口就显得很有必要了。
-
-
 
 
 
@@ -955,28 +484,6 @@ cd /var/log/zbs && ll -rth zbs-chunkd.log* 按照日期排序找文件
 
 
 
-smtx os 6.1.0 周期 reroute 待办项
-
-1. [ZBS-27617](http://jira.smartx.com/browse/ZBS-27617)
-2. [ZBS-27632](http://jira.smartx.com/browse/ZBS-27632)
-3. [ZBS-13377](http://jira.smartx.com/browse/ZBS-13377)
-
-在 ssh target 上要执行的命令用单引号包双引号。
-
-可以捕获这些异常类型，from paramiko import SSHException
-
-默认 22 端口，允许修改
-
-smartx_reroute 密钥对实际上能发挥作用吗（esxi 之间、scvm 之间、esxi 和 scvm 间）？
-
-如果 reroute 版本没有及时更新，在前端报警。
-
-https://zhuanlan.zhihu.com/p/313718499
-
-https://docs.paramiko.org/en/2.12/
-
-
-
 副本读失败并不会触发 remove replica，但在副本读之前会有一次 sync，sync 失败的副本会被 remove replica
 
 对于在被拔盘上的 extent，会读失败，但副本读失败并不会触发 remove replica，由于被拔盘了，所以他也不在 data report 里，meta 不会主动下发 gc cmd，直到 last report ms 超过 10 min 没更新，recover manager 扫描到它 not alive 了，才会下发 recover cmd。
@@ -988,6 +495,8 @@ https://docs.paramiko.org/en/2.12/
 汇总一下临时副本，结合文档，https://docs.google.com/document/d/1L1I-_md5jE4GyqPItkioh1TzQXEgRhNFqIHtIwN-43k/edit#heading=h.moqcl2aq3auh
 
 什么时候会 verifyread 而不是普通的 read
+
+有了临时副本，staging block info 的含义是啥？
 
 
 
