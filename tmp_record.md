@@ -1,3 +1,46 @@
+sink 的恢复速率除了 internal token，会不会是被 sink 并发度 32 限制的。
+
+
+
+申请 grant，用的还是 req num，但应该看 req num 和 bytes 都应该考虑到，
+
+ifc 给 ifm 的 req 里，或许需要再加上几个字段。
+
+* 如果 ifm 给各个 ifc 还是按照目前只看 iops 颁发 token 的话。考虑场景 ifc1 上有 99 个 recover，1 个 sink，ifc2 上有 1 个 recover，99 个 sink。ifm 第一个轮给到二者的 token 数量是等大的。但是 recover 是大 io，要消耗的 token 数量多，那么完成的 io 个数就少，下一轮获取 token 的时候，就变少了，长期下去，就会越来越少。（这个问题应该还好，下一轮获取 token 传递的 last_used_num 虽然变小了，但是 req_num 还是大的）
+* 如果只看 bytes，也会有问题，因为 bytes 大的拿到的 token 就多，那么低 io 的，完成会慢一些，对大 IO 有利，但大 IO 不一定优先级就高，比如 migrate 就低。
+
+搞个 waiting_bytes
+
+
+
+ifm 中的 token 消费方式会有点问题。
+
+1. 在有多种 internal io 共存的情况下，按目前这种 4 : 2 : 1 分 token，可能会存在浪费情况，不会是控制在一定范围内的。比如有 63 个 token 给到了 recover，但 recover replica 都是 64 个的，所以 recover io 也 resume 不了，但其实可以给到 sink io 使用的
+2. 另外，假设 ifc 只有 sink io 要放行，但从 ifm 得到的 token 数量有限，若 token 数不能被整除，可能出现先到的 256k sink io 由于拿不到 64 个 token 被阻塞，后到的 4k sink io 一直在放行。
+3. 对于 migrate / recover，如果总是 256 KiB io，而剩余 token 又小于 64 个的话，就会因为都消费不了而遍历 waiting_io_list_[i] 的全部元素，时间开销会更大些。
+
+造成差异的原因是目前的配额是按 4k 粒度的 token 的 4 : 2 : 1 的方式分的，还应该考虑 bytes。这个问题在限速不低的情况下，应该还好，且最终总能收敛。
+
+
+
+
+
+先把 internal io throttle 当作是同时对 bps 和 iops 限流的限流器。
+
+
+
+多种 io 共存时，不一定能分好，到时候要测下，recover 和 sink 同时进行，看看会不会是 sink 先做完。
+
+
+
+
+
+下沉的结束条件是啥，平均负载到下沉的条件了，但是还没到这个负载的节点上的 block 会被下沉吗？
+
+deallocperf 是以 block 为单位还是 extent 为单位？extent，当 all blocks empty 才会 dealloc 整个 perf extent
+
+
+
 sink 对应的并发度会不会超过 32 个，按目前 ifc 拦截的位置来看。
 
 
@@ -140,21 +183,25 @@ local io handler 里难以保证是否会 yield，如果确保不会，可以添
 
 
 
+
+
 ```
 # 创建一个 100GiB 的卷，并通过 zbs-chunk volume write <pool-name> <volume-name> <offset> <len> -i input_file 向每个 400 个 pextent 的首 256 KiB 写入数据。
 
 #!/bin/bash
 
-for i in $(seq 0 400)
+for i in $(seq 0 399)
 do
     extent_size=`expr 1024 \* 1024 \* 256`
     len=`expr 1024 \* 256`
     echo $len
     offset=`expr $extent_size \* $i`
     echo $offset
-    zbs-chunk volume write pool lp-dealloc-test $offset $len -i /var/log/zbs/zbs-taskd.INFO
+    zbs-chunk volume write pool lp-dealloc-test $offset $len -i /var/log/zbs/zbs-metad.INFO
 done
 ```
+
+zbs-chunk volume write 这个命令只在 volume 上有效，lun 不行。
 
 
 
