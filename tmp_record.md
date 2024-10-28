@@ -1,3 +1,13 @@
+不论是 hdd 还是 sata / nvme ssd，iops 跟 bps 的增长都不是同步的，所以总是要用一个 iops/bps 二元限流器
+
+lease owner 在 src 和 dst 上的有一个区别是，在 dst 上有 reposition write，相比于 reposition read 会更影响到 app read / write，怀疑点是写比读更占用磁盘能力（from zhouan）。
+
+
+
+
+
+补充更详细的 ut，比如 token 数量不足，一直没法下发。比如 4k 的 token 下发比  256k 的快
+
 sink 的恢复速率除了 internal token，会不会是被 sink 并发度 32 限制的。
 
 
@@ -35,7 +45,7 @@ ifm 中的 token 消费方式会有点问题。
 
 
 
-下沉的结束条件是啥，平均负载到下沉的条件了，但是还没到这个负载的节点上的 block 会被下沉吗？
+下沉的结束条件是啥，平均负载到下沉的条件了，但是还没到这个负载的节点上的 block 会被下沉吗？（平均负载到 0.5 - 0.05 才停止）
 
 deallocperf 是以 block 为单位还是 extent 为单位？extent，当 all blocks empty 才会 dealloc 整个 perf extent
 
