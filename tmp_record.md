@@ -1,14 +1,18 @@
+
+
 不论是 hdd 还是 sata / nvme ssd，iops 跟 bps 的增长都不是同步的，所以总是要用一个 iops/bps 二元限流器
 
 lease owner 在 src 和 dst 上的有一个区别是，在 dst 上有 reposition write，相比于 reposition read 会更影响到 app read / write，怀疑点是写比读更占用磁盘能力（from zhouan）。
 
-
+从 5.6.1 升级到 5.6.2，要考虑增加 bytes 之后，要做好旧 ifm 应该发送多少 token 给新 ifc 用的兼容
 
 
 
 补充更详细的 ut，比如 token 数量不足，一直没法下发。比如 4k 的 token 下发比  256k 的快
 
 sink 的恢复速率除了 internal token，会不会是被 sink 并发度 32 限制的。
+
+补充 token 颁发和 internal io throttle bucket 的 metric，方便查询历史情况
 
 
 
@@ -35,7 +39,7 @@ ifm 中的 token 消费方式会有点问题。
 
 
 
-先把 internal io throttle 当作是同时对 bps 和 iops 限流的限流器。
+
 
 
 
@@ -51,7 +55,9 @@ deallocperf 是以 block 为单位还是 extent 为单位？extent，当 all blo
 
 
 
-sink 对应的并发度会不会超过 32 个，按目前 ifc 拦截的位置来看。
+mid waiting io num 不超过 sink 的并发度限制（默认 32）
+
+high waiting io num 不超过 cap recover + perf recover 的并发度限制。
 
 
 
@@ -193,7 +199,23 @@ local io handler 里难以保证是否会 yield，如果确保不会，可以添
 
 
 
+循环输出命令结果
 
+```
+[root@zhiwei-node2-128-26 12:13:38 ~]$ cat stats.sh
+#!/bin/bash
+echo > iops.log
+while true;
+
+do
+    echo "=================" >> iops.log
+    date >> iops.log
+    zbs-chunk internal_io get --show_bucket_details --show_perf_details >> iops.log
+    sleep 1
+done
+```
+
+随机写入 io
 
 ```
 # 创建一个 100GiB 的卷，并通过 zbs-chunk volume write <pool-name> <volume-name> <offset> <len> -i input_file 向每个 400 个 pextent 的首 256 KiB 写入数据。

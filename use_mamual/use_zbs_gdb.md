@@ -356,6 +356,30 @@ thread apply all bt
    ```
 
    set max-value-size unlimited
+   
+   set height 0
+   
+   set print elements 0
+   
+6. 若是 intrusive list，需要考虑手动计算偏移（https://hackmd.io/@yuanC-L/HJMD9qub0）
+
+   ```
+   (gdb)  p ((zbs::chunk::ChunkServer)*0x5606fe296000).access_handler_.internal_flow_ctrl_.waiting_io_list_[2]
+   $1 = {<zbs::intrusive_list::internal::SizeHolder<true>> = {size_ = 7}, head_ = {
+       next = 0x56070ebc9ad0, prev = 0x560710821ad0}}
+   
+   (gdb) p &((zbs::chunk::InternalFlowController::TokenWaiter*)0)->node
+   $3 = (zbs::intrusive_list::ListNode *) 0xf0
+   
+   # 那么用 0x56070ebc9ad0 - 0xf0 = 0x56070ebc99e0，才是承载用户数据元素的起始地址
+   (gdb) p ((zbs::chunk::InternalFlowController::TokenWaiter)*0x56070ebc99e0)
+   $10 = {co = 0x56070e4ae1a0, start_ms = 560201692, waiter_infos = {_M_elems = {{pid = 0, block_no = 0, need_token_num = 0, need_token_loc = {container_ = {cids_ = '\000' <repeats 31 times>, field_ = {f = {0, 0, 0, 0}}}}, lacked_token_loc = {container_ = {
+               cids_ = '\000' <repeats 31 times>, field_ = {f = {0, 0, 0, 0}}}}, held_token_loc = {container_ = {cids_ = '\000' <repeats 31 times>, field_ = {f = {0, 0, 0, 0}}}}}, {pid = 8029074, block_no = 28, need_token_num = 64, need_token_loc = {container_ = {
+               cids_ = "\001\002", '\000' <repeats 29 times>, field_ = {f = {513, 0, 0, 0}}}}, lacked_token_loc = {container_ = {cids_ = "\001", '\000' <repeats 30 times>, field_ = {f = {1, 0, 0, 0}}}}, held_token_loc = {container_ = {
+               cids_ = "\002", '\000' <repeats 30 times>, field_ = {f = {2, 0, 0, 0}}}}}}}, node = {next = 0x56070cfa3ad0, prev = 0x5606fe394f18}}
+   ```
+
+   
 
 [参考1](https://zhuanlan.zhihu.com/p/74897601)，[参考2](https://cloud.tencent.com/developer/article/1142947)
 
