@@ -1,3 +1,15 @@
+已经 sync 过，所以 gen 是有效的
+
+
+
+not alloc 或者是数据在 cap layer 并全 0，可以跳过写 dst
+
+写全 0 的情况，应该还是要 lsm 读磁盘，只是不会在 dst 上写磁盘，所以这种先忽略。
+
+
+
+
+
 
 
 不论是 hdd 还是 sata / nvme ssd，iops 跟 bps 的增长都不是同步的，所以总是要用一个 iops/bps 二元限流器
