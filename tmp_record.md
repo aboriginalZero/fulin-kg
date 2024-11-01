@@ -20,6 +20,8 @@ lease owner 在 src 和 dst 上的有一个区别是，在 dst 上有 reposition
 
 
 
+补充一个在限速很低时，稀疏卷恢复很快的 ut
+
 补充更详细的 ut，比如 token 数量不足，一直没法下发。比如 4k 的 token 下发比  256k 的快
 
 sink 的恢复速率除了 internal token，会不会是被 sink 并发度 32 限制的。
