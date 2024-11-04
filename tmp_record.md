@@ -1,3 +1,15 @@
+在 loose_medium_load_ratio, medium_load_ratio 区间，由于不会执行局部化，所以也不会保证拓扑安全和本地化。
+
+在 pid 的 prefer local 不健康时，也不会
+
+
+
+
+
+在 ifc 中加一个针对 reposition cmd 是 17 min 的超时，drain cmd 是 20 min 的超时，但 drain handler 自己还会有 block 级别的下沉，或许应该估算出一个 block 级别的超时时间。
+
+
+
 已经 sync 过，所以 gen 是有效的
 
 
@@ -699,7 +711,7 @@ fio -ioengine=libaio -invalidate=1 -iodepth=128 -ramp_time=0 -runtime=300000 -ti
     
     // 从 lextent table 中获取 lextent 的 cap/perf pid 信息
     LExtent lextent;
-    meta->GetLxtent(lid, &lextent);
+    meta->GetLExtent(lid, &lextent);
     
     // 从 pextent table 中获取 pextent 的 location/preferred_cid/thin_provision 信息
     PExtent cap_pextent;
