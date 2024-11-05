@@ -1,3 +1,34 @@
+access mgr 通过 recove_cmd 发给 access handler
+
+access handler 通过 in_recover_pids 发给 access handler
+
+
+
+一个 pid 不能既在 recover_cmd 和 special_recover_cmd，又在 revoke_reposition_cmd。
+
+
+
+需要保证 meta 一次只会下发一个 lid 的 pid reposition
+
+若要生成一个 pid 的 recover，且发现 paired pid 的 migrate 存在，（以及若不处于高负载）那么主动去 cancel 它，等它 cancel 掉了再下发（如果快完成了就等待，否则直接取消），不论是完成还是被主动取消了，都可以复用现有机制，会被心跳上报给 meta 的，meta 会清理这些 start_ms 设置为 kCmdInvalidMs 的命令。
+
+recover 的 slot 要比 migrate 略大个 0.1
+
+
+
+access 侧需要加一个同一个 lid 只能有一个 pid 做 reposition 的检查，只是依赖 meta 下发 reposition cmd 的保证还不够用。
+
+
+
+1. 首先要允许生成，所以要让 recover 的 slots 略大一些
+2. meta 跟 access 之间拉一个 notify cancel reposition cmd，在 meta 感知到有同一个 pid 的 migrate 已经发了，有 pid / paired pid recover 需要执行时；
+3. recover 时若发现有自己的 migrate 时，是否需要取消？（不需要，因为如果允许 migrate，说明他没有丢分片）也可以取消，能发起 recover，说明缺分片了，依照之前状态发出的 migrate 也无效了。
+4. 
+
+
+
+
+
 以 cap layer 为例：
 
 * [0, 70]，若 prefer local 节点健康，需要做局部化（目前满足）否则应该满足 topo safety && 双活 2 ：1（目前缺失）；
