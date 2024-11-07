@@ -1,3 +1,19 @@
+可以考虑在 zbs cli 中对 RecoverHandler::ListMigrateInfo 的结果排序。
+
+
+
+
+
+acccess 限制 1 个 lextent 里同时只能有 1 个 pextent 做 reposition，可以避免同一个 lextent 的 cap 和 perf 的 reposition 互相影响
+
+比如 perf recover 结束需要 set lease expire，这个时候 cap recover 就失败了。
+
+
+
+
+
+
+
 access mgr 通过 recove_cmd 发给 access handler
 
 access handler 通过 in_recover_pids 发给 access handler
