@@ -1,14 +1,12 @@
+保守的超时检查策略，在每个地方检查下，如果超过 80% 的时间，进度才完成 20%，那么主动放弃。
+
+在每个地方都加一个这个保守的超时策略，打印日志时区别对待。
+
+
+
+
+
 可以考虑在 zbs cli 中对 RecoverHandler::ListMigrateInfo 的结果排序。
-
-
-
-
-
-acccess 限制 1 个 lextent 里同时只能有 1 个 pextent 做 reposition，可以避免同一个 lextent 的 cap 和 perf 的 reposition 互相影响
-
-比如 perf recover 结束需要 set lease expire，这个时候 cap recover 就失败了。
-
-
 
 
 
