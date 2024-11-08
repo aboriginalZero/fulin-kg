@@ -1,3 +1,23 @@
+ring id 变更打印一下日志
+
+
+
+如果是超高负载，就不取消 migrate，否则让在超过 80% 的时间后还没完成进度的 20% 的 migrate cmd 取消
+
+让 recover 的 avail cmd slots 更高。
+
+添加 is_thin or thick 的值
+
+可以考虑在 zbs cli 中对 RecoverHandler::ListMigrateInfo 的结果排序，3 部分分开展示
+
+
+
+cancel_migrate_pids 中需要填充 replace cid，
+
+在 recover mgr 中缓冲一份各个 chunk 在 3 种 pk 中的 load。
+
+
+
 保守的超时检查策略，在每个地方检查下，如果超过 80% 的时间，进度才完成 20%，那么主动放弃。
 
 在每个地方都加一个这个保守的超时策略，打印日志时区别对待。
@@ -6,7 +26,7 @@
 
 
 
-可以考虑在 zbs cli 中对 RecoverHandler::ListMigrateInfo 的结果排序。
+
 
 
 
