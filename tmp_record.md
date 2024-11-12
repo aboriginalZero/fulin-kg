@@ -1,3 +1,43 @@
+reposition cmd 在 access 侧有 3 种状态：
+
+1. pending：还没被调度；
+2. running && pausing：进入 running 队列，但没拿到并发度；
+3. running && !pausing：进入 running 队列，且拿到并发度，正在执行。
+
+
+
+在这组 patch 前：
+
+1. 同一个 lextent 的 migrate cmd 完成，recover cmd 才能生成并下发；
+2. access 收到这个 recover cmd 后，需要等 pending + running 队列中的所有 migrate / recover cmd 都完成，才能执行它。
+
+
+
+有了第 1 个 patch 后：
+
+1. 同一个 lextent 的 migrate cmd 完成，recover cmd 才能生成并下发；
+2. acccess 收到这个 recover cmd 后，需要等 running 队列中的所有 migrate / recover cmd 都完成，才能执行它。
+
+
+
+有了第 3 个 patch 后：
+
+1. 同一个 lextent 的 migrate cmd 会被取消，并在取消后，recover cmd 生成并下发（相较之前，有所改进）；
+2. acccess 收到这个 recover cmd 后，需要等 running 队列中的所有 migrate / recover cmd 都完成，才能执行它（也就是你提到的问题）。
+
+
+
+要解的话，在 meta 侧有 recover cmd 下发的前提下，取消跟这个 recover cmd 同一个 lease owner 上，不满足这两个条件的 migrate cmd：
+
+1. 已经在 10% 的超时时间（17min）里，完成了 90% 的进度；
+2. replace cid 不处于超高负载。
+
+
+
+
+
+
+
 ring id 变更打印一下日志
 
 
@@ -21,10 +61,6 @@ cancel_migrate_pids 中需要填充 replace cid，
 保守的超时检查策略，在每个地方检查下，如果超过 80% 的时间，进度才完成 20%，那么主动放弃。
 
 在每个地方都加一个这个保守的超时策略，打印日志时区别对待。
-
-
-
-
 
 
 
@@ -78,7 +114,7 @@ access 侧需要加一个同一个 lid 只能有一个 pid 做 reposition 的检
 
 
 
-在 ifc 中加一个针对 reposition cmd 是 17 min 的超时，drain cmd 是 20 min 的超时，但 drain handler 自己还会有 block 级别的下沉，或许应该估算出一个 block 级别的超时时间。
+在 ifc 中加一个针对 reposition cmd 是 17 min 的超时，drain cmd 是 20 min 的超时，但 drain handler 自己还会有 block 级别的下沉，或许应该估算出一个 block 级别的超时时间，可能是 8 9 s？
 
 
 
@@ -1216,6 +1252,12 @@ tower 首页的存储性能图标对应 zbs 的哪些 metric？
 * 网络亚健康探测（集群层面） /var/log/zbs/network-monitor.log
 
     https://docs.google.com/document/d/1MK0VRK5WcRF14N36PpJ_O0Y-HUHG-fxe9q-usfAAevk/edit#heading=h.jz7vtdo3hm60
+
+    ```
+    fping <data_ip> <mgt_ip> -C 30 -t 199 -i 1 -r 1 -p 400 -q 
+    ```
+
+    发送 30 个 ping 包，超时时间为 100ms，发送间隔为 1ms，如果第一次 ping 失败会重试一次，两次 ping 之间的间隔为 400 毫秒。
 
 * data channel 探测（chunk 层面）/var/log/zbs/zbs-chunkd.INFO
 
