@@ -1,3 +1,22 @@
+scvm 模拟丢包
+
+```
+iptables -A INPUT -p icmp --icmp-type echo-request -s 10.0.11.0/24 -j DROP
+iptables -D INPUT -p icmp --icmp-type echo-request -s 10.0.11.0/24 -j DROP
+```
+
+esxi 启停网口
+
+```
+esxcli network ip interface set --interface-name=vmk2 --enabled=true
+esxcli network ip interface set --interface-name=vmk2 --enabled=false
+esxcli network ip interface list
+```
+
+
+
+
+
 insight metric
 
 1. zbs_ioreroute_cluster_total_num 表示集群中的 scvm 个数，不论是否健康，只关注 SCVM 是否在集群中；
