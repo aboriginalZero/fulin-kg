@@ -1,40 +1,12 @@
-reposition cmd 在 access 侧有 3 种状态：
-
-1. pending：还没被调度；
-2. running && pausing：进入 running 队列，但没拿到并发度；
-3. running && !pausing：进入 running 队列，且拿到并发度，正在执行。
-
-
-
-在这组 patch 前：
-
-1. 同一个 lextent 的 migrate cmd 完成，recover cmd 才能生成并下发；
-2. access 收到这个 recover cmd 后，需要等 pending + running 队列中的所有 migrate / recover cmd 都完成，才能执行它。
-
-
-
-有了第 1 个 patch 后：
-
-1. 同一个 lextent 的 migrate cmd 完成，recover cmd 才能生成并下发；
-2. acccess 收到这个 recover cmd 后，需要等 running 队列中的所有 migrate / recover cmd 都完成，才能执行它。
-
-
-
-有了第 3 个 patch 后：
-
-1. 同一个 lextent 的 migrate cmd 会被取消，并在取消后，recover cmd 生成并下发（相较之前，有所改进）；
-2. acccess 收到这个 recover cmd 后，需要等 running 队列中的所有 migrate / recover cmd 都完成，才能执行它（也就是你提到的问题）。
-
-
-
-要解的话，在 meta 侧有 recover cmd 下发的前提下，取消跟这个 recover cmd 同一个 lease owner 上，不满足这两个条件的 migrate cmd：
-
-1. 已经在 10% 的超时时间（17min）里，完成了 90% 的进度；
-2. replace cid 不处于超高负载。
 
 
 
 
+GetMigrateScanIntervalMsByLoad 用上 healthy_chunk_load_map_，少一次访问 chunk table，并且可以把集群负载的集群信息给到 zbs cli。
+
+recover cmd 中有了 is_thick 信息，所以 zbs cli 中可以区分 3 种 pk 类型展示（可以考虑在 zbs cli 中对 RecoverHandler::ListMigrateInfo 的结果排序，3 部分分开展示）
+
+让 recover 的 avail cmd slots 更高 0.1。（看起来不用这么弄，因为反正也会取消）
 
 
 
@@ -42,60 +14,9 @@ ring id 变更打印一下日志
 
 
 
-如果是超高负载，就不取消 migrate，否则让在超过 80% 的时间后还没完成进度的 20% 的 migrate cmd 取消
-
-让 recover 的 avail cmd slots 更高。
-
-添加 is_thin or thick 的值
-
-可以考虑在 zbs cli 中对 RecoverHandler::ListMigrateInfo 的结果排序，3 部分分开展示
-
-
-
-cancel_migrate_pids 中需要填充 replace cid，
-
-在 recover mgr 中缓冲一份各个 chunk 在 3 种 pk 中的 load。
-
-
-
 保守的超时检查策略，在每个地方检查下，如果超过 80% 的时间，进度才完成 20%，那么主动放弃。
 
 在每个地方都加一个这个保守的超时策略，打印日志时区别对待。
-
-
-
-
-
-
-
-access mgr 通过 recove_cmd 发给 access handler
-
-access handler 通过 in_recover_pids 发给 access handler
-
-
-
-一个 pid 不能既在 recover_cmd 和 special_recover_cmd，又在 revoke_reposition_cmd。
-
-
-
-需要保证 meta 一次只会下发一个 lid 的 pid reposition
-
-若要生成一个 pid 的 recover，且发现 paired pid 的 migrate 存在，（以及若不处于高负载）那么主动去 cancel 它，等它 cancel 掉了再下发（如果快完成了就等待，否则直接取消），不论是完成还是被主动取消了，都可以复用现有机制，会被心跳上报给 meta 的，meta 会清理这些 start_ms 设置为 kCmdInvalidMs 的命令。
-
-recover 的 slot 要比 migrate 略大个 0.1
-
-
-
-access 侧需要加一个同一个 lid 只能有一个 pid 做 reposition 的检查，只是依赖 meta 下发 reposition cmd 的保证还不够用。
-
-
-
-1. 首先要允许生成，所以要让 recover 的 slots 略大一些
-2. meta 跟 access 之间拉一个 notify cancel reposition cmd，在 meta 感知到有同一个 pid 的 migrate 已经发了，有 pid / paired pid recover 需要执行时；
-3. recover 时若发现有自己的 migrate 时，是否需要取消？（不需要，因为如果允许 migrate，说明他没有丢分片）也可以取消，能发起 recover，说明缺分片了，依照之前状态发出的 migrate 也无效了。
-4. 
-
-
 
 
 
