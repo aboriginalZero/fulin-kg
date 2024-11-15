@@ -1,22 +1,6 @@
-
-
-
-
-GetMigrateScanIntervalMsByLoad 用上 healthy_chunk_load_map_，少一次访问 chunk table，并且可以把集群负载的集群信息给到 zbs cli。
-
 recover cmd 中有了 is_thick 信息，所以 zbs cli 中可以区分 3 种 pk 类型展示（可以考虑在 zbs cli 中对 RecoverHandler::ListMigrateInfo 的结果排序，3 部分分开展示）
 
-让 recover 的 avail cmd slots 更高 0.1。（看起来不用这么弄，因为反正也会取消）
-
-
-
-ring id 变更打印一下日志
-
-
-
-保守的超时检查策略，在每个地方检查下，如果超过 80% 的时间，进度才完成 20%，那么主动放弃。
-
-在每个地方都加一个这个保守的超时策略，打印日志时区别对待。
+zbs cli 中在 zbs-meta reposition show 中打印 load ratio
 
 
 
@@ -158,7 +142,6 @@ elf  一直以来创建虚拟卷模板，创建的是 volume 而不是 snapshot�
 5. recover src 也有可能总是选到同一个，此时若 lease owner 与 recover src 网络失联，但 recover src 与 meta leader 是可以正常通信的，会导致 recover 一直无法完成。
 6. 若数据块的 Lease owner 发生转移，恢复命令无法继续执行，recover mgr 可以对其主动失败处理，利用 access manager 里的 pid_owner 或 lid_owner
 6. 后续测试轮转调度是否有效，可以的方式是代码里指定给到 volume  A 的 io 一定带上 recover flag，B 的是 sink flag，然后用 fio 打到这两个 volume 上来模拟多种内部 IO 同时进行的场景，看此时的轮转调度是否有效。 
-6. recover handler 给 RecoverLayerCommon 传入的 throttle，最后还是给了 recover handler 自己用，在这个 patch 里改一下。throttle 应该由 access handler 直接暴露比较合适。目前 layer_throttle 传给 recover_handler 根本没用上。
 
 
 
