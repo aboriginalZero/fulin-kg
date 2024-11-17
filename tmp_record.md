@@ -1,3 +1,19 @@
+将 cap 层数据读到 cap read cache 的条件是 40 分钟内读 3 次，每次间隔 15 秒以上。要特别注意的是，一定是读的下沉后的数据。
+
+
+
+
+
+
+
+1. 从 pending 到 paused，若耗时太长，说明 meta 给 reposition cmd 给的太多了，笨一点的方式是直接丢掉，好一点的就是反馈给 meta，让他少发点（比较复杂）；
+2. 从 paused 到 resumed，若耗时太长，说明 access 并发度太高了，应该让并发度低一些；
+3. 从 resumed 到 finished，若耗时太长，说明 lsm 太慢了或者拿 token 太慢了 ，不论是哪个原因，access 能做的就是让并发度低一些，可能有所缓解。
+
+
+
+
+
 recover cmd 中有了 is_thick 信息，所以 zbs cli 中可以区分 3 种 pk 类型展示（可以考虑在 zbs cli 中对 RecoverHandler::ListMigrateInfo 的结果排序，3 部分分开展示）
 
 zbs cli 中在 zbs-meta reposition show 中打印 load ratio
