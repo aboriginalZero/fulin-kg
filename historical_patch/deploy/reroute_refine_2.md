@@ -15,6 +15,12 @@ esxcli network ip interface list
 
 
 
+io reroute 多久没给 insight 心跳，他就会报警
+
+判断 IO reroute 不工作的方式是没有按一定频率跟 insight 心跳，如果超过 n 次没有跟 insight 心跳，主动退出程序？
+
+zbs-insight 每收到一次日志有可能打印一下吗？zbs-insight 如果没有收到心跳或者跟上一次收到的不一样，打印一下
+
 
 
 insight metric

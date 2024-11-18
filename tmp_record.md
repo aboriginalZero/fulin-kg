@@ -1,8 +1,4 @@
-将 cap 层数据读到 cap read cache 的条件是 40 分钟内读 3 次，每次间隔 15 秒以上。要特别注意的是，一定是读的下沉后的数据。
-
-
-
-
+zbs 5.6.x 中将 cap 层数据读到 cap read cache 的条件是 40 分钟内读 3 次，每次间隔 15 秒以上。要特别注意的是，一定是读的下沉后的数据。
 
 
 
@@ -12,9 +8,10 @@
 
 
 
-
-
 recover cmd 中有了 is_thick 信息，所以 zbs cli 中可以区分 3 种 pk 类型展示（可以考虑在 zbs cli 中对 RecoverHandler::ListMigrateInfo 的结果排序，3 部分分开展示）
+
+1. 只有 lease owner 上的 Total Migrate Speed 才有值，而这也是会给到 meta 的值，才会有 reposition list，其中 STATE = INIT 的 pid 表示在 recover handler 的 pending 队列中，STATE = READ / WRITE 的 pid 表示正在执行，
+2. From Local Speed 指的是该节点作为本地
 
 zbs cli 中在 zbs-meta reposition show 中打印 load ratio
 
@@ -57,7 +54,7 @@ not alloc 或者是数据在 cap layer 并全 0，可以跳过写 dst
 
 补充更详细的 ut，比如 token 数量不足，一直没法下发。比如 4k 的 token 下发比  256k 的快
 
-sink 的恢复速率除了 internal token，会不会是被 sink 并发度 32 限制的。
+sink 的恢复速率除了 internal token，会不会是被 sink 并发度 32 限制的。比如 cap layer 是 ssd 时，下沉会不会偏慢。
 
 补充 token 颁发和 internal io throttle bucket 的 metric，方便查询历史情况
 
@@ -102,15 +99,13 @@ access_stats_->layer_stats  的统计未必准确：
 
 recover write 也有可能 unmap 写，这部分不需要统计进来。
 
-1. OP::VEXTENT_UNMAP 和 OP::PEXTENT_UNMAP 的区别，VEXTENT_UNMAP 是否也应该忽略
+1. access_stats_->layer_stats 中是否需要忽略 ELSMNotAllocData
 
-2. access_stats_->layer_stats 中是否需要忽略 ELSMNotAllocData
+2. throttle_latency_ns_ 为啥只在 LocalIOHandler::LocalIOStart() 中更新
 
-3. throttle_latency_ns_ 为啥只在 LocalIOHandler::LocalIOStart() 中更新
+3. RecoverIOStats::from_local_recover_counter 的更新可以放在 pextent io handler 吗？
 
-4. RecoverIOStats::from_local_recover_counter 的更新可以放在 pextent io handler 吗？
-
-5. unmap 形式的 recover write 需要更新吗？
+4. unmap 形式的 recover write 需要更新吗？
 
     ```
     layer_common_->UpdateCounter(ctx->replica_pextent_info, &RecoverIOStats::from_local_migrate_counter, ctx->cur_data_len);
@@ -174,9 +169,9 @@ elf  一直以来创建虚拟卷模板，创建的是 volume 而不是 snapshot�
 
    验证一下，没有 app io 的情况下，调整这个值，需要影响到 internal io 
 
-4. perf dst 值总是很小，原因大概率是因为 agile recover，也就是 recover read 能达到 limit，但是 recover write 不能。
+4. perf dst 值总是很小，原因大概率是因为 agile recover，也就是 recover read 能达到 limit，但是 recover write 不能（不是的，这里是 recover len 给的值不对，sijie 已修复）
 
-5. agile recover 虽然 recover write bps 减小了，但是 recover read bps 还是 256 KiB，所以 recover 整体还是慢，会被 internal io limit 限制，internal io limit 如果有 iops 来限制，iops 角度没用满的话，继续下发，应该也可以。
+5. agile recover 虽然 recover write bps 减小了，但是 recover read bps 还是 256 KiB，所以 recover 整体还是慢，会被 internal io limit 限制，internal io limit 如果有 iops 来限制，iops 角度没用满的话，继续下发，应该也可以。（不是的，agile recover dst 在 local / pextent io handler 侧还是按照 256k 来算的，不确定在 access recover counter 中是否也是这样）
 
 
 
@@ -219,29 +214,17 @@ LSM 在处理写 IO 时，有三个性能拐点：
 
    
 
-如果 local io handler 侧没有 throttle 的话，过了 access io throttle 之后，就会直接下发，
-
-还是得保留，只在 access 侧限流没法保证 lsm 侧的限流情况，因为数据是采集上来的，很可能不准。且 internal io throttle 才有真正的 bytes 信息。
-
-
-
-
-
 fc 的 intercept io，是在 access io handler 处拦截 perf app io。
 
 cap io throttle，是在 local io handler 处拦截 internal cap io + app cap io。
 
 
 
-通过 zbs-meta volume sink_by_id 来主动下沉一个卷的过程
-
-1. 收到 drain cmd 之后，以每个 block 为单位做 sink
-
 
 
 Flow Controller 运行在 Access Lease Owner 上，控制下发 NeedAlloc IO 的速度；Flow Manager 运行在 Local IO Handler 上，负责分配 Token
 
-1. Data Channel 是怎么实现的保序性质，协调 Token 和 IO 的顺序？
+1. Data Channel 是怎么实现的保序性质，协调 Token 和 IO 的顺序？依赖 tcp 实现 gen 保序
 
 2. 怎么说更恰当的方式是感知到当前 Recover 的进度？
 
@@ -263,44 +246,6 @@ Access 在 Sync perf extent 时，从 LSM 获取 perf extent valid bitmap，并�
 
 
 
-1. zbs-chunk migrate / recover list 可以按照  pid 来排序，perf 和 cap 分开，不是按照 start_ms 来看谁先执行。可以先按状态，状态里面再按 pid 排序
-2. 去掉 paused_recover_cmds_，用 running  - in_reover 就是还没执行的
-3. in_recover_pids 的赋值，只用在一个地方，AccessHandler::HandleAccessResponse 这里应该可以不用填充，因为 一定会在 pending + running pids 中。
-
-
-
-让 access 侧 recover 的优先级一定高于 migrate，那么假设在升级过程中，还有 recover，但此时业务 io 比较猛，把单节点撑满了，此时如果 migrate 一直被 recover 抑制的话，也还好？perf 会有限流，cap 写也是下沉到其他节点。
-
-
-
-让同一个 lid 的 pid recover cmd 能够相对于 migrate cmd 后来居上
-
-1. meta 生成：在 RecoverFilterByExistCmd 中，如果发现在 distribute cmds 中的 pid / paired pid 是 migrate，那么还是允许生成 recover；
-
-2. meta 下发：recover 和 migrate 共享同一个 avail cmd slots，但让 recover 的判断阈值略高于 migrate；
-
-    [ZBS-27730](http://jira.smartx.com/browse/ZBS-27730)
-
-3. access 接受：如果 pid / paired pid 的 migrate cmd 只是在 pending，还没开始 running（后续粒度可以改成更细的，比如已经 running，但是处于 paused），那么可以 erase migrate cmd 并 insert recover cmd（std::map，排序依旧是 start_ms，可以用 insert_or_assign 来做 value 覆盖）
-
-    如果有 recover cmd 在 pending，不允许同一个 lid 的 recover cmd 进入 pending 队列
-
-    如果有 recover cmd 在 pending，不允许同一个 lid 的 migrate cmd 进入 pending 队列
-
-    如果有 migrate cmd 在 pending，不允许同一个 lid 的 migrate cmd 进入 pending 队列
-
-    如果有 migrate cmd 在 pending，允许同一个 lid 的 recover cmd 进入 pending 队列并替换掉（pid 或 paired pid 都允许，但是）
-    
-    [ZBS-28060](http://jira.smartx.com/browse/ZBS-28060)
-    
-4. access 放弃：如果开始执行命令的时候，可用超时时间只剩 1 min，那么就主动放弃，等待 meta 重新下发，重新开始计时。
-
-    在 recover layer common 的 CheckRepositionConcurrency 中，如果发现 reposition_ratio = 0 并且只有 1 min 就超时了，那么主动失败，等待 meta 发新的。
-
-    [ZBS-28086](http://jira.smartx.com/browse/ZBS-28086)
-
-https://smartx1.slack.com/archives/C06B3AWUU9M/p1721875571237189
-
 
 
 1. flat_hash_map to btree_map，从内存访问的角度更好
@@ -308,21 +253,7 @@ https://smartx1.slack.com/archives/C06B3AWUU9M/p1721875571237189
 
 
 
-关注 zbs_chunk_cap_io_throttle_migrate_io_cur_io_depth metric 可以作证升级期间的慢是不是因为 migrate 抢了 recover 的 cap 并发度限制。
-
-
-
-io reroute 多久没给 insight 心跳，他就会报警
-
-判断 IO reroute 不工作的方式是没有按一定频率跟 insight 心跳，如果超过 n 次没有跟 insight 心跳，主动退出程序？
-
-zbs-insight 每收到一次日志有可能打印一下吗？zbs-insight 如果没有收到心跳或者跟上一次收到的不一样，打印一下
-
-
-
-如果 app io 流量没有超过  zbs 能够发挥磁盘的上限，那么智能调节的机制应该是保持 internal io 和 app io 的使用总和不超过 zbs 发挥磁盘的上限，而不是一旦有 20 MiB/s app io 来了，就让 internal io 减到最低。之后可以考虑让 app io busy bps 在一个基准值的基础上动态变化。具个简单的例子，比如 app io 大于 20 MiB/s，internal io limit 减一半，只有 app io 大于 40 MiB/s，internal io limit 才继续再减一半。而如果 app io 大于磁盘上限，那可以考虑让 internal io 降低的快一点，且下限低一些。
-
-算 app io + internel io 不超过 zbs 能发挥磁盘的最大值。
+关注 zbs_chunk_cap_io_throttle_migrate_io_cur_io_depth metric 可以作证升级期间的 cap 慢是不是因为 migrate 抢了 recover 的 cap 并发度限制。
 
 
 
@@ -353,65 +284,21 @@ MLAG 集群中不同节点能力有差，有时候升级慢是在重启某个 ch
 
 
 
-1. 开了限速后，prometheus 中的 repositon speed bps 还是会有超过时刻会超过上限（是把全 0 统计进去了吗？）
 
-    观察 perf app io 下降再上涨的时段，perf reposition io 的性能曲线。
 
-2. perf 和 cap inernal io 除了考虑磁盘能力，还需要考虑他两加起来不能超过网络带宽的 50%，如果只有单层数据待恢复，那应该允许他用满 50%。
+1. perf 和 cap inernal io 除了考虑磁盘能力，还需要考虑他两加起来不能超过网络带宽的 50%，如果只有单层数据待恢复，那应该允许他用满 50%。
 
     目前的实现里，假设 cap / perf 都在满负载恢复，两边都 500 MB/s，那 app io 可能就抢不到网络带宽了。
 
-4. 如果 app io 流量没有超过  zbs 能够发挥磁盘的上限，那么智能调节的机制应该是保持 internal io 和 app io 的使用总和不超过 zbs 发挥磁盘的上限，而不是一旦有 20 MiB/s app io 来了，就让 internal io 减到最低。之后可以考虑让 app io busy bps 在一个基准值的基础上动态变化。具个简单的例子，比如 app io 大于 20 MiB/s，internal io limit 减一半，只有 app io 大于 40 MiB/s，internal io limit 才继续再减一半。而如果 app io 大于磁盘上限，那可以考虑让 internal io 降低的快一点，且下限低一些。
+2. recover dst 没有优选 topo safety，可能造成 recover 后要立马 migrate。
 
-    算 app io + internel io 不超过 zbs 能发挥磁盘的最大值。
+3. access reposition 的 Counter 改成 metric，否则影响前端展示、metric 使用，检查 recover/migrate speed 在前端界面和 prometheus 中的数值是否准确，meta 侧跟 chunk 侧的 total speed 和 local speed 和 remote speed；
 
-1. internal io throttle 加入 iops 的限制，综合考虑 sink 和 reposition
+4. access 在读 COW 出来还没写过的 pextent 时，如果读全部副本都失败，主动 refresh location 去读 parent 上的数据；
 
-1. zbs-chunk metric reposition 中作为 lease owner 的 access 的值在 migrate 进行时始终为 0 （可能是 flag 用错都统计到 sink 的问题，sijie 修改了）
-
-1. recover dst 没有优选 topo safety，可能造成 recover 后要立马 migrate。
-
-1. 升级过程中避免迁移命令影响恢复命令的生成，[ZBS-27730](http://jira.smartx.com/browse/ZBS-27730)；
-
-4. access reposition 的 Counter 改成 metric，否则影响前端展示、metric 使用，检查 recover/migrate speed 在前端界面和 prometheus 中的数值是否准确，meta 侧跟 chunk 侧的 total speed 和 local speed 和 remote speed；
-
-6. access 在读 COW 出来还没写过的 pextent 时，如果读全部副本都失败，主动 refresh location 去读 parent 上的数据；
-
-7. 在 133.171 上挂载 8 个 64T 的大卷做 ummap 试一下，如果还是慢，说明有可能是接入协议的问题。
+5. 在 133.171 上挂载 8 个 64T 的大卷做 ummap 试一下，如果还是慢，说明有可能是接入协议的问题。
 
     在 zbs 日志中看一下有没有 fail to ping 的日志，另外看一下多个卷做 unmap 的 zbs-chunk show_polling_stats 中 chunk-main 的 CPU 占用率。
-    
-12. migrate 和 recover 各自维护自己的 cmd slots，升级期间，限制 migrate slots 小一些
-
-     升级过程中其他 migrate 如 even migrate 等是否可以暂缓进行，仅保留 uneven rebalance
-
-
-
-```
-// 要么从时间的角度出发，要么从 pid 扫描的角度出发
-
-// 退出维护模式，给一个通知，这里记录下当前 recover scan pid，
-// 确保在 recover scan 到所有的 pid 后发现没有待恢复的，才允许 distribute & generate migrate cmd
-// 如果有待恢复的，但是由于节点/剩余空间不够导致一直无法完成，那 migrate 就一直无法下发了。(这种情况，升级一直无法完成)
-// 还有一个点是如果还有在维护模式的 pextent，那它在刚进入维护模式 1 min 内也不会恢复，不过期待进入/退出维护模式应该在 1 min 内做完。
-
-// 维护模式期间产生的 recover cmd 还是有可能被 migrate
-// 进入维护模式，此时新分配副本尽量不会分配到这（维护模式期间节点下线的话，就一定不会分配过来），
-// 在退出维护模式后可能引发迁移，所以可以从进入维护模式就不让迁移？（新副本分配到其他节点了，等这个节点上限之后，发现给到他的 localization / topo rank / rebalance 会更合适）
-
-// 如果待下发命令中有 recover cmd
-// 如果有 need recover，
-// 这里扫描 pextent table 中
-// 要获取 need recover 的个数，就必然要扫描一遍的 pid。
-// 在维护模式节点上的副本 IO timeout 会被更快的剔除副本。
-// 维护模式用在节点计划内停机维护的场景，一次只会有 1 个节点进入维护模式
-```
-
-
-
-目前同一个 volume 分配的 extent 都是采用的同一个策略，在一个策略在分配所有的 extent 之前就已经决定好了，而不是每一个 extent 决定一个策略，需要修改。http://gerrit.smartx.com/c/zbs/+/67339/2，这个 patch 的做法性能不够优秀。
-
-验证方式是在没有 topo 配置的情况下，在集群略低于高负载的时候，创建一个 normal thick 大卷，之前的方式是 volume 中所有 extent 都会按本地优先分配，把 prefer local 的空间耗尽，再分配到其他节点，但现在会先按本地优先分配，当 prefer local 进入高负载后，按容量均衡分配到剩余空间更多的节点。
 
 
 
@@ -454,16 +341,11 @@ replica sync gen 的时候，如果发现他有 temporary replica，也会一起
 
 remove replica 和 replace replica 这两个 rpc 很重要，理解形参各个字段的含义、副本被剔除/替换的时机、access 什么时候会调用
 
-
-
-
-
 remove replica rpc 时会把那个 cid 从 pentry 中 clear 掉，这样在 PhysicalExtentTableEntry::UpdateReplicaInfo 的返回值就是 False，HandlePExtentInfo 也是 False，等到对应的临时副本先回收，她才被回收。
 
 meta 认为的要回收的临时副本，会将这个 pentry garbage 设成 true，valid = 0；
 
-等 chunk data report 的时候，对于每个副本，都通过 ReplicaIsValid 检查是否可以删除，
-一个是 lsm 上报所有的副本，这些副本里
+等 chunk data report 的时候，对于每个副本，都通过 ReplicaIsValid 检查是否可以删除
 
 失败副本里不会被 found
 
@@ -479,60 +361,25 @@ pentry 的 rim_cid 只会在 remove replica 的时候被设置。
 
 
 
-1. corrupt 状态的 pxtent，读它的时候是在 sync 阶段就返回 ECAllReplicaFail 还是等到 read 的时候？
+corrupt 状态的 pxtent，读它的时候是在 sync 阶段就返回 ECAllReplicaFail 还是等到 read 的时候？
 
-   读的时候会去 sync 吗？
+读的时候会去 sync 吗？
 
-   sync 过一次什么时候会再次 sync？看起来只有在 ENotFoundOrigin 时会 RefreshChildExtentLocation，并主动触发一次重新 sync。
+sync 过一次什么时候会再次 sync？看起来只有在 ENotFoundOrigin 时会 RefreshChildExtentLocation，并主动触发一次重新 sync。
 
-   special recover 不需要 sync 吗？
-
-2. zbs-chunk migrate list 中
-
-   1. 只有 lease owner 上的 Total Migrate Speed 才有值，而这也是会给到 meta 的值，才会有 reposition list，其中 STATE = INIT 的 pid 表示在 recover handler 的 pending 队列中，STATE = READ / WRITE 的 pid 表示正在执行，
-   2. From Local Speed 指的是该节点作为本地
-
-3. 分开设置 recover 和 migrate 的单次 scan 上限，generate recover cmd 的过程中如果有了 migrate cmd，是可以打断他的。
-
-   用 zbs-meta pextent find need_recover 可以显示。
-
-   目前的做法，没法确保一定没有数据。如果是因为选不出 recover src/dst，且待生成的数量少于 1024，比如 cmd slots 不足、可用节点数量不足、集群容量不足导致的，会造成通过 zbs-meta cluster summary 拿到的 ongoing / pending recover num 相加值为 0。
-
-   1. 把 recover 的分页跟 Migrate 的独立开来，并改大点。减少还有待恢复数据但却先下发 migrate cmd 把 cmd slot 等资源用满的情况；
-
-      tuna 是通过自己翻页查找 need recover pextent 来判断还有多少待恢复数据，所以暂时没必要把 2 个分页大小独立开来，虽然 recover 自己可以做到单次 scan 1024 * 1024 个 pid 耗时 10s 内，影响的只是 zbs-meta cluster summary 和 tower 上的展示。
-
-      migrate 和 recover 用各自的 cmd slot 可以避免吗？
-
-   2. 如果 generate recover cmd ，可以清空待下发的 migrate cmd 吗
-
-      已下发的 migrate cmd，只要他还没完成，recover handler 收到同一 pid 的 recover cmd 会被直接丢弃，不会执行。
-
-      access 做如果引入 recover cmd 的 cancel 机制，太麻烦了
-
-      如果 app io 写失败，会认为 reposition io 写也会失败。
-
-   3. recover handler 中的执行队列，可否做成 ever exist = false 且 origin_pid = 0 的 pid 优先执行，其他 pid 按 FIFO 的顺序执行。
-
-   4. 进出维护模式，把 migrate cmd 清掉，防止他抢资源，让升级快点结束。进出维护模式的时间应该不长，这段时间内的 migrate 重要吗？
-
-   5. recover manager 对于没有实际分配的数据会跳过命令下发配额的限制，快速下发给 access，如果这部分数据是从本地读，这个 recover 很快就会完成，但 recover handler 的 pending_recover_cmds_ 是按 FIFO 的顺序进 running_recover_pids_ 执行的，所以后发的符合上述特点的 pid 也没法快速执行，可能被前面执行慢的 pid 拖慢。
+special recover 不需要 sync 吗？
 
 
 
-prometheus 里可以从 2 个角度来观察值
+用 zbs-meta pextent find need_recover 可以显示。
 
-1. zbs_chunk_access 开头的，比如 zbs_chunk_access_cap_replica_reposition_read_iops from_chunk 1 to_chunk 2 表示以 1 为 lease owner read 2 上数据的 iops。
-2. zbs_chunk_local_io_from_local 开头的，比如 zbs_chunk_local_io_from_local_cap_ec_app_write_latency_ns 表示这个节点的 local io handler 接受到的从本地 access 来的 ec app write 的延迟
-3. zbs_chunk_local_io_from_remote 开头的，比如 zbs_chunk_local_io_from_remote_cap_replica_reposition_write_speed_bps 表示这个节点的 local io handler 接受到的从远端 access 来的 cap replica write 的带宽
-
-prometheus 中支持多种 IO 类型的 metric 相加，比如二者相加可以观察这个 chunk 收到的所有 cap replica reposition write 的带宽，zbs_chunk_local_io_from_remote_cap_replica_reposition_write_speed_bps + zbs_chunk_local_io_from_local_cap_replica_reposition_write_speed_bps 
+目前的做法，没法确保一定没有数据。如果是因为选不出 recover src/dst，且待生成的数量少于 1024，比如 cmd slots 不足、可用节点数量不足、集群容量不足导致的，会造成通过 zbs-meta cluster summary 拿到的 ongoing / pending recover num 相加值为 0。
 
 
 
+recover handler 中的执行队列，可否做成 ever exist = false 且 origin_pid = 0 的 pid 优先执行，其他 pid 按 FIFO 的顺序执行。
 
-
-fio -ioengine=libaio -invalidate=1 -iodepth=128 -ramp_time=0 -runtime=300000 -time_based -direct=1 -bs=4k -filename=/dev/sdc -name=wrtie_sdc -rw=randwrite;
+recover manager 对于没有实际分配的数据会跳过命令下发配额的限制，快速下发给 access，如果这部分数据是从本地读，这个 recover 很快就会完成，但 recover handler 的 pending_recover_cmds_ 是按 FIFO 的顺序进 running_recover_pids_ 执行的，所以后发的符合上述特点的 pid 也没法快速执行，可能被前面执行慢的 pid 拖慢。
 
 
 
@@ -602,23 +449,10 @@ fio -ioengine=libaio -invalidate=1 -iodepth=128 -ramp_time=0 -runtime=300000 -ti
 
     1. 理论上我应该拿到所有磁盘类型+数量的上限后，用 GLAGS 去定义能给到 internal io 用的磁盘性能比例（0.5）和网络带宽比例（0.4 / 0.5），并给出 app io busy 的判断准则（比如  0.3 的上限，这样预留 0.2 出来做缓冲）。
     2. ssd 的限速不能直接跟盘成正比，主要是考虑到 zbs 没法发挥出磁盘性能上限，比如 4 块 nvme ssd 跟 2 块性能差不多。ssd 的 app io busy 先保留目前是一个定值的做法，但应该是一个变化值，综合考虑网络带宽以及磁盘性能，盘多了之后，瓶颈可能在网络带宽上，而网络带宽这事儿没法直接给出 app io busy iops（不管下沉数据，直接用 bps / 256 KiB？）
-    2. 对 interval io 的判定除了 bps，是否需要把 iops 用起来？recover io 一定是 256 kb ，所以只关注 bps？sink io 有可能是 4k，所以应该关注 iops ？
-
+    
 11. 待做
 
-       1. prior pextent allocation
-
-          升级到 560，但没有开启之前，不允许创建 prior pextent 的代码在哪里？
-
-          replica_capacity_only 模式允许创建 prior pextent 吗？应该是不允许
-
-          改动之后，可能的坑点：
-
-          1. thick 有个最高 99%；
-          2. temp pid 有个最高 95%；
-          3. pid 分配 location 除了 ec 之外，并不会随机打乱 cid 在 loc 中的位置；
-
-       2. piror recover
+       1. piror recover
 
            先把 recover 关于 prior 的部分做完，等有空再考虑把 topo distance 做好，zbs4，另外，空间充足可以先过滤，但是尽量不选 isolated 和双活需要 2 ：1 的特性需要特别考虑。
 
@@ -627,38 +461,16 @@ fio -ioengine=libaio -invalidate=1 -iodepth=128 -ramp_time=0 -runtime=300000 -ti
            2. 把 avail cmd slots 提前算好放 exclude_cids；
 
            3. GenerateMigrateCmdsForRemovingChunk 中 migrate_generate_used_cmd_slots 对 src / dst 的判断应该传入 AllocRecoverCap/PerfExtents；
-
+    
               传入会有点麻烦，可能出现 removing chunk 的时候总是选某个 src / dst cid，但那个 dst cid 可生成的余额不足，还一直选他。但是影响最大也就造成一次 generate 过程中只选 1 个 src cid，用满他的 256 的配额，所以先不修复。
-              
+          
            4. reposition src 如果有多个可选，可以考虑随机选，避免总是选到一个没法执行的导致一直 recover / migrate 不掉
 
            这部分代码可以写到 recover manager，另外也可以总结出一个 recover 和 alloc 虽然大部分相同，但是存在的细微差别。
 
            agile recover 和 special recover 回头处理，都是利用到临时副本的，入口是 remove replica
 
-       3. prior migrate
-
-          只有 replica 才会分配临时副本，所以 ec 不会有 agile recover
-
-          有很多代码适合 pick 到 55x，但在 56x 中直接被删除了，见 [ZBS-27109](http://jira.smartx.com/browse/ZBS-27109)
-    
-          ```
-          for (const auto& [cid, info] : healthy_chunks_map) {
-          LOG(INFO) << "yiwu cid " << cid << " perf thick allocated "
-          << GetAllocatedSpace(info, PK_PERF_THICK) / kExtentSize << " perf thick valid "
-          << GetValidSpace(info, PK_PERF_THICK) / kExtentSize << " perf thin allocated "
-          << GetAllocatedSpace(info, PK_PERF_THIN) / kExtentSize << " perf thin valid "
-          << GetValidSpace(info, PK_PERF_THIN) / kExtentSize << " cap allocated "
-          << GetAllocatedSpace(info, PK_CAP) / kExtentSize << " cap valid "
-          << GetValidSpace(info, PK_CAP) / kExtentSize;
-          }
-          
-          LOG(INFO) << "yiwu sp_load " << sp_load << " pk " << pk;
-          ```
-    
-14. 补一个同时有多个 removing cid 的单测；
-
-16. MgirateFilter 可以改成 allow, deny 都允许的，如果没要求，就传入 std::nullopt
+11. 补一个同时有多个 removing cid 的单测；
 
 
 
@@ -702,8 +514,6 @@ ZBS-20993，允许 RPC 产生恢复/迁移命令，可以指定源和目的地�
 
 存储不分层模式，不设置缓存盘，除了含有系统分区的物理盘，剩余的所有物理盘都作为数据盘使用，只能使用全闪配置。
 
-smtx os 5.1.1 中不论存储是否分层，都要求 2 块容量至少 130 GiB 的 SSD 作为 SMTX OS 系统盘（含元数据分区的缓存盘），为啥要 2 块做软 raid 1？
-
 
 
 在恢复或者迁移任务结束时，新加入副本的状态被设置为未知，需要等待下一次心跳周期 LSM 上报副本后才可以确认副本为健康？allocation 的逻辑是马上会被设置为活跃副本，参考 Commit -> PersistExtents -> UpdateMetaContextWhenSuccess -> SetPExtents。
@@ -725,49 +535,10 @@ VIP 设计文档，https://docs.google.com/document/d/1M34zaIje2xkUSv9Q41waRH4GC
 
 
 
-rx_pids -> dst_pids，tx_pids -> replace_cids, recover_src_pids -> src_pids
-
 那这里还有两个问题：
 
 1. 卸载 partition 盘的时候，chunk 和 meta 分别会做哪些校验，分别用的哪个字段；
 2. 卸载盘（或者拔盘）之后，可能会出现 allocated space > data capacity，进而导致数据迁移受到影响。meta 能否在集群数据恢复完成之后，保证 allocated space <= data capacity 呢？
-
-
-
-策略类梳理（seq means prior）
-
-1. 周期性扫描产生的 recover cmd
-
-    待做 [ZBS-21199](http://jira.smartx.com/browse/ZBS-21199)，支持设置允许 recover 的时段，不在该时段内仅做 partial recover。在判断每个 pid 是否需要 recover 时，每个 pid 拿到 pentry 的时候就可以判断如果期望副本是 3 而目前副本是 2 时，不用触发 recover。
-
-    往 UpdatableRecoverParams 中增加 2 个字段，start hour  end_hour。同时，通过这个 patch 改 recover 的触发策略，IsNeedRecover。
-
-2. 通过 rpc 显示指定的 migrate cmd
-
-    待做 [ZBS-20993](http://jira.smartx.com/browse/ZBS-20993)，允许 rpc 触发 migrate 命令，应该可以和预期内的节点下线合在一起做，因为他们的优先级都会更高，需要马上看到迁移效果
-
-    仅支持 volume 粒度的就好（MigrateForVolumeRemoving）
-
-    需要支持 prior volume 吗？
-
-    可能需要把 std::list < RecoverCmd> 改成 hashmap
-
-3. 低负载
-
-    ReGenerateMigrateForLocalizeInStoragePool()，让副本位置符合 LocalizedComparator
-
-4. 中高负载
-
-    中高负载目前实际上的区别仅在：
-
-    1. 中负载每 1h 扫描一次，高负载每 5min 扫描一次；
-    2. 中负载不移动 local 和 parent 的 pextent，高负载会移动；
-
-    如果 ReGenerateMigrateForRepairTopo 生成了 cmd，那么只生成这个目标的 cmd，否则试图去生成 ReGenerateMigrateForBalanceInStoragePool 的 cmd。需要对 ReGenerateMigrateForBalanceInStoragePool() 改进，先保证都有本地副本，再去做容量均衡。
-
-5. 超高负载
-
-    跳过 topo repair 扫描，只做 ReGenerateMigrateForBalanceInStoragePool()
 
 
 
@@ -784,11 +555,7 @@ comparator->UpdateChunkSet 这个地方，如果还剩的 2 副本并不符合 t
 
 
 
-[ZBS-13059](http://jira.smartx.com/browse/ZBS-13059) 恢复数据允许识别原有数据块的冷热属性
 
-[ZBS-25386](http://jira.smartx.com/browse/ZBS-25386) 修复节点数据迁移速度过慢导致access层无法迁移成功的问题
-
-[ZBS-24563](http://jira.smartx.com/browse/ZBS-24563) 缓存命中率下降，副本恢复任务并发度过高，导致恢复任务执行过慢
 
 4 个 ticket 4 件事
 
@@ -816,10 +583,6 @@ comparator->UpdateChunkSet 这个地方，如果还剩的 2 副本并不符合 t
    下发的自动调节机制
    
    调节可允许下发命令的窗口大小，这个需要到 chunk 粒度（lease owner），目前是一个值作用到所有 chunk 上，但 auto mode 要能让各个 chunk 变动的值。
-   
-   
-   
-   cmd slot 从 cid -> uint32 到 cmd -> pid set，能够被快速完成的 pid 如 ever exist = false 且 origin = 0 的不算在内
    
    
    
@@ -892,8 +655,6 @@ recover manager 中 recover 和 migrate 的不同之处：
 
 如果节点上的 replica 发生 cow 的话，direct_prs 会瞬间减小而导致写入因为等待空闲 cache 而阻塞，也需要预先下刷以避免阻塞
 
-pin 中初次写的 lease，怎么传递 prioritized 给 lsm
-
 
 
 FunctionalTest::SetUp()  --> new MiniCluster(kNumChunks);
@@ -915,10 +676,6 @@ gtest系列之事件机制
    Meta 的 Lease 过期策略，出于性能的考虑，Meta 未将对外授权的 Lease 信息持久化在 MetaDB 中。因此新的 Meta Leader 无法知晓上一任 Leader 分发的 Extent Lease Owner 是谁 ，因此它在开始服务之前需要确保之前授予的所有 Lease 都被清空，重新由自身进行授予。此时如果有一个 Access（Chunk） 失联，为了确保已经失联的 Access 将所有从上一任 Leader 中获得的 Lease 丢弃，需要等待失连的 Session 一定超时（ **12 s**）, ZBS 5.2.0 之后调整为 **7s**
 
    分配 lease 代码，AccessManager::AllocOwner、GenerateLease、
-
-2. 把 prior 快照 + IO 的 functional test 单测流程记下来，便于后续排查问题
-
-   块存储对外接口并不多，一般就是快照/克隆之后的 COW 让问题变复杂，性能变慢
 
 4. 目前遇到的高负载下不迁移：要么 topo 降级了，要么 lease owner 没释放，要么是双活只能在单 zone 内迁移
 
@@ -1050,8 +807,6 @@ vscode 中用 vim 插件，这样可以按区域替换代码
 
 一个遗留问题是，单测里面想要触发两次 recover cmd，怎么让 entry 的 GetLocation() 得到及时更新，试了 sleep(9) 不行，可能不止需要一个心跳周期，还有其他条件没触发。
 
-以一个 functional test 单测为例子展开看 zbs 系统的启动流程。
-
 
 
 ### 临时副本
@@ -1159,6 +914,18 @@ zbs_volume_logical_size_bytes{} > 1 and zbs_volume_logical_size_bytes{} < 536870
 
 tower 首页的存储性能图标对应 zbs 的哪些 metric？
 
+
+
+prometheus 里可以从 2 个角度来观察值
+
+1. zbs_chunk_access 开头的，比如 zbs_chunk_access_cap_replica_reposition_read_iops from_chunk 1 to_chunk 2 表示以 1 为 lease owner read 2 上数据的 iops。
+2. zbs_chunk_local_io_from_local 开头的，比如 zbs_chunk_local_io_from_local_cap_ec_app_write_latency_ns 表示这个节点的 local io handler 接受到的从本地 access 来的 ec app write 的延迟
+3. zbs_chunk_local_io_from_remote 开头的，比如 zbs_chunk_local_io_from_remote_cap_replica_reposition_write_speed_bps 表示这个节点的 local io handler 接受到的从远端 access 来的 cap replica write 的带宽
+
+prometheus 中支持多种 IO 类型的 metric 相加，比如二者相加可以观察这个 chunk 收到的所有 cap replica reposition write 的带宽，zbs_chunk_local_io_from_remote_cap_replica_reposition_write_speed_bps + zbs_chunk_local_io_from_local_cap_replica_reposition_write_speed_bps 
+
+
+
 ### 网络相关日志
 
 查看网络的方式有哪些？
@@ -1196,6 +963,10 @@ rdma 的网络环境测试由自己的 ib 测试方法，不能只看 ping 的�
 5. iostat -xm 1 看物理磁盘给出的延迟
 
 ### reposition 性能测试
+
+fio -ioengine=libaio -invalidate=1 -iodepth=128 -ramp_time=0 -runtime=300000 -time_based -direct=1 -bs=4k -filename=/dev/sdc -name=wrtie_sdc -rw=randwrite;
+
+
 
 考虑一个被写满的 extent，从理论上分析：
 
