@@ -6,6 +6,8 @@ zbs 5.6.x 中将 cap 层数据读到 cap read cache 的条件是 40 分钟内读
 2. 从 paused 到 resumed，若耗时太长，说明 access 并发度太高了，应该让并发度低一些；
 3. 从 resumed 到 finished，若耗时太长，说明 lsm 太慢了或者拿 token 太慢了 ，不论是哪个原因，access 能做的就是让并发度低一些，可能有所缓解。
 
+打印一下一个 reposition cmd 各个环节的耗时。
+
 
 
 recover cmd 中有了 is_thick 信息，所以 zbs cli 中可以区分 3 种 pk 类型展示（可以考虑在 zbs cli 中对 RecoverHandler::ListMigrateInfo 的结果排序，3 部分分开展示）
@@ -463,7 +465,7 @@ recover manager 对于没有实际分配的数据会跳过命令下发配额的�
            3. GenerateMigrateCmdsForRemovingChunk 中 migrate_generate_used_cmd_slots 对 src / dst 的判断应该传入 AllocRecoverCap/PerfExtents；
     
               传入会有点麻烦，可能出现 removing chunk 的时候总是选某个 src / dst cid，但那个 dst cid 可生成的余额不足，还一直选他。但是影响最大也就造成一次 generate 过程中只选 1 个 src cid，用满他的 256 的配额，所以先不修复。
-          
+             
            4. reposition src 如果有多个可选，可以考虑随机选，避免总是选到一个没法执行的导致一直 recover / migrate 不掉
 
            这部分代码可以写到 recover manager，另外也可以总结出一个 recover 和 alloc 虽然大部分相同，但是存在的细微差别。

@@ -1,3 +1,82 @@
+### 写一个超过单点容量的卷触发限流
+
+3 节点 cid 1 3 4 集群，lease owner = prefer local = 4，各节点 perf valid = 400 GiB，创建一个 500 GiB 的 2-replica thin volume，先执行 256k 全盘顺序写，紧接着跟上 4k 随机写，复现节点出现 enable flow ctrl 的场景。
+
+perf loc 变化如下：
+
+| step | cid 4 ratio | cid 3 ratio | cid 1 ratio | perf loc       | prefer  cid load | note                                                         |
+| ---- | ----------- | ----------- | ----------- | -------------- | ---------------- | ------------------------------------------------------------ |
+| 1    | [0, 0.5]    | [0, 0.5]    |             | [4, 3]         | 低               | 遵循局部化分配                                               |
+| 2    | [0.5, 0.6]  |             | [0, 0.1]    | [4, 1]         | 中               | 放弃局部化，遵循本地优先 + 拓扑安全 + 剩余容量多             |
+| 3    |             | [0.5, 0.6]  | [0.1, 0.2]  | [3, 1]         | 高               | 放弃本地优先，遵循拓扑安全 + 剩余容量多，此时有 replace = 3，dst = 1 的迁移 |
+| 4    |             |             |             | [1, 3], [1, 4] | 高               | cid 1 在负载跟 cid 3 和 4 相同前，总会被分配，perf loc 在 [1, 3]、[1, 4] 交替 |
+
+I1119 16:42:45.433437 第一次 ALLOC PT_PERF PEXTENT，此时各节点负载基本为 0
+
+```
+I1119 16:42:45.433437 55463 meta_rpc_server.cc:1566] [ALLOC PT_PERF PEXTENT] volume: name: "c0f40f0a-1a3f-4831-a87c-8448bb007396" size: 536870912000 created_time { seconds: 1732005758 nseconds: 707335736 } id: "c0f40f0a-1a3f-4831-a87c-8448bb007396" parent_id: "4b7928a6-9d98-4754-8e46-c90172c6da49" replica_num: 2 thin_provision: true iops_burst: 0 bps_burst: 0 throttling { } stripe_num: 8 stripe_size: 262144 prefer_cid: 0 resiliency_type: RT_REPLICA,  lid: 5 lentry: epoch: 41509, perf_pid: 93673, perf_epoch: 93673, cap_pid: 91673, cap_epoch: 91673, prioritized: 0, garbage: 0, valid: 1, staging: 0  perf_pentry: replica: "[ 0:4 1:3 ]", epoch: 93673, generation: 0, origin_pid: 0, origin_epoch: 0, ever_exist: 0, garbage: 0, valid: 1, expected_replica_num: 2, staging: 0, thin_provision: 1, preferred_cid: 4, type: "PT_PERF", resiliency_type: "RT_REPLICA", ec_param: "None", sinkable: 1, allocated_space: 0, thin_uniq_size: 0, thin_shared_size: 0, cow_from_snapshot: 0  cap_pentry: replica: "[ ]", epoch: 91673, generation: 0, origin_pid: 0, origin_epoch: 0, ever_exist: 0, garbage: 0, valid: 1, expected_replica_num: 2, staging: 0, thin_provision: 1, preferred_cid: 0, type: "PT_CAP", resiliency_type: "RT_REPLICA", ec_param: "None", sinkable: 0, allocated_space: 0, thin_uniq_size: 0, thin_shared_size: 0, cow_from_snapshot: 0
+
+I1119 16:42:45.433508 55463 meta_rpc_server.cc:1589][YIWU1 CHUNK INFO]
+cid: 1, perf thin allocated: 1024 KiB, ratio: 0.000002, thin info: [perf_thin_used_data_space: (1024), perf_new_thin_pids: (0, 0), perf_rx_pids: (0, 0) KiB]
+cid: 3, perf thin allocated: 263168 KiB, ratio: 0.000627, thin info: [perf_thin_used_data_space: (1024), perf_new_thin_pids: (1, 262144), perf_rx_pids: (0, 0) KiB]
+cid: 4, perf thin allocated: 263168 KiB, ratio: 0.000627, thin info: [perf_thin_used_data_space: (1024), perf_new_thin_pids: (1, 262144), perf_rx_pids: (0, 0) KiB]
+```
+
+I1119 16:49:46.225734 第一次 ALLOC PT_CAP PEXTENT FOR SINK，此时集群平均负载过了 0.5
+
+```
+I1119 16:51:13.221374 55463 meta_rpc_server.cc:1675] [ALLOC PT_CAP PEXTENT FOR SINK]  lid: 1325 lentry: epoch: 42829, perf_pid: 94995, perf_epoch: 94995, cap_pid: 92993, cap_epoch: 92993, prioritized: 0, garbage: 0, valid: 1, staging: 1  perf_pentry: replica: "[ 0:1 1:3 ]", epoch: 94995, generation: 1, origin_pid: 0, origin_epoch: 0, ever_exist: 1, garbage: 0, valid: 1, expected_replica_num: 2, staging: 0, thin_provision: 1, preferred_cid: 4, type: "PT_PERF", resiliency_type: "RT_REPLICA", ec_param: "None", sinkable: 1, allocated_space: 0, thin_uniq_size: 0, thin_shared_size: 0, cow_from_snapshot: 0  cap_pentry: replica: "[ 0:4 1:3 ]", epoch: 92993, generation: 0, origin_pid: 0, origin_epoch: 0, ever_exist: 0, garbage: 0, valid: 1, expected_replica_num: 2, staging: 0, thin_provision: 1, preferred_cid: 4, type: "PT_CAP", resiliency_type: "RT_REPLICA", ec_param: "None", sinkable: 0, allocated_space: 0, thin_uniq_size: 0, thin_shared_size: 0, cow_from_snapshot: 0
+
+I1119 16:51:13.221410 55463 meta_rpc_server.cc:1696][YIWU3 CHUNK INFO]
+cid: 1, perf thin allocated: 181066496 KiB, ratio: 0.431697, thin info: [perf_thin_used_data_space: (95607552), perf_new_thin_pids: (8, 2097152), perf_rx_pids: (318, 83361792) KiB]
+cid: 3, perf thin allocated: 259230208 KiB, ratio: 0.618054, thin info: [perf_thin_used_data_space: (258181632), perf_new_thin_pids: (4, 1048576), perf_rx_pids: (0, 0) KiB]
+cid: 4, perf thin allocated: 259239680 KiB, ratio: 0.618077, thin info: [perf_thin_used_data_space: (258191104), perf_new_thin_pids: (4, 1048576), perf_rx_pids: (0, 0) KiB]
+```
+
+I1119 16:49:46.317569 55463 开始下沉后的第一次 ALLOC PT_PERF PEXTENT，此时只分配了 perf loc
+
+```
+I1119 16:49:46.317569 55463 meta_rpc_server.cc:1566] [ALLOC PT_PERF PEXTENT] volume: name: "c0f40f0a-1a3f-4831-a87c-8448bb007396" size: 536870912000 created_time { seconds: 1732005758 nseconds: 707335736 } id: "c0f40f0a-1a3f-4831-a87c-8448bb007396" parent_id: "4b7928a6-9d98-4754-8e46-c90172c6da49" replica_num: 2 thin_provision: true iops_burst: 0 bps_burst: 0 throttling { } stripe_num: 8 stripe_size: 262144 prefer_cid: 0 resiliency_type: RT_REPLICA,  lid: 1173 lentry: epoch: 42677, perf_pid: 94843, perf_epoch: 94843, cap_pid: 92841, cap_epoch: 92841, prioritized: 0, garbage: 0, valid: 1, staging: 0  perf_pentry: replica: "[ 0:1 1:3 ]", epoch: 94843, generation: 0, origin_pid: 0, origin_epoch: 0, ever_exist: 0, garbage: 0, valid: 1, expected_replica_num: 2, staging: 0, thin_provision: 1, preferred_cid: 4, type: "PT_PERF", resiliency_type: "RT_REPLICA", ec_param: "None", sinkable: 1, allocated_space: 0, thin_uniq_size: 0, thin_shared_size: 0, cow_from_snapshot: 0  cap_pentry: replica: "[ ]", epoch: 92841, generation: 0, origin_pid: 0, origin_epoch: 0, ever_exist: 0, garbage: 0, valid: 1, expected_replica_num: 2, staging: 0, thin_provision: 1, preferred_cid: 0, type: "PT_CAP", resiliency_type: "RT_REPLICA", ec_param: "None", sinkable: 0, allocated_space: 0, thin_uniq_size: 0, thin_shared_size: 0, cow_from_snapshot: 0
+
+I1119 16:49:46.317624 55463 meta_rpc_server.cc:1589][YIWU1 CHUNK INFO]
+cid: 1, perf thin allocated: 139389440 KiB, ratio: 0.332331, thin info: [perf_thin_used_data_space: (94562816), perf_new_thin_pids: (1, 262144), perf_rx_pids: (170, 44564480) KiB]
+cid: 3, perf thin allocated: 258778880 KiB, ratio: 0.616978, thin info: [perf_thin_used_data_space: (258516736), perf_new_thin_pids: (1, 262144), perf_rx_pids: (0, 0) KiB]
+cid: 4, perf thin allocated: 258714112 KiB, ratio: 0.616824, thin info: [perf_thin_used_data_space: (258714112), perf_new_thin_pids: (0, 0), perf_rx_pids: (0, 0) KiB]
+```
+
+对应的 cap loc 申请
+
+```
+I1119 16:49:46.324748 55463 meta_rpc_server.cc:1675] [ALLOC PT_CAP PEXTENT FOR SINK]  lid: 1173 lentry: epoch: 42677, perf_pid: 94843, perf_epoch: 94843, cap_pid: 92841, cap_epoch: 92841, prioritized: 0, garbage: 0, valid: 1, staging: 1  perf_pentry: replica: "[ 0:1 1:3 ]", epoch: 94843, generation: 1, origin_pid: 0, origin_epoch: 0, ever_exist: 1, garbage: 0, valid: 1, expected_replica_num: 2, staging: 0, thin_provision: 1, preferred_cid: 4, type: "PT_PERF", resiliency_type: "RT_REPLICA", ec_param: "None", sinkable: 1, allocated_space: 0, thin_uniq_size: 0, thin_shared_size: 0, cow_from_snapshot: 0  cap_pentry: replica: "[ 0:4 1:3 ]", epoch: 92841, generation: 0, origin_pid: 0, origin_epoch: 0, ever_exist: 0, garbage: 0, valid: 1, expected_replica_num: 2, staging: 0, thin_provision: 1, preferred_cid: 4, type: "PT_CAP", resiliency_type: "RT_REPLICA", ec_param: "None", sinkable: 0, allocated_space: 0, thin_uniq_size: 0, thin_shared_size: 0, cow_from_snapshot: 0
+I1119 16:49:46.324784 55463 meta_rpc_server.cc:1696]
+
+[YIWU3 CHUNK INFO]
+cid: 1, cap allocated: 1024, ratio: 0.000000; perf thick allocated: 0 KiB, thin allocated: 141224448 KiB, ratio: 0.336706, thin info: [perf_thin_used_data_space: (94562816), perf_new_thin_pids: (8, 2097152), perf_rx_pids: (170, 44564480) KiB]
+cid: 3, cap allocated: 2360320, ratio: 0.000257; perf thick allocated: 0 KiB, thin allocated: 259565312 KiB, ratio: 0.618853, thin info: [perf_thin_used_data_space: (258516736), perf_new_thin_pids: (4, 1048576), perf_rx_pids: (0, 0) KiB]
+cid: 4, cap allocated: 2360320, ratio: 0.000257; perf thick allocated: 0 KiB, thin allocated: 259762688 KiB, ratio: 0.619324, thin info: [perf_thin_used_data_space: (258714112), perf_new_thin_pids: (4, 1048576), perf_rx_pids: (0, 0) KiB]
+```
+
+
+
+但 256k app io 会直写 cap，而 cap loc 又为空，所以 access 主动放弃 lease
+
+```
+W1119 16:49:53.375825 85152 access_io_handler.cc:1578] prepare cap layer for direct write not ok, lease: lease_id: 1173, lease_epoch: 42677, proxy_lid: 0, proxy_epoch: 0, owner: 4, cow: 0, expired: 1, version: "LV_LAYERED"  perf_pextent_info: pid: 94843, epoch: 94843, origin_pid: 0, origin_epoch: 0, ever_exist: 1, meta_generation: 1, expect_replica_num: 2, loc: "[1 3 ]", cow_from_snapshot: 0  capacity_pextent_info: pid: 92841, epoch: 92841, origin_pid: 0, origin_epoch: 0, ever_exist: 0, meta_generation: 0, expect_replica_num: 2, loc: "[]", cow_from_snapshot: 0 , st:
+Traceback:
+[EAgain]: cap segments is not allocated or synced, old lease: lease_id: 1173, lease_epoch: 42677, proxy_lid: 0, proxy_epoch: 0, owner: 4, cow: 0, expired: 1, version: "LV_LAYERED"  perf_pextent_info: pid: 94843, epoch: 94843, origin_pid: 0, origin_epoch: 0, ever_exist: 1, meta_generation: 1, expect_replica_num: 2, loc: "[1 3 ]", cow_from_snapshot: 0  capacity_pextent_info: pid: 92841, epoch: 92841, origin_pid: 0, origin_epoch: 0, ever_exist: 0, meta_generation: 0, expect_replica_num: 2, loc: "[]", cow_from_snapshot: 0 , new lease: lease_id: 1173, lease_epoch: 42677, proxy_lid: 0, proxy_epoch: 0, owner: 4, cow: 0, expired: 0, version: "LV_LAYERED"  perf_pextent_info: pid: 94843, epoch: 94843, origin_pid: 0, origin_epoch: 0, ever_exist: 1, meta_generation: 1, expect_replica_num: 2, loc: "[1 3 ]", cow_from_snapshot: 0  capacity_pextent_info: pid: 92841, epoch: 92841, origin_pid: 0, origin_epoch: 0, ever_exist: 0, meta_generation: 0, expect_replica_num: 2, loc: "[4 3 ]", cow_from_snapshot: 0
+E1119 16:49:53.375845 85152 internal_io_client.cc:259] Failed to handle local IO: [IOCTX]: VEXTENT_WRITE seq: 1196082, volume: "c0f40f0a-1a3f-4831-a87c-8448bb007396", in_progress: 1, volume_offset: 313534709760, len: 262144, return_not_alloc: 0, resize: 0, retry_times: 0, next_retry_ms: 0 , vextent_no: 1168, data_len: 262144, extent_offset: 262144, lid: 1173, owner_ip: "10.168.66.64", owner_port: 10201  st:
+Traceback:
+[ELeaseExpired]:
+W1119 16:49:53.375859 85152 zbs_client.cc:1005] [Add TO RETRY QUEUE]: [IOCTX]: VEXTENT_WRITE seq: 1196082, volume: "c0f40f0a-1a3f-4831-a87c-8448bb007396", in_progress: 1, volume_offset: 313534709760, len: 262144, return_not_alloc: 0, resize: 0, retry_times: 0, next_retry_
+ms: 1711844953 , vextent_no: 1168, data_len: 262144, extent_offset: 262144, lid: 1173, owner_ip: "10.168.66.64", owner_port: 10201  queue size: 56 st:
+Traceback:
+[ELeaseExpired]:
+```
+
+
+
+
+
 ### Reroute 进程卡住不工作
 
 esxi 中的 ptrace 默认 disable 了，没法 gdb attach 一个正在运行的 python 进程
