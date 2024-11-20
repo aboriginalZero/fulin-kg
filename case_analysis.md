@@ -1,5 +1,14 @@
 ### 写一个超过单点容量的卷触发限流
 
+meta 提供 2 种获取 lease 的 rpc
+
+1. GetVExtentLease
+2. GetLease
+
+
+
+
+
 3 节点 cid 1 3 4 集群，lease owner = prefer local = 4，各节点 perf valid = 400 GiB，创建一个 500 GiB 的 2-replica thin volume，先执行 256k 全盘顺序写，紧接着跟上 4k 随机写，复现节点出现 enable flow ctrl 的场景。
 
 perf loc 变化如下：
