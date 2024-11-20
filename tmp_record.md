@@ -2,10 +2,6 @@
 
 
 
-zbs 5.6.x 中将 cap 层数据读到 cap read cache 的条件是 40 分钟内读 3 次，每次间隔 15 秒以上。要特别注意的是，一定是读的下沉后的数据。
-
-
-
 1. 从 pending 到 paused，若耗时太长，说明 meta 给 reposition cmd 给的太多了，笨一点的方式是直接丢掉，好一点的就是反馈给 meta，让他少发点（比较复杂）；
 2. 从 paused 到 resumed，若耗时太长，说明 access 并发度太高了，应该让并发度低一些；
 3. 从 resumed 到 finished，若耗时太长，说明 lsm 太慢了或者拿 token 太慢了 ，不论是哪个原因，access 能做的就是让并发度低一些，可能有所缓解。
@@ -78,12 +74,6 @@ deallocperf 是以 block 为单位还是 extent 为单位？extent，当 all blo
 
 
 
-mid waiting io num 不超过 sink 的并发度限制（默认 32）
-
-high waiting io num 不超过 cap recover + perf recover 的并发度限制。
-
-
-
 internal io throttle 的位置
 
 1. 如果 pextent io handler 中把 throttle 放在 io 进入 lsm 前，那么需要 InterceptBusinessIO 来保 gen 序，否则可能出现，同一个 extent 的两个 block io。
@@ -131,25 +121,6 @@ recover write 也有可能 unmap 写，这部分不需要统计进来。
 
 
 
-* zbs cli 是只有 snapshot 能更新 new_alloc_even 
-* zbs iscsi / nvmf / meta client 是可以更新 lun / volume / snapshot 的 new_alloc_even 属性
-* meta iscsi / nvmf server 支持在  UpdateLun / UpdateSnapshot 里更新
-* meta rpc server 里支持在 UpdateSnapshot / UpdateVolume里更新
-
-如果 volume 更新了 even，尽管把 volume 的 prefer local 请求了，但是如果还会写，那之后
-
-虽然 elf 用 lun_create 的接口，但是之后不会再去写这个 volume，但是这个 volume 会被下沉，而下沉分配出来的 cap extent 的 prefer local 在 cap pentry 没有 prefer local 时由发起下沉的 lease owner 决定。
-
-
-
-elf  一直以来创建虚拟卷模板，创建的是 volume 而不是 snapshot。我理解是因为它那边有虚拟机模板转化为虚拟机，以及反向操作的需求（tower 上有入口），但如果是 volume，理论上总是有可能被写，可以加上考虑在 UpdateVolume 的时候，除了将 new_alloc_even 设置为 true，也同时把 read_only 设置成 true（没问题的话把这个需求给到 elf）
-
-
-
-均匀卷由 even 属性被更新成 True 的卷/快照卷和克隆超过一定次数（默认为 10）的快照卷两部分组成（不支持直接创建出 even volume / snapshot）
-
-
-
 
 
 1. 一个 ever exist = false 的副本，在 lsm 上真的存在吗？如果是快照/克隆后被迁移到其他节点的 PExtent，此时虽然还是 non ever exist，但在目的节点上真实存在，其健康状态会被定期上报。
@@ -164,34 +135,6 @@ elf  一直以来创建虚拟卷模板，创建的是 volume 而不是 snapshot�
 
 
 
-
-一开始副本在 [1, 3]，停掉 cid 3，recover src = 1，dst = 2
-
-1. perf src 的 internal perf 的值一直为 0；
-
-2. app perf 的值 1s 40 MiB/s，1s 220 MiB/s；
-
-3. 试一下 finished ms 会不会影响到 app io，看起来不会
-
-   验证一下，没有 app io 的情况下，调整这个值，需要影响到 internal io 
-
-4. perf dst 值总是很小，原因大概率是因为 agile recover，也就是 recover read 能达到 limit，但是 recover write 不能（不是的，这里是 recover len 给的值不对，sijie 已修复）
-
-5. agile recover 虽然 recover write bps 减小了，但是 recover read bps 还是 256 KiB，所以 recover 整体还是慢，会被 internal io limit 限制，internal io limit 如果有 iops 来限制，iops 角度没用满的话，继续下发，应该也可以。（不是的，agile recover dst 在 local / pextent io handler 侧还是按照 256k 来算的，不确定在 access recover counter 中是否也是这样）
-
-
-
-针对 internal io 搞 cap / perf internal token
-
-先不考虑 ec，都按申请一个 kBlockSize 来估计。这里的误差包含：
-
-1. ec recover 实际的 block size 是 pextent_info->ec_param()->block_size() 
-2. sink 写 ec 的时候，cap loc 上各个 cid 也不是真的写 kBlockSize，另外还有可能要先 promote
-3. ec 中实在没得读，还是会去读 isolated 节点的
-3. 在 local io handler 中，ELSMNotAllocData 会被统计到 throttle，但不会算在 from_remote_io_stats
-
-
-
 app write extent，是每写其中一个 block 就对 extent gen 加一次 1
 
 所以处于 recovering 状态的 extent，如果在 recover 结束前有 app write（recover dst lsm 上处于 recovering 的 extent 是不允许被 app read），会对 track_gen ++，这样在 normal RecoverEnd 的 gen verify 才能对得上。
@@ -199,12 +142,6 @@ app write extent，是每写其中一个 block 就对 extent gen 加一次 1
 recover write 与 app write 带来的 gen 在 lsm 中是如何变化，access 怎么跟 lsm 校对的
 
 
-
-LSM 在处理写 IO 时，有三个性能拐点：
-
-1. LSM 以 8KB 为单位存储 Checksum，这意味着任意一个小于 8KB 的写操作，都需要从硬盘中读取整个 8KB，更新 Checksum 后再重新写入磁盘，这种读后写会损害小 IO 的性能。**如果我们的编码块小于 8K，每次对数据块的更新都会有读后写问题，对性能损害是非常大的**。
-2. 当写入的块为 256KB 时，LSM 可以将 IO 直接写入磁盘而不用先写入 Journal。
-3. LSM 支持 512e 磁盘，写入大小小于 4k 时，物理磁盘会有读后写问题。
 
 
 
@@ -930,7 +867,24 @@ prometheus 里可以从 2 个角度来观察值
 
 prometheus 中支持多种 IO 类型的 metric 相加，比如二者相加可以观察这个 chunk 收到的所有 cap replica reposition write 的带宽，zbs_chunk_local_io_from_remote_cap_replica_reposition_write_speed_bps + zbs_chunk_local_io_from_local_cap_replica_reposition_write_speed_bps 
 
+### 均匀卷
 
+* zbs cli 是只有 snapshot 能更新 new_alloc_even 
+* zbs iscsi / nvmf / meta client 是可以更新 lun / volume / snapshot 的 new_alloc_even 属性
+* meta iscsi / nvmf server 支持在  UpdateLun / UpdateSnapshot 里更新
+* meta rpc server 里支持在 UpdateSnapshot / UpdateVolume里更新
+
+如果 volume 更新了 even，尽管把 volume 的 prefer local 请求了，但是如果还会写，那之后
+
+虽然 elf 用 lun_create 的接口，但是之后不会再去写这个 volume，但是这个 volume 会被下沉，而下沉分配出来的 cap extent 的 prefer local 在 cap pentry 没有 prefer local 时由发起下沉的 lease owner 决定。
+
+
+
+elf  一直以来创建虚拟卷模板，创建的是 volume 而不是 snapshot。我理解是因为它那边有虚拟机模板转化为虚拟机，以及反向操作的需求（tower 上有入口），但如果是 volume，理论上总是有可能被写，可以加上考虑在 UpdateVolume 的时候，除了将 new_alloc_even 设置为 true，也同时把 read_only 设置成 true（没问题的话把这个需求给到 elf）
+
+
+
+均匀卷由 even 属性被更新成 True 的卷/快照卷和克隆超过一定次数（默认为 10）的快照卷两部分组成（不支持直接创建出 even volume / snapshot）
 
 ### 网络相关日志
 
@@ -1489,6 +1443,31 @@ chunk 日志中搜 migrate pblob skip 会显示卸载盘卸不掉的 pblob，有
 集群中最多仅能有一个节点进入维护模式，进入维护模式后，所有失联的数据依然会展示在待恢复数据中，只是不会真的触发恢复。在节点状态恢复正常后，将自动的从待恢复数据中清理。
 
 敏捷恢复设计文档，https://docs.google.com/document/d/1JZ6trjE_D1ewfWbaSuewPoFzUksbfno8AyS1wj2Lkio/edit
+
+### lsm 特点
+
+zbs 5.6.x 中将 cap 层数据读到 cap read cache 的条件是 40 分钟内读 3 次，每次间隔 15 秒以上。要特别注意的是，一定是读的下沉后的数据。
+
+
+
+LSM 在处理写 IO 时，有三个性能拐点：
+
+1. LSM 以 8KB 为单位存储 Checksum，这意味着任意一个小于 8KB 的写操作，都需要从硬盘中读取整个 8KB，更新 Checksum 后再重新写入磁盘，这种读后写会损害小 IO 的性能。**如果我们的编码块小于 8K，每次对数据块的更新都会有读后写问题，对性能损害是非常大的**。
+2. 当写入的块为 256KB 时，LSM 可以将 IO 直接写入磁盘而不用先写入 Journal。
+3. LSM 支持 512e 磁盘，写入大小小于 4k 时，物理磁盘会有读后写问题。
+
+
+
+lsm 中单个 Extent 内部对于并发 IO 存在一定的限制：
+
+1. 一个 Extent 的 IO 都需要经过同一个 Journal。一个 Journal 只存储在一个 SSD 磁盘上，无法发挥出多块 SSD 的性能。
+2. 属于同一个 Extent 的 pblob 会被优先分配到一个盘上，无法发挥多块磁盘的性能（特别是 hdd cap layer），假设有 4 块盘，容量都充足，分配 extent 1 2 3 4，是会分别给到盘 1 2 3 4，数据盘已使用容量标准差小于 0.2 的时候轮转，否则按容量均衡分配 extent 所在盘。
+
+基于这两点，在顺序 IO 的场景下，性能受到很大的限制。而条带化的目的，就是在顺序 IO 的场景下，将 IO 分散到多个 Extent，利用多 Extent 之间的并发性，提高顺序 IO 的性能。
+
+假设条带数为 4，每一个 extent 中包含 8 个 block，在进行条带化处理后，顺序 IO（V1-B1，V1-B2，V1-B3，V1-B4，V1-B5，V1-B6，V1-B7，V1-B8），则转换为（V1-B1，V2-B1，V3-B1，V4-B1，V1-B2，V2-B2，V3-B2，V4-B2）。这样，就可以利用到 V1，V2，V3，V4，4 个 Extent 的并发性。
+
+
 
 ### thin/thick 分配
 

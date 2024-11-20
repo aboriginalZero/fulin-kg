@@ -138,16 +138,6 @@ LSM
 
 卸载数据盘，会引发 lsm 的盘间数据迁移，从一个 parition 到另一个 partition，如果剩余的 partition 不够容纳就卸载不掉，除非强制拔盘，那就成丢副本了。
 
-
-
-zbs 副本分配策略
-
-
-
-prior extent 分配策略
-
-
-
 ### zbs 副本迁移策略
 
 #### synopsis
