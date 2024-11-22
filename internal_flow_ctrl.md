@@ -1,3 +1,33 @@
+在 ifc 中加一个针对 reposition cmd 是 17 min 的超时，drain cmd 是 20 min 的超时，但 drain handler 自己还会有 block 级别的下沉，或许应该估算出一个 block 级别的超时时间，可能是 8 9 s？
+
+
+
+从 5.6.1 升级到 5.6.2，要考虑增加 bytes 之后，要做好旧 ifm 应该发送多少 token 给新 ifc 用的兼容
+
+
+
+补充一个在限速很低时，稀疏卷恢复很快的 ut
+
+补充更详细的 ut，比如 token 数量不足，一直没法下发。比如 4k 的 token 下发比  256k 的快
+
+sink 的恢复速率除了 internal token，会不会是被 sink 并发度 32 限制的。比如 cap layer 是 ssd 时，下沉会不会偏慢。
+
+补充 token 颁发和 internal io throttle bucket 的 metric，方便查询历史情况
+
+多种 io 共存时，不一定能分好，到时候要测下，recover 和 sink 同时进行，看看会不会是 sink 先做完。
+
+
+
+
+
+没有 internal perf 的情况下，4k iodepth = 64 写，iops = 40k - 42k 波动
+
+* baseline avail_level_ratio 1.0，app perf 从 40k 下降到 34k - 36k 附近，短暂掉到 25k（不是稳定复现，当时的 waiting io num 还是 0，有可能是下层操作的影响），internal perf iops = 1430，waiting io 全程为 0，current level，28 MiB，current size，36 MiB
+* avail_level_ratio 0.5，app perf  36k - 38k 波动，但 internal perf iops = 710，没有 waiting io，current level，14 MiB，current size，36 MiB
+* avail_level_ratio 0.95，app perf 从 40k 下降到 36k - 37k 附近
+
+
+
 申请 grant，用的还是 req num，但应该看 req num 和 bytes 都应该考虑到，
 
 ifc 给 ifm 的 req 里，或许需要再加上几个字段。

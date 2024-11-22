@@ -1,3 +1,17 @@
+感知硬件能力做成一个通用的能力，这样 internal flow ctrl / flow ctrl / sink 都能使用。
+
+
+
+查看盘类型是 hdd 还是 ssd
+
+```
+cat /sys/block/sdb/queue/rotational
+```
+
+
+
+
+
 用 nvmf 测各种类型盘的上限，然后取其 50% 认为是 recover io 可用的上限
 
 
@@ -10,9 +24,11 @@
 
 
 
-recover cmd 中有了 is_thick 信息，所以 zbs cli 中可以区分 3 种 pk 类型展示（可以考虑在 zbs cli 中对 RecoverHandler::ListMigrateInfo 的结果排序，3 部分分开展示）
+recover cmd 中有了 is_thick 信息，所以 zbs cli 中可以区分 3 种 pk 类型展示（可以考虑在 zbs cli 中对 RecoverHandler::ListMigrateInfo / ListRecoverInfo 的结果排序，3 部分分开展示）
 
-1. 只有 lease owner 上的 Total Migrate Speed 才有值，而这也是会给到 meta 的值，才会有 reposition list，其中 STATE = INIT 的 pid 表示在 recover handler 的 pending 队列中，STATE = READ / WRITE 的 pid 表示正在执行，
+zbs-meta recover / migrate list、zbs-chunk recover / migrate list 都需要修改
+
+1. 只有 lease owner 上的 Total Migrate Speed 才有值，而这也是会给到 meta 的值，才会有 reposition list，其中 STATE = INIT 的 pid 表示在 recover handler 的 pending 队列中，STATE = START/END/READ / WRITE 的 pid 表示正在执行，PAUSE 表示由于并发额度不足被阻塞。
 2. From Local Speed 指的是该节点作为本地
 
 zbs cli 中在 zbs-meta reposition show 中打印 load ratio
@@ -32,45 +48,7 @@ zbs cli 中在 zbs-meta reposition show 中打印 load ratio
 
 
 
-
-
-在 ifc 中加一个针对 reposition cmd 是 17 min 的超时，drain cmd 是 20 min 的超时，但 drain handler 自己还会有 block 级别的下沉，或许应该估算出一个 block 级别的超时时间，可能是 8 9 s？
-
-
-
 已经 sync 过，所以 gen 是有效的
-
-
-
-not alloc 或者是数据在 cap layer 并全 0，可以跳过写 dst
-
-写全 0 的情况，应该还是要 lsm 读磁盘，只是不会在 dst 上写磁盘，所以这种先忽略。
-
-
-
-从 5.6.1 升级到 5.6.2，要考虑增加 bytes 之后，要做好旧 ifm 应该发送多少 token 给新 ifc 用的兼容
-
-
-
-补充一个在限速很低时，稀疏卷恢复很快的 ut
-
-补充更详细的 ut，比如 token 数量不足，一直没法下发。比如 4k 的 token 下发比  256k 的快
-
-sink 的恢复速率除了 internal token，会不会是被 sink 并发度 32 限制的。比如 cap layer 是 ssd 时，下沉会不会偏慢。
-
-补充 token 颁发和 internal io throttle bucket 的 metric，方便查询历史情况
-
-
-
-多种 io 共存时，不一定能分好，到时候要测下，recover 和 sink 同时进行，看看会不会是 sink 先做完。
-
-
-
-
-
-下沉的结束条件是啥，平均负载到下沉的条件了，但是还没到这个负载的节点上的 block 会被下沉吗？（平均负载到 0.5 - 0.05 才停止）
-
-deallocperf 是以 block 为单位还是 extent 为单位？extent，当 all blocks empty 才会 dealloc 整个 perf extent
 
 
 
@@ -86,7 +64,7 @@ replica recover src block 如果是 ELsmNotAllocData，block_not_alloc 置为 tr
 
 
 
-access_stats_->layer_stats  的统计未必准确：
+access_stats_->layer_stats 的统计未必准确：
 
 1. data len，特别是  special recover 传递的
 2. IsRead() / IsWrite()
@@ -113,14 +91,6 @@ recover write 也有可能 unmap 写，这部分不需要统计进来。
 
 
 
-没有 internal perf 的情况下，4k iodepth = 64 写，iops = 40k - 42k 波动
-
-* baseline avail_level_ratio 1.0，app perf 从 40k 下降到 34k - 36k 附近，短暂掉到 25k（不是稳定复现，当时的 waiting io num 还是 0，有可能是下层操作的影响），internal perf iops = 1430，waiting io 全程为 0，current level，28 MiB，current size，36 MiB
-* avail_level_ratio 0.5，app perf  36k - 38k 波动，但 internal perf iops = 710，没有 waiting io，current level，14 MiB，current size，36 MiB
-* avail_level_ratio 0.95，app perf 从 40k 下降到 36k - 37k 附近
-
-
-
 
 
 1. 一个 ever exist = false 的副本，在 lsm 上真的存在吗？如果是快照/克隆后被迁移到其他节点的 PExtent，此时虽然还是 non ever exist，但在目的节点上真实存在，其健康状态会被定期上报。
@@ -130,8 +100,6 @@ recover write 也有可能 unmap 写，这部分不需要统计进来。
 5. recover src 也有可能总是选到同一个，此时若 lease owner 与 recover src 网络失联，但 recover src 与 meta leader 是可以正常通信的，会导致 recover 一直无法完成。
 6. 若数据块的 Lease owner 发生转移，恢复命令无法继续执行，recover mgr 可以对其主动失败处理，利用 access manager 里的 pid_owner 或 lid_owner
 6. 后续测试轮转调度是否有效，可以的方式是代码里指定给到 volume  A 的 io 一定带上 recover flag，B 的是 sink flag，然后用 fio 打到这两个 volume 上来模拟多种内部 IO 同时进行的场景，看此时的轮转调度是否有效。 
-
-
 
 
 
@@ -227,8 +195,6 @@ MLAG 集群中不同节点能力有差，有时候升级慢是在重启某个 ch
 
 
 
-
-
 1. perf 和 cap inernal io 除了考虑磁盘能力，还需要考虑他两加起来不能超过网络带宽的 50%，如果只有单层数据待恢复，那应该允许他用满 50%。
 
     目前的实现里，假设 cap / perf 都在满负载恢复，两边都 500 MB/s，那 app io 可能就抢不到网络带宽了。
@@ -273,6 +239,8 @@ cd /var/log/zbs && ll -rth zbs-chunkd.log* 按照日期排序找文件
 有了临时副本，staging block info 的含义是啥？
 
 
+
+gc 回收逻辑
 
 普通读的时候是否会 sync，会的，在 AccessIOHandler::DoReadVExtent() 中调用，像写一样，也会剔除 gen 不符预期的副本、在 sync 失败时清理本地 lease， 读 COW 出来的 pentry 但 parent 不在本地的情况调用一次 RefreshChildExtentLocation rpc
 

@@ -279,6 +279,7 @@ git commit -m “refactor: update .gitignore”
 * 提交所有被删除、被替换、被修改和新增的文件到数据暂存区：`git add -A`
 * 临时要开几个新分支补 patch，怎么暂存当前分支的代码？建立多个文件夹 zbs1-5 + git stash 使用
 * git 仓库中的一个 submodule 对应的版本号存储在哪？.git 中，可以用 git prune 减小 .git 的大小
+* 批量删除当前分支外的所有分支：`git branch | xargs git branch -D`
 
 #### 常见场景
 
