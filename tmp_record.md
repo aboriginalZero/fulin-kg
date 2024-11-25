@@ -96,9 +96,7 @@ recover write 也有可能 unmap 写，这部分不需要统计进来。
 1. 一个 ever exist = false 的副本，在 lsm 上真的存在吗？如果是快照/克隆后被迁移到其他节点的 PExtent，此时虽然还是 non ever exist，但在目的节点上真实存在，其健康状态会被定期上报。
 2. vextent no 对 FLAGS_meta_max_pextents 取余就是 lid。
 3. lid 与 pid 的 gc 是独立运行的？
-4. ShouldNotMigrate 也需要考虑 healthy cids
 5. recover src 也有可能总是选到同一个，此时若 lease owner 与 recover src 网络失联，但 recover src 与 meta leader 是可以正常通信的，会导致 recover 一直无法完成。
-6. 若数据块的 Lease owner 发生转移，恢复命令无法继续执行，recover mgr 可以对其主动失败处理，利用 access manager 里的 pid_owner 或 lid_owner
 6. 后续测试轮转调度是否有效，可以的方式是代码里指定给到 volume  A 的 io 一定带上 recover flag，B 的是 sink flag，然后用 fio 打到这两个 volume 上来模拟多种内部 IO 同时进行的场景，看此时的轮转调度是否有效。 
 
 
@@ -858,21 +856,46 @@ elf  一直以来创建虚拟卷模板，创建的是 volume 而不是 snapshot�
 
 查看网络的方式有哪些？
 
-* 网卡异常探测（节点层面） /var/log/zbs/netbouncer/l2ping@storage.INFO
+* [网卡异常探测](https://docs.google.com/document/d/1cNja_rnJ3fQglBqfouPvx8Ss82qzIiObN6cN_wYUs3s/edit#heading=h.xjzjaz3p8u9t)（节点层面） /var/log/zbs/netbouncer/l2ping@storage.INFO
 
-    https://docs.google.com/document/d/1cNja_rnJ3fQglBqfouPvx8Ss82qzIiObN6cN_wYUs3s/edit#heading=h.xjzjaz3p8u9t
-
-    https://docs.google.com/document/d/1nB270ymaYNWK_b_WVShtJ79yGWW5bi76/edit
-
-* 网络亚健康探测（集群层面） /var/log/zbs/network-monitor.log
-
-    https://docs.google.com/document/d/1MK0VRK5WcRF14N36PpJ_O0Y-HUHG-fxe9q-usfAAevk/edit#heading=h.jz7vtdo3hm60
+* [网络亚健康探测](https://docs.google.com/document/d/1MK0VRK5WcRF14N36PpJ_O0Y-HUHG-fxe9q-usfAAevk/edit#heading=h.jz7vtdo3hm60)（集群层面） /var/log/zbs/network-monitor.log
 
     ```
     fping <data_ip> <mgt_ip> -C 30 -t 199 -i 1 -r 1 -p 400 -q 
     ```
 
     发送 30 个 ping 包，超时时间为 100ms，发送间隔为 1ms，如果第一次 ping 失败会重试一次，两次 ping 之间的间隔为 400 毫秒。
+
+    符合 failslow 条件会被隔离（/var/log/zbs/netbouncer/netreactor.INFO）
+
+    ```
+    I1125 10:35:17.013400 scoredb.go:374] - Got scores: map[10.0.132.231:88.48718606407681 10.0.132.232:4.319999999999999 10.0.132.233:15.069390336000003 10.0.132.234:1.1]
+    I1125 10:35:17.013507 scoredb.go:529] - Found outlier score for the worst node: 10.0.132.231, score: 88.487186
+    I1125 10:35:17.013522 scoredb.go:378] - Found slow node ip: 10.0.132.231
+    I1125 10:35:17.028179 reactor.go:148] - Ban chunk id: 2 done
+    ...
+    I1125 10:42:17.000876 scoredb.go:374] - Got scores: map[10.0.132.231:1 10.0.132.232:1 10.0.132.233:1 10.0.132.234:1]
+    I1125 10:42:17.000932 scoredb.go:384] - Found recovered node ip: 10.0.132.231
+    I1125 10:42:17.009688 reactor.go:157] - Unban chunk id: 2 done
+    ```
+
+    对应的 meta 日志
+
+    ```
+    I1125 10:35:17.013777 32630 chunk_isolate_manager.cc:429] Start isolating chunk. cid: 2, policy name: FAILSLOW_HCI, overwrite_policy: 1
+    ...
+    I1125 10:42:17.001516 32630 chunk_isolate_manager.cc:489] Start deisolating chunk. cid: 2
+    ```
+
+    假设集群内有 3 个节点 A、B、C，其中 A 与 B 之间发生了网络失联。A 和 B 的互相打分均会按照 1->2->4->8->16->32->64->100 迅速到达 100。但由于 C 和 A、B 的网络状况仍正常，所以 C 对 A 和 B 的打分仍维持 1。对应的 IPScores 如下：
+
+    ```
+    A: {B: 100, C: 1}
+    B: {A: 100, C:1}
+    C: {A: 1, B:1}
+    ```
+
+    以 30% 分位的分数作为特征值，最终 A、B、C 的特征值都是 1。
 
 * data channel 探测（chunk 层面）/var/log/zbs/zbs-chunkd.INFO
 
