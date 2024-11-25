@@ -1,3 +1,25 @@
+1. 搞一个 RepositionPEntry，这样批量处理 reposition pentry 时能让内存命中率，除了 pentry 还可以有 chunk table 中的信息、lease owner、pid
+
+    ```
+    class RepositionPEntry {
+        PhysicalExtentTableEntry entry;
+        cid_t owner;
+        uint8_t is_temporary : 1;
+        uint8_t is_parent : 1;
+    
+        RepositionPEntry(const PhysicalExtentTableEntry& entry, bool is_temporary, bool is_parent) :
+            entry(entry), is_temporary(is_temporary), is_parent(is_parent){};
+        // 在 access manager 中赋值
+        void SetOwner(cid_t cid) { owner = cid; }
+    };
+    ```
+
+2. 把 RepositionPEntry 中的 pentry 替换成一个只供 recover 使用的数据结构，把 replica_ 开成栈变量，减少拷贝时的耗时；
+
+3. 把批量处理 pids 的逻辑提出 1 或 2 个宏定义，在 7 个子 migrate 中使用。
+
+
+
 感知硬件能力做成一个通用的能力，这样 internal flow ctrl / flow ctrl / sink 都能使用。
 
 
