@@ -1,4 +1,5 @@
-看起来在 Sync / SyncNoRetry 里调用 refresh child loc rpc 之前，都需要先 sync 一下 parent，我调整下。
+1. 怎么理解管理网络和虚拟机网络的区别？http://docs.fev.smartx.com/smtxos/6.1.1/elf_installation_guide/elf_installation_guide_21
+2. VLAN ID = 0 的含义是什么？
 
 
 
@@ -41,12 +42,6 @@
    2. cid 1 上的副本 dead：cid1 和 2 都返回 ENotFoundOrigin，refresh child loc 是 [1, 3]，从 [1, 3] sync 时发现 cid1 返回 ENotFoundOrigin，refresh child loc 又得到 [1, 3]，循环触发 refresh child loc 一段时间；
    3. cid 3 上的副本 dead：cid 2 返回 ENotFoundOrigin，refresh child loc 是 [1, 3]，从 [1, 3] sync 时发现 cid3 返回 ENotFoundOrigin，refresh child loc 又得到 [1, 3]，循环触发 refresh child loc 一段时间；
    4. cid 1 3 上的副本都 dead：与修改前表现一致。
-
-
-
-
-
-（在 recover 完成前，若 replica 2 corrupt，数据完全丢失，这是潜在风险）
 
 
 
