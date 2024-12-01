@@ -1207,7 +1207,7 @@ cgexec -g cpuset:. taskset -c 11 fio -ioengine=libaio -invalidate=1 -iodepth=128
 | 2_write_64_256k                     | 834          | 209MiB/s             |
 | 2_write_128_256k                    | 836          | 209MiB/s             |
 
-### perf & metric
+### recover 性能统计流程
 
 recover 性能统计
 
@@ -1396,6 +1396,43 @@ LSMCmdQueue 中的元素在哪被消费呢？
 4. LSM::RecoverWrite()，LSM::DoRecoverWrite()；
 5. ExtentInode::SetupRecoverWrite()，会有 pblob 层面的操作。
 
+### iscsi io 流
+
+1. submitter_receiver.cc 中的 eventfd_read / eventfd_write 使用
+2. zbs client proxy 和 v2 的区别
+
+一次写操作
+
+一直走到 zbs client 侧
+
+ZbsClient::DoIO --> ZbsClientProxyV2::DoIO --> IOReceiver::HandleIO（消费队列元素） --> ZbsClientProxyV2::IOSplit （放入一个 polling 队列中，之后被塞到 chunk 主线程） --> ZbsClientProxyV2::IOSubmit --> zbs_aio_write --> blockdev_zbs_writev -->  _blockdev_zbs_submit_request（在这区分 bdev io type，有 read / write / unmap / flush / reset / abort / CAW 等） --> blockdev_zbs_submit_request （注册在 zbs_fn_table 上） --> __submit_request --> spdk_bdev_io_submit --> spdk_bdev_writev --> spdk_bdev_scsi_readwrite --> spdk_bdev_scsi_process_block --> spdk_bdev_scsi_execute --> spdk_scsi_lun_execute_tasks --> spdk_scsi_dev_queue_task --> spdk_iscsi_queue_task --> spdk_iscsi_op_scsi / spdk_iscsi_op_data --> spdk_iscsi_execute --> spdk_iscsi_conn_handle_incoming_pdus --> spdk_iscsi_conn_execute --> spdk_iscsi_conn_full_feature_do_work --> spdk_iscsi_conn_full_feature_migrate （在这起了一个 timer 循环执行 do_work） 
+
+初始化过程
+
+spdk_iscsi_conn_full_feature_migrate --> spdk_iscsi_conn_login_do_work --> spdk_iscsi_conn_construct --> spdk_iscsi_portal_accept --> spdk_iscsi_portal_grp_open --> spdk_iscsi_portal_grp_open_all --> spdk_iscsi_setup --> ISCSIServer::SetupPortal --> ISCSIServer::UpdateConfig --> SetupChunkServerCtx（到了 zbs chunk 侧了）
+
+ISCSIServer 在这执行注册多个回调，如 UpdateLuns / RefreshConfig / ListConnection。
+
+iSCSI initiator 和 ZBS Chunk server 进行交互，iSCSI 配置信息要在 Chunk 上落地才算真正生效。
+
+1. ZbsClientProxyV2::DoIO
+2. ZbsClient::Write / Unmap
+3. ZbsClient::DoIO
+4. ZbsClient::SplitIO
+5. ZbsClient::ProcessIO
+6. ZbsClient::SubmitIO
+7. InternalIOClient::SubmitIO
+    1. InternalIOClient::DoLocalIO
+        1. AccessIOHandler::WriteVExtent
+    2. InternalIOClient::DoRemoteIO
+        1. DataChannelClient::WriteVExtent
+        2. DataChannelClient::Impl::WriteVExtent
+        3. AccessIOHandler::SubmitWriteVExtent，Access IO Handler 中注册了该回调
+        4. AccessIOHandler::WriteVExtent
+8. AccessIOHandler::WriteVExtent
+9. access io handler
+10. replica io handler
+
 ### access io 并发控制
 
 access 中 app io 写需要拿读屏障，recover io （recover io 读写是一体的）用写屏障，这会使得多个 app io 写之间不会互斥，而 recover io 会跟 app io 写以及其它 recover io 互斥。
@@ -1506,7 +1543,121 @@ chunk 日志中搜 migrate pblob skip 会显示卸载盘卸不掉的 pblob，有
 
 敏捷恢复设计文档，https://docs.google.com/document/d/1JZ6trjE_D1ewfWbaSuewPoFzUksbfno8AyS1wj2Lkio/edit
 
-### lsm 特点
+### PExtent / Chunk 状态
+
+chunk 视角的 PExtentStatus
+
+```cpp
+enum PExtentStatus {
+  PEXTENT_STATUS_INIT = 99,
+  PEXTENT_STATUS_INVALID = 0,
+  PEXTENT_STATUS_ALLOCATED = 1,
+  PEXTENT_STATUS_RECOVERING = 2,
+  PEXTENT_STATUS_OFFLINE = 3,
+  PEXTENT_STATUS_CORRUPT = 4,
+  PEXTENT_STATUS_IOERROR = 5,
+  PEXTENT_STATUS_UMOUNTING = 6
+};
+```
+
+meta 视角的 PExtentStatus
+
+```c++
+enum PExtentStatus {
+  PEXTENT_HEALTHY = 0,
+  
+  // 不是 staging/garbage 且写过真实数据且当前时刻活跃副本数为 0
+  PEXTENT_DEAD = 1,
+  
+  // 不是 staging/garbage 且写过真实数据且当前时刻副本数为 0
+  PEXTENT_BROKEN = 2,
+  
+  // 只看 garbage_ 字段是否为 true，不管其他的
+  PEXTENT_GARBAGE = 4,
+	
+  // 
+  PEXTENT_NEED_RECOVER = 3,
+  
+  PEXTENT_MAY_RECOVER = 5
+};
+```
+
+ChunkState，用以表示 Chunk 视角的是否能够正常运行
+
+```cpp
+enum ChunkState {
+  // 默认状态，当 Chunk 确定所属的 Storage Pool 后，就会进入 IN_USE 
+  // 而 Chunk 在新加入集群时一定从属于某个 Storage Pool，所以这个状态存在时间很短
+  CHUNK_STATE_UNKNOWN = 0;
+  
+  // 只有 Idle 状态的 Chunk 才允许加入新的 SP 或是从 ZBS 集群中退出，其不属于任何 SP
+  // Meta 仅仅定期探测 Chunk 状态，不会再向 Chunk 分配任何 Extent
+  CHUNK_STATE_IDLE = 1;
+  
+  // 只有这个阶段的 Chunk 可以被正常分配数据
+  CHUNK_STATE_IN_USE = 2;
+  
+  // 当操作 Chunk 从 Storage Pool 中退出时， Chunk 将从 Inuse 切换至 Removing 
+  // Meta 不会再向 Removing 状态的节点分配新的数据，其上的 extent 会被迁移到其他 Chunk
+  // 当 Removing 状态下的 Chunk 已经没有任何 Extent 时，将把 Chunk 置为 Idle 状态
+  CHUNK_STATE_REMOVING = 3;
+}
+```
+
+ChunkStatus，用以表示 meta 感知的每个 Chunk 的连接状态
+
+```cpp
+enum ChunkStatus {
+  // Chunk 加入集群/重新启动后的初始状态
+  // Meta Leader 刚刚启动，从未获取过任何的 Chunk 状态信息时展示的状态，
+  // 或者 Chunk 已经和 Meta 建立连接但是本地尚未完成初始化工作无法提供存储服务的状态
+  CHUNK_STATUS_INITIALIZING = 1,
+  
+  // Chunk 在本地完成所有功能初始化并正常之后，通过心跳上报，将由 Initializing 进入 Healthy 状态
+  // Chunk 正常与 Meta 建立连接，并处于可正常提供服务的状态
+  CHUNK_STATUS_CONNECTED_HEALTHY = 2,
+  
+  // Chunk 正常与 Meta 建立连接，但是本地 LSM 处于异常状态（通常原因是没有可用的 Journal 分区）
+  // 此时 Meta 不会向 Chunk 分配新的 Extent ，但也不会立即触发数据迁移动作；
+  CHUNK_STATUS_CONNECTED_ERROR = 3,
+  
+  // 这 2 个实际未使用
+  CHUNK_STATUS_CONNECTED_WARNING = 4, 	
+  CHUNK_STATUS_CONNECTING = 5,		
+  
+  // 当前的 Meta Leader 生命周期内曾经和 Chunk 建立过健康连接，但此时已经和 Chunk 失去连接
+  // Chunk 与 Meta 失去连接，其上的数据副本将因为长期未更新存活状态而触发 Meta 的数据恢复动作
+  CHUNK_STATUS_SESSION_EXPIRED = 6
+};
+```
+
+### zbs 端口使用
+
+| 服务名            | 使用网络           | 使用端口         | 备注                       |
+| ----------------- | ------------------ | ---------------- | -------------------------- |
+| zookeeper         | 存储网络           | 2181、2888、3888 |                            |
+| prometheus        | 管理网络、存储网络 | 9090             | 用 http 而非 https 访问    |
+| zbs-deploy-server | 管理网络           | 10403            |                            |
+| zbs-rest-server   | 管理网络、存储网络 | 10402            |                            |
+| zbs-inspector     | 存储网络           | 10700、10701     | zbs-insight 也在同一进程   |
+| zbs-taskd         | 管理网络、存储网络 | 10600、10601     | task dispatcher and runner |
+|                   |                    |                  |                            |
+| zbs-metad         |                    | 10100            | meta rpc server            |
+| zbs-metad         |                    | 10101            | meta status server         |
+| zbs-metad         |                    | 10102            | meta sm server             |
+| zbs-metad         | meta leader        | 10103            | meta access manager        |
+| zbs-metad         |                    | 10104            | meta http server           |
+|                   |                    | 10105            | meta grpc server           |
+|                   |                    |                  |                            |
+| zbs-chunkd        |                    | 10200            | chunk rpc server           |
+| zbs-chunkd        |                    | 10201            | chunk data channel         |
+| zbs-chunkd        |                    | 10202            | chunk http server          |
+| zbs-chunkd        |                    | 10203            | chunk perf server          |
+| zbs-chunkd        |                    | 10206            | meta proxy rpc service     |
+| zbs-chunkd        |                    | 10207            | meta proxy status service  |
+| zbs-chunkd        |                    | 10208            | chunk grpc server          |
+
+### lsm 行为
 
 zbs 5.6.x 中将 cap 层数据读到 cap read cache 的条件是 40 分钟内读 3 次，每次间隔 15 秒以上。要特别注意的是，一定是读的下沉后的数据。
 
@@ -1528,6 +1679,48 @@ lsm 中单个 Extent 内部对于并发 IO 存在一定的限制：
 基于这两点，在顺序 IO 的场景下，性能受到很大的限制。而条带化的目的，就是在顺序 IO 的场景下，将 IO 分散到多个 Extent，利用多 Extent 之间的并发性，提高顺序 IO 的性能。
 
 假设条带数为 4，每一个 extent 中包含 8 个 block，在进行条带化处理后，顺序 IO（V1-B1，V1-B2，V1-B3，V1-B4，V1-B5，V1-B6，V1-B7，V1-B8），则转换为（V1-B1，V2-B1，V3-B1，V4-B1，V1-B2，V2-B2，V3-B2，V4-B2）。这样，就可以利用到 V1，V2，V3，V4，4 个 Extent 的并发性。
+
+### elf 行为
+
+用户操作虚拟机行为
+
+创建空白虚拟机：
+
+从模板创建虚拟机：不存在虚拟机，根据模板创建一个虚拟机；
+
+从快照重建虚拟机：不存在虚拟机，根据快照创建一个虚拟机；
+
+从虚拟机克隆虚拟机：等效为对虚拟机配置做快照，磁盘是直接调用的 ZBS volume 克隆来实现；
+
+导入 OVF 创建虚拟机：根据 OVF 创建一个虚拟机；
+
+从快照回滚虚拟机：存在虚拟机，回到快照状态；
+
+从虚拟机克隆为虚拟机模板：虚拟机还保留着，同时生成一个不可变更的虚拟机模板；
+
+从虚拟机转化为虚拟机模板：虚拟机没了，同时生成一个不可变更的虚拟机模板；
+
+虚拟机快照不会被快照/克隆。
+
+当一个虚拟卷快照被克隆 10 次或一个虚拟机转化为虚拟机模板时，对应的副本会均匀分配。
+
+ELF 克隆虚拟机有 2 种：
+
+* 快速克隆
+
+    COW 出来的 pextent 与 origin 的 loc 是一样的
+
+    有的用户也会习惯于将应用装在系统盘，因此克隆后应用所使用的数据盘并不一定是新建的
+
+    我们的 VM 盘会被局部化，写操作造成的 COW 又集中在这个母盘所在的机器上，导致性能差。
+
+    调用 metad 提供的 Copy
+
+* 完全克隆
+
+    对 src volume 创建临时快照，调用 zbs taskd 提供的 CopyVolume(src_cid, dst_cid, src_snapshot, dst_volume)，全量备份后，删除临时快照。
+
+    https://docs.google.com/document/d/1HyJ7uJpT0K3zSoAFKEX_m2gKNRYDlzWTXNoLNFTY0ac/edit#heading=h.umizx61uu46q
 
 
 
