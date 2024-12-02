@@ -1,3 +1,9 @@
+ctx->agile_recover_only 和 ctx->agile_recover 的区别
+
+
+
+
+
 1. 怎么理解管理网络和虚拟机网络的区别？http://docs.fev.smartx.com/smtxos/6.1.1/elf_installation_guide/elf_installation_guide_21
 2. VLAN ID = 0 的含义是什么？
 
