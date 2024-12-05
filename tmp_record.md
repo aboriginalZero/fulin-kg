@@ -9,50 +9,6 @@ ctx->agile_recover_only 和 ctx->agile_recover 的区别
 
 
 
-假设 child loc = [1, 2]， 加这个 patch 前（所有 cid 都 ENotFoundOrigin 才 refresh child loc），分类讨论不同 parent loc 有的不同行为：
-
-1. 与 child loc 完全不一致，即 [3, 4]
-   1. cid 3 4 上的副本都 normal：cid 1 和 2 都返回 ENotFoundOrigin，refresh child loc 得到 [3, 4]，正常读写，合理；
-   2. cid 3 上的副本 dead：cid 1 和 2 都返回 ENotFoundOrigin，refresh child loc 得到 [3, 4]，从 [3, 4] sync 时发现只有 cid3 返回 ENotFoundOrigin，replica 3 被剔除，从 replica 4 读写数据，合理；
-   3. cid 4 上的副本 dead：与 cid 3 上的副本 dead 表现一致，合理；
-   4. cid 3 4 上的副本都 dead：cid 1 和 2 都返回 ENotFoundOrigin，refresh child loc 得到 [3, 4]，从 [3, 4] sync 时发现 cid3 和 cid4 都返回 ENotFoundOrigin，又触发 refresh child loc 并一直循环，直到 cid 3 4 上的副本被 gc，lease 里的 origin_pid =  0；
-2. 与 child loc 一致，即 [1, 2]
-   1. cid 1 2 上的副本都 normal：无需 refresh child loc，正常读写，合理；
-   2. cid 1 上的副本 dead：只有 cid 1 返回 ENotFoundOrigin，replica 1 被剔除，从 replica 2 读写数据，合理；
-   3. cid 2 上的副本 dead：与 cid 1 上的副本 dead 表现一致；
-   4. cid 1 2 上的副本都 dead：cid 1 和 2 都返回 ENotFoundOrigin，refresh child loc 还是 [1, 2]，循环触发 refresh child loc 一段时间；
-3. 与 child loc 部分一致，即 [1, 3]
-   1. cid 1 3 上的副本都 normal：cid 2 返回 ENotFoundOrigin，replica 2 被剔除，从 replica 1 读写数据，合理（在 recover 完成前，若 replica 1 corrupt，认为 child 数据完全丢失，但实际上可以从 cid 3 上读取）；
-   2. cid 1 上的副本 dead：cid1 和 2 都返回 ENotFoundOrigin，refresh child loc 是 [1, 3]，从 [1, 3] sync 时发现只有 cid1 返回 ENotFoundOrigin，replica 1 被剔除，从 replica 3 读写数据，合理；
-   3. cid 3 上的副本 dead：cid 2 返回 ENotFoundOrigin，replica 2 被剔除，从 replica 1 读写数据，合理；
-   4. cid 1 3 上的副本都 dead：cid 1 和 2 都返回 ENotFoundOrigin，refresh child loc 是 [1, 3]，循环触发 refresh child loc 一段时间；
-
-
-
-加这个 patch 后（只要有一个 ENotFoundOrigin 就 refresh child loc）：
-
-1. 与 child loc 完全不一致，即 [3, 4]
-
-   不论什么情况，cid 1 和 2 都会返回 ENotFoundOrigin，与修改前表现一致。
-
-2. 与 child loc 一致，即 [1, 2]
-
-   1. cid 1 2 上的副本都 normal：与修改前表现一致。
-   2. cid 1 上的副本 dead：cid 1 返回 ENotFoundOrigin，refresh child loc 得到 [1, 2]，循环触发 refresh child loc 一段时间；
-   3. cid 2 上的副本 dead：与 cid 1 上的副本 dead 表现一致；
-   4. cid 1 2 上的副本都 dead：与修改前表现一致。
-
-3. 与 child loc 部分一致，即 [1, 3]
-
-   1. cid 1 3 上的副本都 normal：cid 2 返回 ENotFoundOrigin，refresh child loc 是 [1, 3]，正常读写，合理（改进处）； 
-   2. cid 1 上的副本 dead：cid1 和 2 都返回 ENotFoundOrigin，refresh child loc 是 [1, 3]，从 [1, 3] sync 时发现 cid1 返回 ENotFoundOrigin，refresh child loc 又得到 [1, 3]，循环触发 refresh child loc 一段时间；
-   3. cid 3 上的副本 dead：cid 2 返回 ENotFoundOrigin，refresh child loc 是 [1, 3]，从 [1, 3] sync 时发现 cid3 返回 ENotFoundOrigin，refresh child loc 又得到 [1, 3]，循环触发 refresh child loc 一段时间；
-   4. cid 1 3 上的副本都 dead：与修改前表现一致。
-
-
-
-
-
 1. 搞一个 RepositionPEntry，这样批量处理 reposition pentry 时能让内存命中率，除了 pentry 还可以有 chunk table 中的信息、lease owner、pid
 
     ```
@@ -87,9 +43,9 @@ cat /sys/block/sdb/queue/rotational
 
 
 
-
-
 用 nvmf 测各种类型盘的上限，然后取其 50% 认为是 recover io 可用的上限
+
+同一类型且同一型号的盘，容量不同，磁盘 iops/bps 的上限也不同（比如  P5620 NVMe SSD，1.6 TB 跟 6.4TB 的 4k iops 上限分别是 20w 和 30w）
 
 
 
