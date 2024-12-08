@@ -1,3 +1,15 @@
+meta 会 revoke 整个 volume lease 的 5 种情况
+
+1. create snapshot
+2. rollback volume、move src volume to dst（rollback 的老接口）
+3. reclaim volume temporary replica（命令行调用，但是有必要回收整个 volume lease 吗？）
+4. delete volume
+5. resize volume
+
+
+
+
+
 ctx->agile_recover_only 和 ctx->agile_recover 的区别
 
 
