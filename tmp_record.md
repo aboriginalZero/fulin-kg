@@ -1,3 +1,4 @@
+
 打印 tmp_cmd ，还有 setup for pid: xxx 中的信息
 
 ```
@@ -22,14 +23,6 @@
 147843:I1209 12:55:15.304996  4997 ec_recover_handler.cc:725] [ECRecover::DoRecover] RecoverEnd done. cmd: pid: 6943789 state: READ cur_block: 511 src_cid: 5 dst_cid: 1 is_migrate: false silence_ms: 0 epoch: 37687524 dst_shard_idx: 2, gen: 74, st: OK
 147844:I1209 12:55:15.306421  4997 ec_recover_handler.cc:736] [ECRecover] Replace ec shard done. cmd: pid: 6943789 state: END cur_block: 511 src_cid: 5 dst_cid: 1 is_migrate: false silence_ms: 0 epoch: 37687524 dst_shard_idx: 2, new lease: pid: 6943789, epoch: 37687524, origin_pid: 0, origin_epoch: 0, ever_exist: 1, meta_generation: 74, expect_replica_num: 3, loc: "[ 0:5 1:4 2:1 ]", cow_from_snapshot: 0 , ec_param: name: "ISAL" k: 2 m: 1 rs_arg { w: 8 coding_tech: REED_SOL_VAN } block_size: 4096 ec_type: REED_SOLOMON, st: OK
 ```
-
-
-
-
-
-ctx->agile_recover_only 和 ctx->agile_recover 的区别
-
-
 
 
 
@@ -873,6 +866,16 @@ should meet
 日志见升级控制节点的 /var/log/zbs/cluster_upgrade.log 日志，/usr/share/upgrade/file 路径下有待升级的目标 ISO 节点是升级控制节点。
 
 
+
+### Lease 相关
+
+meta 会 revoke 整个 volume lease 的 5 种情况
+
+1. create snapshot
+2. rollback volume、move src volume to dst（rollback 的老接口）
+3. reclaim volume temporary replica（命令行调用，但是有必要回收整个 volume lease 吗？）
+4. delete volume
+5. resize volume
 
 ### prometheus 使用
 
