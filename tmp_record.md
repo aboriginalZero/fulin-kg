@@ -1,3 +1,32 @@
+打印 tmp_cmd ，还有 setup for pid: xxx 中的信息
+
+```
+// replica recover
+[root@node130-74 14:36:51 file]$ grep -wn "6986403" /var/log/zbs/zbs-chunkd.log.20241209-121658.4988
+1109:I1209 12:17:38.542147  4997 recover_handler.cc:86] Get reposition notification, put cmd into pending queue: pid: 6986403 lease { owner { uuid: "4ccc6702-84e7-4c6d-924b-b5e4f2ca6ae0" ip: "10.0.130.74" num_ip: 1250033674 port: 10201 cid: 4 secondary_data_ip: "10.199.130.74" zone: "default" scvm_mode_host_data_ip: "" alive_sec: 2944 machine_uuid: "aba7982e-5f9a-11ef-9c29-9bba3c5d970a" } pid: 1172774 location: 4 epoch: 21300048 expected_replica_num: 2 } dst_chunk: 5 src_chunk: 4 epoch: 37724171 active_location: 4 agile_recover_only: true pextent_type: PT_PERF thin_provision: true start_ms: 1081672160
+1113:I1209 12:17:38.542304  4997 reposition_concurrency_controller.cc:221] pid: 6986403, cmd has paused, src_cid: 4, src concurrency: 32, src limit: 36, dst_cid: 5, dst concurrency: 32, dst limit: 32, cmd start ms: 1081676192, pextent type: PT_PERF
+2655:I1209 12:19:11.891799  4997 reposition_concurrency_controller.cc:228] pid: 6986403, cmd has resumed, src_cid: 4, src concurrency: 32, src limit: 36, dst_cid: 5, dst concurrency: 32, dst limit: 32, cmd start ms: 1081676192, pextent type: PT_PERF
+2656:I1209 12:19:11.891829  4997 recover_handler.cc:337] Schedule reposition cmd: pid: 6986403 lease { owner { uuid: "4ccc6702-84e7-4c6d-924b-b5e4f2ca6ae0" ip: "10.0.130.74" num_ip: 1250033674 port: 10201 cid: 4 secondary_data_ip: "10.199.130.74" zone: "default" scvm_mode_host_data_ip: "" alive_sec: 2944 machine_uuid: "aba7982e-5f9a-11ef-9c29-9bba3c5d970a" } pid: 1172774 location: 4 epoch: 21300048 expected_replica_num: 2 } dst_chunk: 5 src_chunk: 4 epoch: 37724171 active_location: 4 agile_recover_only: true pextent_type: PT_PERF thin_provision: true start_ms: 1081676192
+2658:I1209 12:19:11.893018  4997 replica_recover_handler.cc:415] [AGILE RECOVER] setup agile recover for pid: 6986403 src: 4 dst: 5 origin gen: 441749
+2659:I1209 12:19:11.893028  4997 replica_recover_handler.cc:897] [AGILE RECOVER START] pid: 6986403 state: START cur_block: 4294967295 src_cid: 4 dst_cid: 5 is_migrate: false silence_ms: 0 replace_cid: 0 epoch: 37724171 pextent_type: PT_PERF gen: 450742 recover_block_bitmap: 0 block_bitmap: 0 block_not_alloc: 0
+4268:I1209 12:21:05.494571  4997 replica_recover_handler.cc:943] [AGILE RECOVER END] pid: 6986403 state: WRITE cur_block: 1024 src_cid: 4 dst_cid: 5 is_migrate: false silence_ms: 0 replace_cid: 0 epoch: 37724171 pextent_type: PT_PERF gen: 451035 recover_block_bitmap: 1 block_bitmap: 18446744073709551615 block_not_alloc: 0
+
+
+// ec recover
+146500:I1209 12:55:14.162658  4997 recover_handler.cc:86] Get reposition notification, put cmd into pending queue: pid: 6943789 lease { owner { uuid: "4ccc6702-84e7-4c6d-924b-b5e4f2ca6ae0" ip: "10.0.130.74" num_ip: 1250033674 port: 10201 cid: 4 secondary_data_ip: "10.199.130.74" zone: "default" scvm_mode_host_data_ip: "" alive_sec: 5196 machine_uuid: "aba7982e-5f9a-11ef-9c29-9bba3c5d970a" } pid: 1163726 location: 0 epoch: 21291001 expected_replica_num: 3 } dst_chunk: 1 src_chunk: 5 epoch: 37687524 agile_recover_only: false dst_shard_idx: 2 ec_active_location { field1: 1029 field2: 0 field3: 0 field4: 0 } pextent_type: PT_CAP thin_provision: true start_ms: 1083926633
+146501:I1209 12:55:14.162760  4997 recover_handler.cc:337] Schedule reposition cmd: pid: 6943789 lease { owner { uuid: "4ccc6702-84e7-4c6d-924b-b5e4f2ca6ae0" ip: "10.0.130.74" num_ip: 1250033674 port: 10201 cid: 4 secondary_data_ip: "10.199.130.74" zone: "default" scvm_mode_host_data_ip: "" alive_sec: 5196 machine_uuid: "aba7982e-5f9a-11ef-9c29-9bba3c5d970a" } pid: 1163726 location: 0 epoch: 21291001 expected_replica_num: 3 } dst_chunk: 1 src_chunk: 5 epoch: 37687524 agile_recover_only: false dst_shard_idx: 2 ec_active_location { field1: 1029 field2: 0 field3: 0 field4: 0 } pextent_type: PT_CAP thin_provision: true start_ms: 1083931813
+146502:I1209 12:55:14.162786  4997 ec_recover_handler.cc:641] [DoRecover] begin recover. cmd: pid: 6943789 state: INIT cur_block: 4294967295 src_cid: 5 dst_cid: 1 is_migrate: false silence_ms: 0 epoch: 37687524 dst_shard_idx: 2
+146503:I1209 12:55:14.162802  4997 ec_recover_handler.cc:293] [FillSourceBlocks] fill source blocks done. pid: 6943789 src_blocks: [0, 1](3) src_sub_block_ratio: 1 has_local_src: 1, recover_cmd: pid: 6943789 state: INIT cur_block: 4294967295 src_cid: 5 dst_cid: 1 is_migrate: false silence_ms: 0 epoch: 37687524 dst_shard_idx: 2, ec_pextent_info: pid: 6943789, epoch: 37687524, origin_pid: 0, origin_epoch: 0, ever_exist: 1, meta_generation: 74, expect_replica_num: 3, loc: "[ 0:5 1:4 ]", cow_from_snapshot: 0 , ec_param: name: "ISAL" k: 2 m: 1 rs_arg { w: 8 coding_tech: REED_SOL_VAN } block_size: 4096 ec_type: REED_SOLOMON
+146504:I1209 12:55:14.162837  4997 ec_recover_handler.cc:475] [DoRecoverStart] RecoverStart. cmd: pid: 6943789 state: START cur_block: 4294967295 src_cid: 5 dst_cid: 1 is_migrate: false silence_ms: 0 epoch: 37687524 dst_shard_idx: 2, gen: 74
+146505:I1209 12:55:14.163049  4997 ec_recover_handler.cc:482] [DoRecoverStart] RecoverStart done. cmd: pid: 6943789 state: START cur_block: 4294967295 src_cid: 5 dst_cid: 1 is_migrate: false silence_ms: 0 epoch: 37687524 dst_shard_idx: 2, gen: 74, st: OK
+147843:I1209 12:55:15.304996  4997 ec_recover_handler.cc:725] [ECRecover::DoRecover] RecoverEnd done. cmd: pid: 6943789 state: READ cur_block: 511 src_cid: 5 dst_cid: 1 is_migrate: false silence_ms: 0 epoch: 37687524 dst_shard_idx: 2, gen: 74, st: OK
+147844:I1209 12:55:15.306421  4997 ec_recover_handler.cc:736] [ECRecover] Replace ec shard done. cmd: pid: 6943789 state: END cur_block: 511 src_cid: 5 dst_cid: 1 is_migrate: false silence_ms: 0 epoch: 37687524 dst_shard_idx: 2, new lease: pid: 6943789, epoch: 37687524, origin_pid: 0, origin_epoch: 0, ever_exist: 1, meta_generation: 74, expect_replica_num: 3, loc: "[ 0:5 1:4 2:1 ]", cow_from_snapshot: 0 , ec_param: name: "ISAL" k: 2 m: 1 rs_arg { w: 8 coding_tech: REED_SOL_VAN } block_size: 4096 ec_type: REED_SOLOMON, st: OK
+```
+
+
+
+
+
 ctx->agile_recover_only 和 ctx->agile_recover 的区别
 
 
@@ -838,6 +867,12 @@ should meet
 }
 
 ```
+
+### 集群升级
+
+日志见升级控制节点的 /var/log/zbs/cluster_upgrade.log 日志，/usr/share/upgrade/file 路径下有待升级的目标 ISO 节点是升级控制节点。
+
+
 
 ### prometheus 使用
 
