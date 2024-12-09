@@ -1,3 +1,162 @@
+```
+// 若配了 topo info，先保 topo safety，然后再 prefer local 有副本（现有的函数）
+// 若没配 topo info，
+//    1. 若双活，先保 2 ： 1，然后再 prefer local 有副本
+//    2. 若非双活，先保 prefer local 有副本（实现的时候，可以再里面去保证 2 : 1 和 topo safety）
+
+bool RecoverManager::IsNeedMigrateForPreferLocal(const data_space_map_t& remain_space_map, MigrateCmdContext* ctx) {
+    auto& entry = ctx->entry;
+    if (entry->IsEven()) return false;
+
+    // dst_cid must meet:
+    //   - not in current loc
+    //   - not isolated
+    //   - enough generate cmd quota
+    //   - use_state/status healthy
+    //   - enough remain space
+
+    cid_t prefer_local = entry->PreferredCid();
+    ext_loc_t current_loc = entry->GetLocation();
+    if (ext_contains_segment(current_loc, prefer_local)) return false;
+    if (MigrateFilterByCid(prefer_local, true)) return false;
+    if (!remain_space_map.contains(prefer_local)) return false;
+    if (remain_space_map.at(prefer_local) < entry->GetPExtentSize()) return false;
+
+    // replace_cid should meet:
+    //   1. same zone with prefer local
+    //   1. unhealthy;
+    //   3. not lease owner;
+    //   2. isolated;
+    //   4. topo safety（在保证 prefer local 之后有副本的情况下，让哪个节点没有副本不会让 topo safety 下降的最严重）
+    //   5. lower remain space
+    std::vector<cid_t> candidate_replace_cids;
+    FOREACH_VALID_SEGMENT_IN_EXT_LOC(current_loc, cid) {
+        candidate_replace_cids.push_back(cid);
+    }
+
+    std::string dst_cid_zone = GetChunkZoneId(prefer_local);
+
+    // 现有的，减去某个，加个某个
+
+
+    std::function<bool(const cid_t, const cid_t)> replace_cid_cmp;
+    auto rt = entry->resiliency_type();
+    if (rt == RT_REPLICA) {
+        ctx->replace_cid = *std::min_element(candidate_replace_cids.begin(), candidate_replace_cids.end(),
+                                             [&](const cid_t lhs, const cid_t rhs) {
+            if (GetChunkZoneId(lhs) != GetChunkZoneId(rhs)) return GetChunkZoneId(lhs) == dst_cid_zone;
+
+            // check unhealthy by remain_space_map
+            if (remain_space_map.count(lhs) != remain_space_map.count(rhs)) return remain_space_map.count(lhs) == 0;
+
+            if (lhs == ctx->owner || rhs == ctx->owner) return lhs != ctx->owner;
+
+            if (IsChunkIsolated(lhs) != IsChunkIsolated(rhs)) return IsChunkIsolated(lhs);
+
+            // topo safety
+
+            if (remain_space_map.count(lhs) && remain_space_map.count(rhs))
+                return remain_space_map.at(lhs) < remain_space_map.at(rhs);
+
+            return lhs < rhs;
+        });
+    }
+
+
+
+
+    // replace cid must meet:
+    //   -
+}
+
+
+// 先保 2 : 1，然后满足 topo safety 或者 prefer local
+bool RecoverManager::IsNeedMigrateForTwoReplicasInPreferZone(const chunks_map_t& healthy_chunks_map,
+        const data_space_map_t& remain_space_map, MigrateCmdContext* ctx,
+        const chunk_pids_map_t* const chunk_even_pids_map) {
+    // 暂时不用考虑 ec
+    // even volume 也需要考虑
+
+    auto& entry = ctx->entry;
+    CHECK((chunk_even_pids_map && entry->IsEven()) || (!chunk_even_pids_map && !entry->IsEven()));
+
+    cid_t prefer_local = entry->PreferredCid();
+
+    if (entry->ReplicaNum() <= 1) return false;
+    if (context_->stretched_stage != StretchedStage::Stretched) return false;
+    if (entry->resiliency_type() == RT_EC) return false;
+
+    bool contain_prefer_local = false;
+    bool cross_zone_repair = false;
+    std::vector<cid_t> cand_replace_cids;
+    std::vector<cid_t> cand_dst_cids;
+
+    // replace_cid must meet:
+    //   - not prefer local
+    //   - topo safety（topo safety 都是指一个 zone 内部的，这里貌似不用考虑）
+
+
+    // dst_cid must meet:
+    //   - not isolated
+    //   - enough generate cmd quota
+    //   - enough remain space
+    //   - use_state/status healthy
+    //   - topo safety（topo safety 都是指一个 zone 内部的，这里貌似不用考虑）
+    GetCandReplaceAndDstInStretchForRepairTopo(healthy_chunks_map, *entry, remain_space_map, &contain_prefer_local,
+                                                &cross_zone_repair, &cand_replace_cids, &cand_dst_cids);
+
+    // 如果已经满足 2 ：1，直接退出
+    if (!cross_zone_repair || cand_replace_cids.empty() || cand_dst_cids.empty()) return false;
+
+    // 只需要考虑 replica 怎么满足 2 ：1
+
+    // replace_cid should meet: (seq means priority)
+    //     1. unhealthy (which also means dead replica will be preferred);
+    //     2. not pextent lease owner;
+    //     3. isolated;
+    //     4. more even extents if migrate for even;
+    //     5. lower remain space if migrate for uneven;
+    ctx->replace_cid = *std::min_element(cand_replace_cids.begin(), cand_replace_cids.end(), [&](const cid_t lhs, const cid_t rhs) {
+        // check unhealthy by remain_space_map
+        if (remain_space_map.count(lhs) != remain_space_map.count(rhs)) return remain_space_map.count(lhs) == 0;
+
+        if (lhs == ctx->owner || rhs == ctx->owner) return lhs != ctx->owner;
+
+        if (IsChunkIsolated(lhs) != IsChunkIsolated(rhs)) return IsChunkIsolated(lhs);
+
+        if (chunk_even_pids_map && chunk_even_pids_map->count(lhs) && chunk_even_pids_map->count(rhs))
+            return chunk_even_pids_map->at(lhs).size() > chunk_even_pids_map->at(rhs).size();
+
+        if (remain_space_map.count(lhs) && remain_space_map.count(rhs))
+            return remain_space_map.at(lhs) < remain_space_map.at(rhs);
+
+        return lhs < rhs;
+    });
+
+    // dst_cid should meet: (seq means priority)
+    //   1. prefer local;
+    //   2. less even extents if migrate for even;
+    //   3. higher remain space if migrate for uneven;
+    ctx->dst_cid = *std::min_element(cand_dst_cids.begin(), cand_dst_cids.end(),
+                     [&prefer_local, &chunk_even_pids_map, &remain_space_map](const cid_t lhs, const cid_t rhs) {
+                         if (lhs == prefer_local || rhs == prefer_local) return lhs == prefer_local;
+
+                         if (chunk_even_pids_map && chunk_even_pids_map->count(lhs) && chunk_even_pids_map->count(rhs))
+                             return chunk_even_pids_map->at(lhs).size() < chunk_even_pids_map->at(rhs).size();
+
+                         if (remain_space_map.count(lhs) && remain_space_map.count(rhs))
+                             return remain_space_map.at(lhs) > remain_space_map.at(rhs);
+
+                         return lhs < rhs;
+                     });
+
+    return GetSrcCidForReplicaMigration(ctx);
+}
+```
+
+
+
+
 
 打印 tmp_cmd ，还有 setup for pid: xxx 中的信息
 
@@ -93,13 +252,34 @@ zbs cli 中在 zbs-meta reposition show 中打印 load ratio
 以 cap layer 为例：
 
 * [0, 70]，若 prefer local 节点健康，需要做局部化（目前满足）否则应该满足 topo safety && 双活 2 ：1（目前缺失）；
+
+    若有 topo info，用现有的 IsNeedMigrateForRepairTopo；
+
+    若没有，用 IsNeedMigrateForTwoReplicasInPreferZone；
+
 * [70, 75]，不需要做局部化（目前满足），但需要满足 topo safety && 双活 2 ：1 && prefer local 有副本（目前缺失）；
+
+    若有 topo info，用现有的 IsNeedMigrateForRepairTopo；
+
+    若没有，用 IsNeedMigrateForTwoReplicasInPreferZone；
+
 * [75, 95]，若配置 topo info，需要做拓扑安全迁移（目前满足），否则应该满足双活 2 ：1 && prefer local 有副本（目前缺失）；
+
+    用 IsNeedMigrateForTwoReplicasInPreferZone；
+
 * [95, 100]，不需要满足 topo safety && prefer local 有副本（目前满足），但需要满足双活 2 ：1（目前缺失，比如更新了 prefer zone）。
+
+    用 IsNeedMigrateForTwoReplicasInPreferZone
 
 
 
 考虑把 双活 2 ：1 以及 prefer local 有副本做到一个函数里 IsNeedMigrateForPreferLocal()。
+
+若配置了 topo info，则需要满足 topo safety
+
+若 prefer local 健康，在 [0, 95]，需要有副本
+
+不配 topo 也需要满足双活 2 ：1
 
 
 
