@@ -10,17 +10,6 @@
 2658:I1209 12:19:11.893018  4997 replica_recover_handler.cc:415] [AGILE RECOVER] setup agile recover for pid: 6986403 src: 4 dst: 5 origin gen: 441749
 2659:I1209 12:19:11.893028  4997 replica_recover_handler.cc:897] [AGILE RECOVER START] pid: 6986403 state: START cur_block: 4294967295 src_cid: 4 dst_cid: 5 is_migrate: false silence_ms: 0 replace_cid: 0 epoch: 37724171 pextent_type: PT_PERF gen: 450742 recover_block_bitmap: 0 block_bitmap: 0 block_not_alloc: 0
 4268:I1209 12:21:05.494571  4997 replica_recover_handler.cc:943] [AGILE RECOVER END] pid: 6986403 state: WRITE cur_block: 1024 src_cid: 4 dst_cid: 5 is_migrate: false silence_ms: 0 replace_cid: 0 epoch: 37724171 pextent_type: PT_PERF gen: 451035 recover_block_bitmap: 1 block_bitmap: 18446744073709551615 block_not_alloc: 0
-
-
-// ec recover
-146500:I1209 12:55:14.162658  4997 recover_handler.cc:86] Get reposition notification, put cmd into pending queue: pid: 6943789 lease { owner { uuid: "4ccc6702-84e7-4c6d-924b-b5e4f2ca6ae0" ip: "10.0.130.74" num_ip: 1250033674 port: 10201 cid: 4 secondary_data_ip: "10.199.130.74" zone: "default" scvm_mode_host_data_ip: "" alive_sec: 5196 machine_uuid: "aba7982e-5f9a-11ef-9c29-9bba3c5d970a" } pid: 1163726 location: 0 epoch: 21291001 expected_replica_num: 3 } dst_chunk: 1 src_chunk: 5 epoch: 37687524 agile_recover_only: false dst_shard_idx: 2 ec_active_location { field1: 1029 field2: 0 field3: 0 field4: 0 } pextent_type: PT_CAP thin_provision: true start_ms: 1083926633
-146501:I1209 12:55:14.162760  4997 recover_handler.cc:337] Schedule reposition cmd: pid: 6943789 lease { owner { uuid: "4ccc6702-84e7-4c6d-924b-b5e4f2ca6ae0" ip: "10.0.130.74" num_ip: 1250033674 port: 10201 cid: 4 secondary_data_ip: "10.199.130.74" zone: "default" scvm_mode_host_data_ip: "" alive_sec: 5196 machine_uuid: "aba7982e-5f9a-11ef-9c29-9bba3c5d970a" } pid: 1163726 location: 0 epoch: 21291001 expected_replica_num: 3 } dst_chunk: 1 src_chunk: 5 epoch: 37687524 agile_recover_only: false dst_shard_idx: 2 ec_active_location { field1: 1029 field2: 0 field3: 0 field4: 0 } pextent_type: PT_CAP thin_provision: true start_ms: 1083931813
-146502:I1209 12:55:14.162786  4997 ec_recover_handler.cc:641] [DoRecover] begin recover. cmd: pid: 6943789 state: INIT cur_block: 4294967295 src_cid: 5 dst_cid: 1 is_migrate: false silence_ms: 0 epoch: 37687524 dst_shard_idx: 2
-146503:I1209 12:55:14.162802  4997 ec_recover_handler.cc:293] [FillSourceBlocks] fill source blocks done. pid: 6943789 src_blocks: [0, 1](3) src_sub_block_ratio: 1 has_local_src: 1, recover_cmd: pid: 6943789 state: INIT cur_block: 4294967295 src_cid: 5 dst_cid: 1 is_migrate: false silence_ms: 0 epoch: 37687524 dst_shard_idx: 2, ec_pextent_info: pid: 6943789, epoch: 37687524, origin_pid: 0, origin_epoch: 0, ever_exist: 1, meta_generation: 74, expect_replica_num: 3, loc: "[ 0:5 1:4 ]", cow_from_snapshot: 0 , ec_param: name: "ISAL" k: 2 m: 1 rs_arg { w: 8 coding_tech: REED_SOL_VAN } block_size: 4096 ec_type: REED_SOLOMON
-146504:I1209 12:55:14.162837  4997 ec_recover_handler.cc:475] [DoRecoverStart] RecoverStart. cmd: pid: 6943789 state: START cur_block: 4294967295 src_cid: 5 dst_cid: 1 is_migrate: false silence_ms: 0 epoch: 37687524 dst_shard_idx: 2, gen: 74
-146505:I1209 12:55:14.163049  4997 ec_recover_handler.cc:482] [DoRecoverStart] RecoverStart done. cmd: pid: 6943789 state: START cur_block: 4294967295 src_cid: 5 dst_cid: 1 is_migrate: false silence_ms: 0 epoch: 37687524 dst_shard_idx: 2, gen: 74, st: OK
-147843:I1209 12:55:15.304996  4997 ec_recover_handler.cc:725] [ECRecover::DoRecover] RecoverEnd done. cmd: pid: 6943789 state: READ cur_block: 511 src_cid: 5 dst_cid: 1 is_migrate: false silence_ms: 0 epoch: 37687524 dst_shard_idx: 2, gen: 74, st: OK
-147844:I1209 12:55:15.306421  4997 ec_recover_handler.cc:736] [ECRecover] Replace ec shard done. cmd: pid: 6943789 state: END cur_block: 511 src_cid: 5 dst_cid: 1 is_migrate: false silence_ms: 0 epoch: 37687524 dst_shard_idx: 2, new lease: pid: 6943789, epoch: 37687524, origin_pid: 0, origin_epoch: 0, ever_exist: 1, meta_generation: 74, expect_replica_num: 3, loc: "[ 0:5 1:4 2:1 ]", cow_from_snapshot: 0 , ec_param: name: "ISAL" k: 2 m: 1 rs_arg { w: 8 coding_tech: REED_SOL_VAN } block_size: 4096 ec_type: REED_SOLOMON, st: OK
 ```
 
 
@@ -78,6 +67,8 @@ cat /sys/block/sdb/queue/rotational
 
 
 
+先按照 pk 再按照 pid
+
 recover cmd 中有了 is_thick 信息，所以 zbs cli 中可以区分 3 种 pk 类型展示（可以考虑在 zbs cli 中对 RecoverHandler::ListMigrateInfo / ListRecoverInfo 的结果排序，3 部分分开展示）
 
 zbs-meta recover / migrate list、zbs-chunk recover / migrate list 都需要修改
@@ -85,52 +76,72 @@ zbs-meta recover / migrate list、zbs-chunk recover / migrate list 都需要修�
 1. 只有 lease owner 上的 Total Migrate Speed 才有值，而这也是会给到 meta 的值，才会有 reposition list，其中 STATE = INIT 的 pid 表示在 recover handler 的 pending 队列中，STATE = START/END/READ / WRITE 的 pid 表示正在执行，PAUSE 表示由于并发额度不足被阻塞。
 2. From Local Speed 指的是该节点作为本地
 
-zbs cli 中在 zbs-meta reposition show 中打印 load ratio
+
+
+```
+I1211 18:04:34.719784 50497 iscsi_server.cc:1646] [CREATE ISCSI LUN]: [REQUEST]: lun_path { pool_path { pool_name: "zbs-iscsi-datastore-5177d6ba-3d95-476e-826f-8b6f8dca0613" } lun_id: 114 lun_name: "2a207fb4-0220-41de-9004-988f53eab8a0" } size: 10737418240 single_access:false stripe_num: 4 stripe_size: 262144 prioritized: false, [RESPONSE]: ST:OK, lun_id: 114 pool_id: "e8a4315e-241d-4283-98ab-1e6198744a15" volume_id: "f74e78f0-a7d6-4de6-9b19-b9af2687f078" created_time { seconds: 1733911474 nseconds: 714625070 } size: 10737418240 description: "" replica_num: 2 thin_provision: true throttling { } name: "2a207fb4-0220-41de-9004-988f53eab8a0" naa: "33d4d6d7ad0f87e47" single_access: false stripe_num: 4 stripe_size: 262144 pr_info { gen: 0 } encrypt_method: ENCRYPT_PLAIN_TEXT, [TIME]: 6936 us.
+I1211 18:04:34.996024 50497 iscsi_server.cc:2246] [UPDATE ISCSI LUN]: [REQUEST]: lun_path { pool_path { pool_name: "zbs-iscsi-datastore-5177d6ba-3d95-476e-826f-8b6f8dca0613" } lun_id: 114 } new_allowed_initiators: "" single_access: true, [RESPONSE]: ST:OK, lun_id: 114 pool_id: "e8a4315e-241d-4283-98ab-1e6198744a15" volume_id: "f74e78f0-a7d6-4de6-9b19-b9af2687f078" created_time { seconds: 1733911474 nseconds: 714625070 } size: 10737418240 description: "" replica_num: 2 thin_provision: true throttling { } name: "2a207fb4-0220-41de-9004-988f53eab8a0" naa: "33d4d6d7ad0f87e47" allowed_initiators: "" single_access: true stripe_num: 4 stripe_size: 262144 pr_info { gen: 0 } encrypt_method: ENCRYPT_PLAIN_TEXT, [TIME]: 3223 us.
+I1211 18:04:35.003139 50497 iscsi_server.cc:3513] [ADD ISCSI LUN ALLOWED INITIATORS]: [REQUEST]: lun_path { pool_path { pool_name: "zbs-iscsi-datastore-5177d6ba-3d95-476e-826f-8b6f8dca0613" } lun_id: 114 } new_allowed_initiators: "iqn.2013-11.org.smartx:c19cb419-35b0-4bfc-96a2-60b45f7ce90e.133e6844-b231-11ef-a63f-52540062a3a8.0", [RESPONSE]: ST:OK, lun_id: 114 pool_id: "e8a4315e-241d-4283-98ab-1e6198744a15" volume_id: "f74e78f0-a7d6-4de6-9b19-b9af2687f078" created_time { seconds: 1733911474 nseconds: 714625070 } size: 10737418240 description: "" replica_num: 2 thin_provision: true throttling { } name: "2a207fb4-0220-41de-9004-988f53eab8a0" naa: "33d4d6d7ad0f87e47" allowed_initiators: "iqn.2013-11.org.smartx:c19cb419-35b0-4bfc-96a2-60b45f7ce90e.133e6844-b231-11ef-a63f-52540062a3a8.0" single_access: true stripe_num: 4 stripe_size: 262144 pr_info { gen: 0 } encrypt_method: ENCRYPT_PLAIN_TEXT, [TIME]: 5111 us.
+I1211 18:04:35.008616 50497 iscsi_server.cc:3854] yiwu request: initiator: "iqn.2013-11.org.smartx:c19cb419-35b0-4bfc-96a2-60b45f7ce90e.133e6844-b231-11ef-a63f-52540062a3a8.0" target_name: "zbs-iscsi-datastore-5177d6ba-3d95-476e-826f-8b6f8dca0613" initiator_ip: "127.0.0.1" conn_server_ip: "127.0.0.1" local_access_ip: "10.0.131.196", use_sec: 0, external_use: 0, first session cid: 3, conn_server_ip: 127.0.0.1
+I1211 18:04:35.008667 50497 iscsi_server.cc:3862] yiwu request: initiator: "iqn.2013-11.org.smartx:c19cb419-35b0-4bfc-96a2-60b45f7ce90e.133e6844-b231-11ef-a63f-52540062a3a8.0" target_name: "zbs-iscsi-datastore-5177d6ba-3d95-476e-826f-8b6f8dca0613" initiator_ip: "127.0.0.1" conn_server_ip: "127.0.0.1" local_access_ip: "10.0.131.196", already login portal: 10.0.131.199:3261
+```
 
 
 
 ```
-// 若配了 topo info，先保 topo safety，然后再 prefer local 有副本（现有的函数）
-// 若没配 topo info，
-//    1. 若双活，先保 2 ： 1，然后再 prefer local 有副本
-//    2. 若非双活，先保 prefer local 有副本（实现的时候，可以再里面去保证 2 : 1 和 topo safety）
+W1211 19:11:32.294697 15977 conn.cc:1418] [ISCSI] no need to enable epollin for conn id: 4294967317 in_flight_pdu_count: 0
+W1211 19:11:32.294736 15977 conn.cc:1418] [ISCSI] no need to enable epollin for conn id: 4294967318 in_flight_pdu_count: 0
+I1211 19:11:32.294798 15977 tgt_node.cc:358] destruct target iqn.2016-02.com.smartx:system:zbs-iscsi-datastore-5e0022cd-b252-4ee1-9f5d-f
+2e33d14e36a safely
+I1211 19:11:32.294847 15977 tgt_node.cc:358] destruct target iqn.2016-02.com.smartx:system:zbs-iscsi-datastore-0913fc3f-a1a8-4f5f-bf89-3
+f631a44bd3d safely
+I1211 19:11:32.294862 15977 tgt_node.cc:358] destruct target iqn.2016-02.com.smartx:system:zbs-iscsi-datastore-7ad28c08-ec05-487b-850a-9
+e428733054f safely
+I1211 19:11:32.294871 15977 tgt_node.cc:358] destruct target iqn.2016-02.com.smartx:system:zbs-iscsi-datastore-5177d6ba-3d95-476e-826f-8
+b6f8dca0613 safely
+I1211 19:11:32.294932 15977 tgt_node.cc:358] destruct target iqn.2016-02.com.smartx:system:043eb525-8ee4-4b6f-bf5d-3ac8a4418ae4 safely
+I1211 19:11:32.294951 15977 iscsi_mega_server.cc:38] [ISCSI SERVER STOP]
 ```
 
-以 cap layer 为例：
+关注的 target
 
-* [0, 70]，若 prefer local 节点健康，需要做局部化（目前满足）否则应该满足 topo safety && 双活 2 ：1（目前缺失）；
-
-    若有 topo info，用现有的 IsNeedMigrateForRepairTopo；
-
-    若没有，用 IsNeedMigrateForTwoReplicasInPreferZone；
-
-* [70, 75]，不需要做局部化（目前满足），但需要满足 topo safety && 双活 2 ：1 && prefer local 有副本（目前缺失）；
-
-    若有 topo info，用现有的 IsNeedMigrateForRepairTopo；
-
-    若没有，用 IsNeedMigrateForTwoReplicasInPreferZone；
-
-* [75, 95]，若配置 topo info，需要做拓扑安全迁移（目前满足），否则应该满足双活 2 ：1 && prefer local 有副本（目前缺失）；
-
-    用 IsNeedMigrateForTwoReplicasInPreferZone；
-
-* [95, 100]，不需要满足 topo safety && prefer local 有副本（目前满足），但需要满足双活 2 ：1（目前缺失，比如更新了 prefer zone）。
-
-    用 IsNeedMigrateForTwoReplicasInPreferZone
+```
+ID                      e8a4315e-241d-4283-98ab-1e6198744a15
+Name                    zbs-iscsi-datastore-5177d6ba-3d95-476e-826f-8b6f8dca0613
+```
 
 
 
-考虑把 双活 2 ：1 以及 prefer local 有副本做到一个函数里 IsNeedMigrateForPreferLocal()。
-
-若配置了 topo info，则需要满足 topo safety
-
-若 prefer local 健康，在 [0, 95]，需要有副本
-
-不配 topo 也需要满足双活 2 ：1
 
 
+```
+I1211 19:11:29.361781 26497 meta_rpc_server.cc:2140] [ALLOC PT_PERF PEXTENT] volume: name: "f8e5482a-10d8-46b7-9176-c4c5a402e88e" size: 10737418240 created_time { seconds: 1733915433 nseconds: 608325830 } id: "f8e5482a-10d8-46b7-9176-c4c5a402e88e" parent_id: "e8a4315e-241d-4283-98ab-1e6198744a15" replica_num: 2 thin_provision: true encrypt_method: ENCRYPT_PLAIN_TEXT iops_burst: 0 bps_burst: 0 throttling { } stripe_num: 4 stripe_size: 262144 prefer_cid: 0 resiliency_type: RT_REPLICA,  lid: 17156 lentry: {epoch: 17156, perf_pid: 34789, perf_epoch: 34789, cap_pid: 34749, cap_epoch: 34749, prioritized: 0, garbage: 0, valid: 1, staging: 0 }, perf_pentry: {loc: "[ 0:4 1:3 ]", alive loc: "[ 0:4 1:3 ]", epoch: 34789, generation: 0, origin_pid: 0, origin_epoch: 0, ever_exist: 0, garbage: 0, valid: 1, expected_replica_num: 2, staging: 0, thin_provision: 1, preferred_cid: 4, even: 0, pt: "PT_PERF", rt: "RT_REPLICA", ec_param: "None", sinkable: 1, allocated_space: 0, thin_uniq_size: 0, thin_shared_size: 0, cow_from_snapshot: 0 }, cap_pentry: {loc: "[ ]", alive loc: "[ ]", epoch: 34749, generation: 0, origin_pid: 0, origin_epoch: 0, ever_exist: 0, garbage: 0, valid: 1, expected_replica_num: 2, staging: 0, thin_provision: 1, preferred_cid: 0, even: 0, pt: "PT_CAP", rt: "RT_REPLICA", ec_param: "None", sinkable: 0, allocated_space: 0, thin_uniq_size: 0, thin_shared_size: 0, cow_from_snapshot: 0 }
+I1211 19:11:32.296346 26578 session_master.cc:275] [LEAVE SESSION]: [REQUEST]: uuid: "68702494-9dc1-4405-a291-62a9a906a747" epoch: 1997833885, [RESPONSE]: ST:OK, , [TIME]: 10 us.
+I1211 19:11:32.296455 26578 session.cc:205] [SESSION LEFT]: session_epoch { uuid: "68702494-9dc1-4405-a291-62a9a906a747" epoch: 1997833885 } group: "access" lease_expire_ns: 0
+I1211 19:11:32.296514 26578 access_manager.cc:2678] [ACCESS SESSION EXPIRED]: session_epoch { uuid: "68702494-9dc1-4405-a291-62a9a906a747" epoch: 1997833885 } group: "access" lease_expire_ns: 0 uuid: "68702494-9dc1-4405-a291-62a9a906a747" ip: "10.0.131.196" num_ip: 3296919562 port: 10201 cid: 4 secondary_data_ip: "10.1.131.196" zone: "default" scvm_mode_host_data_ip: "" alive_sec: 412 machine_uuid: "133e6844-b231-11ef-a63f-52540062a3a8"
+I1211 19:11:32.296666 26578 chunk_table.cc:1585] Chunk 4 status change: CHUNK_STATUS_CONNECTED_HEALTHY --> CHUNK_STATUS_SESSION_EXPIRED
+// cid4 stop chunk 后，meta 会清理 cid4 的 iscsi session，在 cid4 重启之前，还有这个 initiator 访问这个 target 的 IO（可能是残留的，记得你说，你的脚本是严格控制了完成没有 IO 后才 stop chunk 的，），此时 meta 为他分配的 portal 是在非本地的 iscsi session 中任选一个，sesison map 中的第一个刚好是 cid3 (按 session 的 uuid 升序)，
 
-even volume 也需要考虑
+在 hci 模式下，meta 每 60s 检查一次，如果有存活超过 3 min 的非本地的 conn，meta 会让 chunk 主动 drop，所以可以看到长时间放置后，又会用 cid4 作为接入点
+
+I1211 19:11:32.323140 26497 iscsi_server.cc:3861] yiwu request: initiator: "iqn.2013-11.org.smartx:c19cb419-35b0-4bfc-96a2-60b45f7ce90e.133e6844-b231-11ef-a63f-52540062a3a8.0" target_name: "zbs-iscsi-datastore-5177d6ba-3d95-476e-826f-8b6f8dca0613" initiator_ip: "127.0.0.1" conn_server_ip: "127.0.0.1" local_access_ip: "10.0.131.196", use_sec: 0, external_use: 0, first session cid: 3, conn_server_ip: 127.0.0.1
+I1211 19:11:32.323194 26497 iscsi_server.cc:3891] yiwu PickAccessForNormalTarget
+I1211 19:11:32.323205 26497 iscsi_server.cc:3940] yiwu cid: 3, session ip: 10.0.131.199, local_access_ip: 10.0.131.196
+I1211 19:11:32.323215 26497 iscsi_server.cc:3940] yiwu cid: 2, session ip: 10.0.131.198, local_access_ip: 10.0.131.196
+I1211 19:11:32.323225 26497 iscsi_server.cc:3940] yiwu cid: 1, session ip: 10.0.131.197, local_access_ip: 10.0.131.196
+I1211 19:11:32.323231 26497 iscsi_server.cc:3952] yiwu PickAccessForNormalTarget random
+I1211 19:11:32.323251 26497 iscsi_server.cc:4038] yiwu GetPortalFromSession, session.info.ip: 10.0.131.199, val: 10.0.131.199:3261
+I1211 19:11:32.323559 26497 iscsi_server.cc:3861] yiwu request: initiator: "iqn.2013-11.org.smartx:c19cb419-35b0-4bfc-96a2-60b45f7ce90e.133e6844-b231-11ef-a63f-52540062a3a8.0" target_name: "zbs-iscsi-datastore-5177d6ba-3d95-476e-826f-8b6f8dca0613" initiator_ip: "127.0.0.1
+" conn_server_ip: "127.0.0.1" local_access_ip: "10.0.131.196", use_sec: 0, external_use: 0, first session cid: 3, conn_server_ip: 127.0.0.1
+I1211 19:11:32.323596 26497 iscsi_server.cc:3891] yiwu PickAccessForNormalTarget
+I1211 19:11:32.323611 26497 iscsi_server.cc:3940] yiwu cid: 3, session ip: 10.0.131.199, local_access_ip: 10.0.131.196
+I1211 19:11:32.323621 26497 iscsi_server.cc:3940] yiwu cid: 2, session ip: 10.0.131.198, local_access_ip: 10.0.131.196
+I1211 19:11:32.323628 26497 iscsi_server.cc:3940] yiwu cid: 1, session ip: 10.0.131.197, local_access_ip: 10.0.131.196
+I1211 19:11:32.323637 26497 iscsi_server.cc:3952] yiwu PickAccessForNormalTarget random
+I1211 19:11:32.323647 26497 iscsi_server.cc:4038] yiwu GetPortalFromSession, session.info.ip: 10.0.131.199, val: 10.0.131.199:3261
+```
+
+iscsi redirector 没有替换，它没有 leader 的概念。
 
 
 
