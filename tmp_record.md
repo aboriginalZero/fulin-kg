@@ -1,16 +1,20 @@
-打印 tmp_cmd ，还有 setup for pid: xxx 中的信息
+I113.* disconnect transport
 
 ```
-// replica recover
-[root@node130-74 14:36:51 file]$ grep -wn "6986403" /var/log/zbs/zbs-chunkd.log.20241209-121658.4988
-1109:I1209 12:17:38.542147  4997 recover_handler.cc:86] Get reposition notification, put cmd into pending queue: pid: 6986403 lease { owner { uuid: "4ccc6702-84e7-4c6d-924b-b5e4f2ca6ae0" ip: "10.0.130.74" num_ip: 1250033674 port: 10201 cid: 4 secondary_data_ip: "10.199.130.74" zone: "default" scvm_mode_host_data_ip: "" alive_sec: 2944 machine_uuid: "aba7982e-5f9a-11ef-9c29-9bba3c5d970a" } pid: 1172774 location: 4 epoch: 21300048 expected_replica_num: 2 } dst_chunk: 5 src_chunk: 4 epoch: 37724171 active_location: 4 agile_recover_only: true pextent_type: PT_PERF thin_provision: true start_ms: 1081672160
-1113:I1209 12:17:38.542304  4997 reposition_concurrency_controller.cc:221] pid: 6986403, cmd has paused, src_cid: 4, src concurrency: 32, src limit: 36, dst_cid: 5, dst concurrency: 32, dst limit: 32, cmd start ms: 1081676192, pextent type: PT_PERF
-2655:I1209 12:19:11.891799  4997 reposition_concurrency_controller.cc:228] pid: 6986403, cmd has resumed, src_cid: 4, src concurrency: 32, src limit: 36, dst_cid: 5, dst concurrency: 32, dst limit: 32, cmd start ms: 1081676192, pextent type: PT_PERF
-2656:I1209 12:19:11.891829  4997 recover_handler.cc:337] Schedule reposition cmd: pid: 6986403 lease { owner { uuid: "4ccc6702-84e7-4c6d-924b-b5e4f2ca6ae0" ip: "10.0.130.74" num_ip: 1250033674 port: 10201 cid: 4 secondary_data_ip: "10.199.130.74" zone: "default" scvm_mode_host_data_ip: "" alive_sec: 2944 machine_uuid: "aba7982e-5f9a-11ef-9c29-9bba3c5d970a" } pid: 1172774 location: 4 epoch: 21300048 expected_replica_num: 2 } dst_chunk: 5 src_chunk: 4 epoch: 37724171 active_location: 4 agile_recover_only: true pextent_type: PT_PERF thin_provision: true start_ms: 1081676192
-2658:I1209 12:19:11.893018  4997 replica_recover_handler.cc:415] [AGILE RECOVER] setup agile recover for pid: 6986403 src: 4 dst: 5 origin gen: 441749
-2659:I1209 12:19:11.893028  4997 replica_recover_handler.cc:897] [AGILE RECOVER START] pid: 6986403 state: START cur_block: 4294967295 src_cid: 4 dst_cid: 5 is_migrate: false silence_ms: 0 replace_cid: 0 epoch: 37724171 pextent_type: PT_PERF gen: 450742 recover_block_bitmap: 0 block_bitmap: 0 block_not_alloc: 0
-4268:I1209 12:21:05.494571  4997 replica_recover_handler.cc:943] [AGILE RECOVER END] pid: 6986403 state: WRITE cur_block: 1024 src_cid: 4 dst_cid: 5 is_migrate: false silence_ms: 0 replace_cid: 0 epoch: 37724171 pextent_type: PT_PERF gen: 451035 recover_block_bitmap: 1 block_bitmap: 18446744073709551615 block_not_alloc: 0
+chunk    ['10.143.225.200:10201', '10.143.225.201:10201', '10.143.225.203:10201', '10.143.225.202:10201']
+
+管理网
+10.143.224.200
+
+异常 IP
+10.143.202.89 
 ```
+
+
+
+
+
+打印 tmp_cmd ，还有 setup for pid: xxx 中的信息
 
 
 
