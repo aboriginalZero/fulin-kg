@@ -1,11 +1,89 @@
+### 新创建数据块的 lease owner / prefer local 不在本地
+
+同一个 target 上的其他 lun 在 chunk 重启后有 IO 导致的 iscsi 接入点变化，进而影响到这个 lun 上数据块的 lease owner 和 prefer local 位置。
+
+1. iscsi initiator 在 cid 4 上，一开始 cid 4 正常，所以选的是 cid4 作为 iscsi 接入点，meta 上创建了一个 key = cid 4, value = initiator id + target id 的 iscsi session；
+2. cid4 stop chunk 后，meta 会清理 cid4 的 iscsi session；
+3. redirector 要为新来的访问这个 target 的 initiator 创建 iscsi connection（同一个 target 中还有其他 lun 在发 IO），为此需要先找 meta 要接入点（portal = data_ip + port 3261）；
+4. cid 4 chunk 没了，meta 分配的接入点是在非本地的 iscsi session 中任选一个，若 local_access_ip 不变（10.0.131.196）且剩下的 iscsi session 个数不变（size = 3），那么就会一直选到同一个，这里就是 cid3
+5. iscsi initiator 以 cid 3 作接入点访问 target，之后的 lease owner 以及 extent 的 prefer local 也就都是 3 了；
+6. 后续即使 cid 4 恢复了，但是已有的 cid 3 的 iscsi connection 是稳定的，没有马上切换到 cid 4，所以 lease owner 和 prefer local 还是 3；
+7. 在 hci 模式下，meta 每 60s 检查一次如果有存活超过 3 min 的非本地的 iscsi connection，meta 会让 chunk 主动 drop 它们，所以可以看到放置一段时间后，这个 initiator 又会用 cid4 作为接入点。
+
+
+
+持续打印，观察 iscsi 接入点的变化
+
+```
+while true; do echo " " >> /tmp/1.log && date >> /tmp/1.log && zbs-meta session list_iscsi_conn >> /tmp/1.log; sleep 1; done;
+```
+
+
+
+iscsi redirector 没有 leader 的概念
+
+```
+I1211 18:04:34.719784 50497 iscsi_server.cc:1646] [CREATE ISCSI LUN]: [REQUEST]: lun_path { pool_path { pool_name: "zbs-iscsi-datastore-5177d6ba-3d95-476e-826f-8b6f8dca0613" } lun_id: 114 lun_name: "2a207fb4-0220-41de-9004-988f53eab8a0" } size: 10737418240 single_access:false stripe_num: 4 stripe_size: 262144 prioritized: false, [RESPONSE]: ST:OK, lun_id: 114 pool_id: "e8a4315e-241d-4283-98ab-1e6198744a15" volume_id: "f74e78f0-a7d6-4de6-9b19-b9af2687f078" created_time { seconds: 1733911474 nseconds: 714625070 } size: 10737418240 description: "" replica_num: 2 thin_provision: true throttling { } name: "2a207fb4-0220-41de-9004-988f53eab8a0" naa: "33d4d6d7ad0f87e47" single_access: false stripe_num: 4 stripe_size: 262144 pr_info { gen: 0 } encrypt_method: ENCRYPT_PLAIN_TEXT, [TIME]: 6936 us.
+I1211 18:04:34.996024 50497 iscsi_server.cc:2246] [UPDATE ISCSI LUN]: [REQUEST]: lun_path { pool_path { pool_name: "zbs-iscsi-datastore-5177d6ba-3d95-476e-826f-8b6f8dca0613" } lun_id: 114 } new_allowed_initiators: "" single_access: true, [RESPONSE]: ST:OK, lun_id: 114 pool_id: "e8a4315e-241d-4283-98ab-1e6198744a15" volume_id: "f74e78f0-a7d6-4de6-9b19-b9af2687f078" created_time { seconds: 1733911474 nseconds: 714625070 } size: 10737418240 description: "" replica_num: 2 thin_provision: true throttling { } name: "2a207fb4-0220-41de-9004-988f53eab8a0" naa: "33d4d6d7ad0f87e47" allowed_initiators: "" single_access: true stripe_num: 4 stripe_size: 262144 pr_info { gen: 0 } encrypt_method: ENCRYPT_PLAIN_TEXT, [TIME]: 3223 us.
+I1211 18:04:35.003139 50497 iscsi_server.cc:3513] [ADD ISCSI LUN ALLOWED INITIATORS]: [REQUEST]: lun_path { pool_path { pool_name: "zbs-iscsi-datastore-5177d6ba-3d95-476e-826f-8b6f8dca0613" } lun_id: 114 } new_allowed_initiators: "iqn.2013-11.org.smartx:c19cb419-35b0-4bfc-96a2-60b45f7ce90e.133e6844-b231-11ef-a63f-52540062a3a8.0", [RESPONSE]: ST:OK, lun_id: 114 pool_id: "e8a4315e-241d-4283-98ab-1e6198744a15" volume_id: "f74e78f0-a7d6-4de6-9b19-b9af2687f078" created_time { seconds: 1733911474 nseconds: 714625070 } size: 10737418240 description: "" replica_num: 2 thin_provision: true throttling { } name: "2a207fb4-0220-41de-9004-988f53eab8a0" naa: "33d4d6d7ad0f87e47" allowed_initiators: "iqn.2013-11.org.smartx:c19cb419-35b0-4bfc-96a2-60b45f7ce90e.133e6844-b231-11ef-a63f-52540062a3a8.0" single_access: true stripe_num: 4 stripe_size: 262144 pr_info { gen: 0 } encrypt_method: ENCRYPT_PLAIN_TEXT, [TIME]: 5111 us.
+I1211 18:04:35.008616 50497 iscsi_server.cc:3854] yiwu request: initiator: "iqn.2013-11.org.smartx:c19cb419-35b0-4bfc-96a2-60b45f7ce90e.133e6844-b231-11ef-a63f-52540062a3a8.0" target_name: "zbs-iscsi-datastore-5177d6ba-3d95-476e-826f-8b6f8dca0613" initiator_ip: "127.0.0.1" conn_server_ip: "127.0.0.1" local_access_ip: "10.0.131.196", use_sec: 0, external_use: 0, first session cid: 3, conn_server_ip: 127.0.0.1
+I1211 18:04:35.008667 50497 iscsi_server.cc:3862] yiwu request: initiator: "iqn.2013-11.org.smartx:c19cb419-35b0-4bfc-96a2-60b45f7ce90e.133e6844-b231-11ef-a63f-52540062a3a8.0" target_name: "zbs-iscsi-datastore-5177d6ba-3d95-476e-826f-8b6f8dca0613" initiator_ip: "127.0.0.1" conn_server_ip: "127.0.0.1" local_access_ip: "10.0.131.196", already login portal: 10.0.131.199:3261
+```
+
+分配新的接入点
+
+```
+I1211 19:11:29.361781 26497 meta_rpc_server.cc:2140] [ALLOC PT_PERF PEXTENT] volume: name: "f8e5482a-10d8-46b7-9176-c4c5a402e88e" size: 10737418240 created_time { seconds: 1733915433 nseconds: 608325830 } id: "f8e5482a-10d8-46b7-9176-c4c5a402e88e" parent_id: "e8a4315e-241d-4283-98ab-1e6198744a15" replica_num: 2 thin_provision: true encrypt_method: ENCRYPT_PLAIN_TEXT iops_burst: 0 bps_burst: 0 throttling { } stripe_num: 4 stripe_size: 262144 prefer_cid: 0 resiliency_type: RT_REPLICA,  lid: 17156 lentry: {epoch: 17156, perf_pid: 34789, perf_epoch: 34789, cap_pid: 34749, cap_epoch: 34749, prioritized: 0, garbage: 0, valid: 1, staging: 0 }, perf_pentry: {loc: "[ 0:4 1:3 ]", alive loc: "[ 0:4 1:3 ]", epoch: 34789, generation: 0, origin_pid: 0, origin_epoch: 0, ever_exist: 0, garbage: 0, valid: 1, expected_replica_num: 2, staging: 0, thin_provision: 1, preferred_cid: 4, even: 0, pt: "PT_PERF", rt: "RT_REPLICA", ec_param: "None", sinkable: 1, allocated_space: 0, thin_uniq_size: 0, thin_shared_size: 0, cow_from_snapshot: 0 }, cap_pentry: {loc: "[ ]", alive loc: "[ ]", epoch: 34749, generation: 0, origin_pid: 0, origin_epoch: 0, ever_exist: 0, garbage: 0, valid: 1, expected_replica_num: 2, staging: 0, thin_provision: 1, preferred_cid: 0, even: 0, pt: "PT_CAP", rt: "RT_REPLICA", ec_param: "None", sinkable: 0, allocated_space: 0, thin_uniq_size: 0, thin_shared_size: 0, cow_from_snapshot: 0 }
+I1211 19:11:32.296346 26578 session_master.cc:275] [LEAVE SESSION]: [REQUEST]: uuid: "68702494-9dc1-4405-a291-62a9a906a747" epoch: 1997833885, [RESPONSE]: ST:OK, , [TIME]: 10 us.
+I1211 19:11:32.296455 26578 session.cc:205] [SESSION LEFT]: session_epoch { uuid: "68702494-9dc1-4405-a291-62a9a906a747" epoch: 1997833885 } group: "access" lease_expire_ns: 0
+I1211 19:11:32.296514 26578 access_manager.cc:2678] [ACCESS SESSION EXPIRED]: session_epoch { uuid: "68702494-9dc1-4405-a291-62a9a906a747" epoch: 1997833885 } group: "access" lease_expire_ns: 0 uuid: "68702494-9dc1-4405-a291-62a9a906a747" ip: "10.0.131.196" num_ip: 3296919562 port: 10201 cid: 4 secondary_data_ip: "10.1.131.196" zone: "default" scvm_mode_host_data_ip: "" alive_sec: 412 machine_uuid: "133e6844-b231-11ef-a63f-52540062a3a8"
+I1211 19:11:32.296666 26578 chunk_table.cc:1585] Chunk 4 status change: CHUNK_STATUS_CONNECTED_HEALTHY --> CHUNK_STATUS_SESSION_EXPIRED
+
+I1211 19:11:32.323140 26497 iscsi_server.cc:3861] yiwu request: initiator: "iqn.2013-11.org.smartx:c19cb419-35b0-4bfc-96a2-60b45f7ce90e.133e6844-b231-11ef-a63f-52540062a3a8.0" target_name: "zbs-iscsi-datastore-5177d6ba-3d95-476e-826f-8b6f8dca0613" initiator_ip: "127.0.0.1" conn_server_ip: "127.0.0.1" local_access_ip: "10.0.131.196", use_sec: 0, external_use: 0, first session cid: 3, conn_server_ip: 127.0.0.1
+I1211 19:11:32.323194 26497 iscsi_server.cc:3891] yiwu PickAccessForNormalTarget
+I1211 19:11:32.323205 26497 iscsi_server.cc:3940] yiwu cid: 3, session ip: 10.0.131.199, local_access_ip: 10.0.131.196
+I1211 19:11:32.323215 26497 iscsi_server.cc:3940] yiwu cid: 2, session ip: 10.0.131.198, local_access_ip: 10.0.131.196
+I1211 19:11:32.323225 26497 iscsi_server.cc:3940] yiwu cid: 1, session ip: 10.0.131.197, local_access_ip: 10.0.131.196
+I1211 19:11:32.323231 26497 iscsi_server.cc:3952] yiwu PickAccessForNormalTarget random
+I1211 19:11:32.323251 26497 iscsi_server.cc:4038] yiwu GetPortalFromSession, session.info.ip: 10.0.131.199, val: 10.0.131.199:3261
+I1211 19:11:32.323559 26497 iscsi_server.cc:3861] yiwu request: initiator: "iqn.2013-11.org.smartx:c19cb419-35b0-4bfc-96a2-60b45f7ce90e.133e6844-b231-11ef-a63f-52540062a3a8.0" target_name: "zbs-iscsi-datastore-5177d6ba-3d95-476e-826f-8b6f8dca0613" initiator_ip: "127.0.0.1
+" conn_server_ip: "127.0.0.1" local_access_ip: "10.0.131.196", use_sec: 0, external_use: 0, first session cid: 3, conn_server_ip: 127.0.0.1
+I1211 19:11:32.323596 26497 iscsi_server.cc:3891] yiwu PickAccessForNormalTarget
+I1211 19:11:32.323611 26497 iscsi_server.cc:3940] yiwu cid: 3, session ip: 10.0.131.199, local_access_ip: 10.0.131.196
+I1211 19:11:32.323621 26497 iscsi_server.cc:3940] yiwu cid: 2, session ip: 10.0.131.198, local_access_ip: 10.0.131.196
+I1211 19:11:32.323628 26497 iscsi_server.cc:3940] yiwu cid: 1, session ip: 10.0.131.197, local_access_ip: 10.0.131.196
+I1211 19:11:32.323637 26497 iscsi_server.cc:3952] yiwu PickAccessForNormalTarget random
+I1211 19:11:32.323647 26497 iscsi_server.cc:4038] yiwu GetPortalFromSession, session.info.ip: 10.0.131.199, val: 10.0.131.199:3261
+```
+
+
+
+chunk 日志
+
+```
+W1211 19:11:32.294697 15977 conn.cc:1418] [ISCSI] no need to enable epollin for conn id: 4294967317 in_flight_pdu_count: 0
+W1211 19:11:32.294736 15977 conn.cc:1418] [ISCSI] no need to enable epollin for conn id: 4294967318 in_flight_pdu_count: 0
+I1211 19:11:32.294798 15977 tgt_node.cc:358] destruct target iqn.2016-02.com.smartx:system:zbs-iscsi-datastore-5e0022cd-b252-4ee1-9f5d-f2e33d14e36a safely
+I1211 19:11:32.294847 15977 tgt_node.cc:358] destruct target iqn.2016-02.com.smartx:system:zbs-iscsi-datastore-0913fc3f-a1a8-4f5f-bf89-3f631a44bd3d safely
+I1211 19:11:32.294862 15977 tgt_node.cc:358] destruct target iqn.2016-02.com.smartx:system:zbs-iscsi-datastore-7ad28c08-ec05-487b-850a-9e428733054f safely
+I1211 19:11:32.294871 15977 tgt_node.cc:358] destruct target iqn.2016-02.com.smartx:system:zbs-iscsi-datastore-5177d6ba-3d95-476e-826f-8b6f8dca0613 safely
+I1211 19:11:32.294932 15977 tgt_node.cc:358] destruct target iqn.2016-02.com.smartx:system:043eb525-8ee4-4b6f-bf5d-3ac8a4418ae4 safely
+I1211 19:11:32.294951 15977 iscsi_mega_server.cc:38] [ISCSI SERVER STOP]
+```
+
+关注的 target
+
+```
+ID                      e8a4315e-241d-4283-98ab-1e6198744a15
+Name                    zbs-iscsi-datastore-5177d6ba-3d95-476e-826f-8b6f8dca0613
+```
+
 ### 写一个超过单点容量的卷触发限流
 
 meta 提供 2 种获取 lease 的 rpc
 
 1. GetVExtentLease
 2. GetLease
-
-
 
 
 
