@@ -1,3 +1,15 @@
+超高负载，直接跳过
+
+中和高，需要保持 topo 和本地有副本
+
+
+
+在 high load 的时候，分配并不保证会分配到 prefer local 上，但是 migrate for repair topo 会让此时的 prefer local 有副本，有可能导致一分配就迁移。
+
+可以让 IsNeedMigrateForRepairTopo 只保证 topo 安全，如果已经 topo 安全，返回 already_match = true，否则走 IsNeedMigrateForPreferLocal，后者可用空间是到 0.85，前者是 0.95 - 0.05 = 0.9（perf layer 的话区分就很大了）
+
+
+
 1. 怎么理解管理网络和虚拟机网络的区别？http://docs.fev.smartx.com/smtxos/6.1.1/elf_installation_guide/elf_installation_guide_21
 2. VLAN ID = 0 的含义是什么？
 

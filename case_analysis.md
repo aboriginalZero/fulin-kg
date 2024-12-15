@@ -1,5 +1,13 @@
 ### 新创建数据块的 lease owner / prefer local 不在本地
 
+性能测试，为了避免有毛刺，最好的保证 iscsi 接入点不飘：
+
+1. 测试 lun 所在的 target，最好只有这一个 lun；
+2. fio 在 meta leader 起来超过 15 + 1 = 16 min 再开始做；
+3. fio 在有节点退出维护模式后超过 1 min 再开始做。
+
+
+
 同一个 target 上的其他 lun 在 chunk 重启后有 IO 导致的 iscsi 接入点变化，进而影响到这个 lun 上数据块的 lease owner 和 prefer local 位置。
 
 1. iscsi initiator 在 cid 4 上，一开始 cid 4 正常，所以选的是 cid4 作为 iscsi 接入点，meta 上创建了一个 key = cid 4, value = initiator id + target id 的 iscsi session；
