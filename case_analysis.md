@@ -8,6 +8,13 @@
 
 
 
+或者是把这些参数改成一个超大的值，相当于不会做 rebalance iscsi connection (access point) ，这样就可以使用 接入 ip + 3261 连接
+
+1. ISCSI_REBALANCE_ACCESS_INTER_S 默认值是 180 ，含义是 interval to rebalance access record
+2. ISCSI_CONN_DROP_INTERVAL_S 默认值是 180，含义是 drop the unexpected iscsi conn which have survival time longer than specify time
+
+
+
 同一个 target 上的其他 lun 在 chunk 重启后有 IO 导致的 iscsi 接入点变化，进而影响到这个 lun 上数据块的 lease owner 和 prefer local 位置。
 
 1. iscsi initiator 在 cid 4 上，一开始 cid 4 正常，所以选的是 cid4 作为 iscsi 接入点，meta 上创建了一个 key = cid 4, value = initiator id + target id 的 iscsi session；

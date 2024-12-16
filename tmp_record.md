@@ -2,6 +2,8 @@
 
 中和高，需要保持 topo 和本地有副本
 
+高负载分配时不需要保证本地有副本，迁移时不需要保证 migrate dst 优先是 prefer local，但要保证 migrate replace 不是 prefer local
+
 
 
 在 high load 的时候，分配并不保证会分配到 prefer local 上，但是 migrate for repair topo 会让此时的 prefer local 有副本，有可能导致一分配就迁移。
