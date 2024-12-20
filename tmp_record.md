@@ -1,3 +1,12 @@
+引入新报警： “当前集群中的分片分布可能未处于最佳拓扑状态，请检查节点容量使用情况”
+
+触发条件：
+
+1. 前提：节点配置了 topo info
+2. 有任一节点 cap 已使用容量超过 95% 或所有节点 cap 已使用容量超过 89%
+
+
+
 > 每个服务加载自己的 Raft Lib，每个服务都有自己的选举策略。外部仅能通过访问服务本身获得选举信息
 
 除了 extent mgr 还有啥会用 raft lib 来选举。
@@ -73,10 +82,14 @@ cat /sys/block/sdb/queue/rotational
 
 recover cmd 中有了 is_thick 信息，所以 zbs cli 中可以区分 3 种 pk 类型展示（可以考虑在 zbs cli 中对 RecoverHandler::ListMigrateInfo / ListRecoverInfo 的结果排序，3 部分分开展示）
 
+另外， 显示相关的 time stats
+
 zbs-meta recover / migrate list、zbs-chunk recover / migrate list 都需要修改
 
 1. 只有 lease owner 上的 Total Migrate Speed 才有值，而这也是会给到 meta 的值，才会有 reposition list，其中 STATE = INIT 的 pid 表示在 recover handler 的 pending 队列中，STATE = START/END/READ / WRITE 的 pid 表示正在执行，PAUSE 表示由于并发额度不足被阻塞。
 2. From Local Speed 指的是该节点作为本地
+
+显示 max_reposition_waiting_time_ratio
 
 
 
@@ -266,7 +279,7 @@ cd /var/log/zbs && ll -rth zbs-chunkd.log* 按照日期排序找文件
 
 什么时候会 verifyread 而不是普通的 read
 
-有了临时副本，staging block info 的含义是啥？
+有了临时副本，staging block info 的含义是啥？指明从 recover src 上读哪些 4k 粒度的数据块
 
 
 
@@ -859,6 +872,22 @@ meta 会 revoke 整个 volume lease 的 5 种情况
 4k app io 没被统计在 local io handler ，access handler 中显示 app iops / bps = 0，显示在 perf layer，因为 4k 会先写 perf layer
 
 开启 prometheus：在 meta leader 上执行 nc -k -l -p 9093 -c "nc 10.0.180.183 9090"
+
+* SMTX OS 6.0.0 及之前版本
+
+  访问 zbs-meta leader 管理 ip:9090 即可访问 prometheus 查询后台，如果弹出 basic_auth 验证弹窗，用户名/密码为 prometheus/HC!r0cks
+
+* SMTX OS 6.1.0 及之后版本
+
+  ```
+  # 在任一主节点执行以下命令来开启管理网络访问，访问当前节点管理 ip:9091 
+  octopus -prometheus.proxy.port 9091
+  # 关闭
+  octopus -prometheus.proxy.port 0
+  
+  ```
+
+  
 
 prometheus 语法
 
