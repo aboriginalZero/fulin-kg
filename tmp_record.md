@@ -853,7 +853,12 @@ should meet
 
 ### 集群升级
 
-日志见升级控制节点的 /var/log/zbs/cluster_upgrade.log 日志，/usr/share/upgrade/file 路径下有待升级的目标 ISO 节点是升级控制节点。
+判断升级控制节点的 2 种方式：
+
+1. 通过 tower 上的升级中心升级时，将会选取 cid 最小的节点作为控制节点；
+2. /usr/share/upgrade/file 路径下有待升级的目标 ISO。
+
+升级集群相关的日志在该节点的 /var/log/zbs/cluster_upgrade.log
 
 
 
@@ -868,6 +873,15 @@ meta 会 revoke 整个 volume lease 的 5 种情况
 5. resize volume
 
 ### prometheus 使用
+
+想修改 Metric 相关代码时，参考现有的代码增加新的 Metric，并且修改对应服务的配置文件（zbs/data/exporter/xxx_exporter.json）即可。检查修改是否生效可以直接用浏览器访问对应服务的 exporter 路径即可（端口和路径也在配置文件中）。在集群中测试 Metric 时，需要将修改的配置文件放置在集群内任意一节点的 /etc/aquarium/register_conf 路径下，并在该节点执行 zbs-deploy-manage register-service 重新注册即可
+
+查看注册的
+
+1. curl http://10.168.66.66:10104/api/v1/prometheus/volume
+2. curl http://10.168.66.66:10104/api/v1/prometheus/basic
+
+
 
 4k app io 没被统计在 local io handler ，access handler 中显示 app iops / bps = 0，显示在 perf layer，因为 4k 会先写 perf layer
 
