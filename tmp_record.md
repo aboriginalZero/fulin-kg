@@ -62,14 +62,6 @@
 
 
 
-查看盘类型是 hdd 还是 ssd
-
-```
-cat /sys/block/sdb/queue/rotational
-```
-
-
-
 用 nvmf 测各种类型盘的上限，然后取其 50% 认为是 recover io 可用的上限
 
 同一类型且同一型号的盘，容量不同，磁盘 iops/bps 的上限也不同（比如  P5620 NVMe SSD，1.6 TB 跟 6.4TB 的 4k iops 上限分别是 20w 和 30w）

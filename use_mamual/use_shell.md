@@ -699,12 +699,26 @@ cat bigfile.txt | parallel --pipe sed s/old/new/g
 ### 硬件环境
 
 * CPU： `lscpu`，如 Intel(R) Core(TM) i7-7820X CPU @ 3.60GHz
-
 * 内存： `free -h ` ，以 GB 为单位展示数据
-
 * 磁盘：`df -h`，以 GB 为单位展示数据
-
 * GPU：`lspci`，查看 PCI 搭载设备中有显卡信息 
+
+
+
+查看盘类型是 hdd 还是 ssd
+
+```
+cat /sys/block/sdb/queue/rotational
+```
+
+查看网卡信息
+
+```shell
+# 查看指定接口的详细信息，例如网卡型号、驱动程序、支持的速率和双工模式
+ethtool <network_port>
+# 查看网络接口的统计信息，如接收和发送的字节数
+ethtool -S <network_port>
+```
 
 ### 软件配置
 
@@ -811,7 +825,7 @@ gzip -d 解压包名
 
 8. 阻止 1.2.3.4 访问本机：iptables -I INPUT -s 1.2.3.4 -j DROP ；
 
-9. 配置静态 IP：vi /etc/sysconfig/network-scripts/ifcfg-eth0，然后通过 systemctl restart network 重启网络服务
+9. 配置静态 IP：vi /etc/sysconfig/network-scripts/ifcfg-eth0，然后通过 systemctl restart network 重启网络服务或者 ifdown / ifup eth0 重启网卡
 
     ```
     BOOTPROTO="static"
