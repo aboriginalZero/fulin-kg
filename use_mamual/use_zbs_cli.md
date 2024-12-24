@@ -70,7 +70,8 @@ git submodule update --init --force --recursive --remote
 make build
 
 # 在 ./dist/ 目录下生成的 zbs_client_py_xxx.whl 文件，可以 scp 到测试集群并通过以下命令替换
-/usr/local/venv/zbs-client-py/bin/pip install /tmp/zbs_client_py-xxx.whl
+/usr/local/venv/zbs-client-py/bin/pip install /tmp/zbs_client_py-xxx.whl 
+# 多次尝试可以用 --force-reinstall
 
 # 另一种方式是进入配套的容器，在这里面跑单测和测试嵌套集群的效果
 make docker

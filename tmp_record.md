@@ -1,33 +1,35 @@
-引入新报警： “当前集群中的分片分布可能未处于最佳拓扑状态，请检查节点容量使用情况”
+可以出现 total < from local 的情况
 
-触发条件：
+```
+[root@yiwu1 17:51:22 ~]$ zbs-chunk migrate list
+Total Migrate Speed: 6.29 MB/s(6.00 MiB/s)
+From Local Speed: 6.55 MB/s(6.25 MiB/s)
+From Remote Speed: 0.00 B/s(0.00 B/s)
+```
 
-1. 前提：节点配置了 topo info
-2. 有任一节点 cap 已使用容量超过 95% 或所有节点 cap 已使用容量超过 89%
+zbs-chunk recover list 中展示是否 agile recover，展示 reposition read / write 的次数
 
-
-
-> 每个服务加载自己的 Raft Lib，每个服务都有自己的选举策略。外部仅能通过访问服务本身获得选举信息
-
-除了 extent mgr 还有啥会用 raft lib 来选举。
-
-
-
-提供一个查询过去都是谁来做 meta leader 的 rpc
+由 recover_stage 以及 agile_recover 来决定，这样命令行就可以支持只看 agile recover，后续来测试 agile recover 的恢复情况
 
 
 
-超高负载，直接跳过
-
-中和高，需要保持 topo 和本地有副本
-
-高负载分配时不需要保证本地有副本，迁移时不需要保证 migrate dst 优先是 prefer local，但要保证 migrate replace 不是 prefer local
 
 
+查看 IO 都在访问哪个副本
 
-在 high load 的时候，分配并不保证会分配到 prefer local 上，但是 migrate for repair topo 会让此时的 prefer local 有副本，有可能导致一分配就迁移。
+zbs-perf-tools chunk access replica_io
 
-可以让 IsNeedMigrateForRepairTopo 只保证 topo 安全，如果已经 topo 安全，返回 already_match = true，否则走 IsNeedMigrateForPreferLocal，后者可用空间是到 0.85，前者是 0.95 - 0.05 = 0.9（perf layer 的话区分就很大了）
+
+
+
+
+
+
+service mgr 不负责拉起服务进程，那是什么角色来负责
+
+每个服务加载自己的 Raft Lib，每个服务都有自己的选举策略。外部仅能通过访问服务本身获得选举信息
+
+
 
 
 
@@ -68,27 +70,6 @@
 
 
 
-
-
-先按照 pk 再按照 pid
-
-recover cmd 中有了 is_thick 信息，所以 zbs cli 中可以区分 3 种 pk 类型展示（可以考虑在 zbs cli 中对 RecoverHandler::ListMigrateInfo / ListRecoverInfo 的结果排序，3 部分分开展示）
-
-另外， 显示相关的 time stats
-
-zbs-meta recover / migrate list、zbs-chunk recover / migrate list 都需要修改
-
-1. 只有 lease owner 上的 Total Migrate Speed 才有值，而这也是会给到 meta 的值，才会有 reposition list，其中 STATE = INIT 的 pid 表示在 recover handler 的 pending 队列中，STATE = START/END/READ / WRITE 的 pid 表示正在执行，PAUSE 表示由于并发额度不足被阻塞。
-2. From Local Speed 指的是该节点作为本地
-
-显示 max_reposition_waiting_time_ratio
-
-
-
-已经 sync 过，所以 gen 是有效的
-
-
-
 internal io throttle 的位置
 
 1. 如果 pextent io handler 中把 throttle 放在 io 进入 lsm 前，那么需要 InterceptBusinessIO 来保 gen 序，否则可能出现，同一个 extent 的两个 block io。
@@ -98,6 +79,10 @@ internal io throttle 的位置
 如果是 special recover，给到 pextent io handler 的 data len 不一定是 kBlockSize。
 
 replica recover src block 如果是 ELsmNotAllocData，block_not_alloc 置为 true，对 recover dst 的写会转换成 unmap
+
+
+
+已经 sync 过，所以 gen 是有效的
 
 
 
