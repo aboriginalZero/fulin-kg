@@ -1,3 +1,17 @@
+判断 APP IO 空闲或者繁忙的依据，采用的是 IOPS 和 BPS，忽略 Latency，这是因为 Latency 跟 IO size 关系较大，需要分别统计，实现复杂，也受到不同硬件影响，阈值选择不大容易。另外，Latency 过大可能由于磁盘故障，应该加速 Recover/Migrate。
+
+
+
+
+
+
+
+
+
+reposition 过程为啥是逐个 block 进行，而不允许并发呢？
+
+
+
 可以出现 total < from local 的情况
 
 ```
@@ -10,8 +24,6 @@ From Remote Speed: 0.00 B/s(0.00 B/s)
 zbs-chunk recover list 中展示是否 agile recover，展示 reposition read / write 的次数
 
 由 recover_stage 以及 agile_recover 来决定，这样命令行就可以支持只看 agile recover，后续来测试 agile recover 的恢复情况
-
-
 
 
 
