@@ -1,13 +1,3 @@
-判断 APP IO 空闲或者繁忙的依据，采用的是 IOPS 和 BPS，忽略 Latency，这是因为 Latency 跟 IO size 关系较大，需要分别统计，实现复杂，也受到不同硬件影响，阈值选择不大容易。另外，Latency 过大可能由于磁盘故障，应该加速 Recover/Migrate。
-
-
-
-
-
-
-
-
-
 reposition 过程为啥是逐个 block 进行，而不允许并发呢？
 
 
