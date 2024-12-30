@@ -24,10 +24,11 @@ staging block info 什么时候被记录（RecordStagingBlockInfo 的调用位�
 1. 创建 volume 的时候，指定了 prefer local
 2. get lease for read 时，若 lid = 0，prefer local 优先为 volume prefer local，其次为发起这个 rpc 请求的 cid，并用在分配 vextent 上
 3. get lease for write 时，若 vextent_no < num_vextents 且  lid = 0，或者 vextent_no > num_vextents 时，prefer local 优先为 volume prefer local，其次为发起这个 rpc 请求的 cid，并用在分配 vextent 上
-4. COW 时也是一样
+4. COW 跟第 3 点一样
 5. get lease for sink 时，若需要为 cap pentry 分配 loc，prefer local 优先为 pentry 的 prefer local，其次是发起这个 rpc 请求的 cid
 6. update volume 时，若是从普通卷转换成 prior volume 且 perf pid 存在时，会用 volume 的 prefer local 去分配数据块
-7. update / resize / rollback / reserve volume space
+7. create / update / resize / rollback / reserve volume space 时，thick extent 会直接用 volume 的 prefer local 当做自己的 prefer local 去分配数据块
+7. 创建 even volume 或者更新快照时指定 even mode
 
 
 
