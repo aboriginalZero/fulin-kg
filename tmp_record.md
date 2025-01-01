@@ -1,3 +1,9 @@
+vextent no 对 FLAGS_meta_max_pextents 取余就是 lid。所以根据 lid 可以很好查 vextent no，但怎么根据 vextent no 没法直接查他属于哪一个 volume，需要遍历 meta db 中的每一个 volume 然后比对每个 vextent no 是否能跟这个 lid 对上。
+
+
+
+
+
 reposition 过程为啥是逐个 block 进行，而不允许并发呢？
 
 
@@ -903,6 +909,20 @@ prometheus 里可以从 2 个角度来观察值
 
 prometheus 中支持多种 IO 类型的 metric 相加，比如二者相加可以观察这个 chunk 收到的所有 cap replica reposition write 的带宽，zbs_chunk_local_io_from_remote_cap_replica_reposition_write_speed_bps + zbs_chunk_local_io_from_local_cap_replica_reposition_write_speed_bps 
 
+### prefer local 变更
+
+prefer local 会变更的几种情况
+
+1. 创建 volume 的时候，指定了 prefer local
+2. get lease for read 时，若 lid = 0，prefer local 优先为 volume prefer local，其次为发起这个 rpc 请求的 cid，并用在分配 vextent 上
+3. get lease for write 时，若 vextent_no < num_vextents 且  lid = 0，或者 vextent_no > num_vextents 时，prefer local 优先为 volume prefer local，其次为发起这个 rpc 请求的 cid，并用在分配 vextent 上
+4. COW 跟第 3 点一样
+5. get lease for sink 时，若需要为 cap pentry 分配 loc，prefer local 优先为 pentry 的 prefer local，其次是发起这个 rpc 请求的 cid
+6. update volume 时，若是从普通卷转换成 prior volume 且 perf pid 存在时，会用 volume 的 prefer local 去分配数据块
+7. create / update / resize / rollback / reserve volume space 时，thick extent 会直接用 volume 的 prefer local 当做自己的 prefer local 去分配数据块
+8. 创建 even volume 或者更新快照时指定 even mode
+9. 被 active access point 更改
+
 ### 均匀卷
 
 * zbs cli 是只有 snapshot 能更新 new_alloc_even 
@@ -921,6 +941,8 @@ elf  一直以来创建虚拟卷模板，创建的是 volume 而不是 snapshot�
 
 
 均匀卷由 even 属性被更新成 True 的卷/快照卷和克隆超过一定次数（默认为 10）的快照卷两部分组成（不支持直接创建出 even volume / snapshot）
+
+虽然 zbs rpc 支持更新卷时指定 alloc even，但目前这条路径并不会被外部调用，所以可以认为只有快照卷才会被模板化。
 
 ### 网络相关日志
 
