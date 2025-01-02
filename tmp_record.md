@@ -923,6 +923,28 @@ prefer local 会变更的几种情况
 8. 创建 even volume 或者更新快照时指定 even mode
 9. 被 active access point 更改
 
+
+
+本地感知
+
+尽管以 pextent 为粒度的分片分配，不能保证同一个 volume 内的 pextent 分片位置相同，但作为一个块存储系统，通常一个 volume 内所有的 pextent 都会具备相同的本地访问（在 SMTX OS 下是数据卷关联的虚拟机所在物理节点，在 SMTX ZBS 中是 lun / namespace / ... 协议接入的物理节点），因此可以根据 volume 的接入点（access point）来变更其所持有 pextent 的 prefer local。
+
+集群中每个 access 每 1h 上报一次这段时间内 IO 次数超过 3600、平均大小超过 511Byte 的 volume（即 iops > 1，包含读写）给 meta，meta 会记录这些接入点，连续上报 6 次的接入点成为活跃接入点。
+
+当一个接入点初次变为活跃时会触发 local transfer 事件，此时若 volume 的接入点个数不超过默认数量（3）且 volume 没有显式指定 prefer local，那么会将该卷持有的所有非 COW 状态的 cap / perf pextent 的 prefer local 都变更成该活跃接入点，并撤回相关 lease。
+
+一般来说，一个 volume 只会有一个活跃接入点，local transfer 通常发生在虚拟机开机或者热迁移到一个新物理节点上重新建立连接后稳定使用的场景，Oracle RAC 等小范围共享卷的场景可能会有 2 ～ 3 个活跃接入点。特别地，有些场景如 Xen 平台的 iSCSI DataStore 模式将一个 volume 作为一个池使用，不同节点上的虚拟机仅访问其中的部分数据，此时卷的活跃接入点可能会超过 3 个，持有的 pextent 只会在初次写入时用第一个接入节点作为 prefer local，后续不再变更。
+
+
+
+note
+
+1. access point 变更不会修改 volume 的 prefer local，这个属性只会被外部修改，系统自身不会主动修改；
+2. volume 属性里的只能表示是上一次 update prefer local 时的接入点，用 zbs-meta volume show_access_record <volume_id> 看到的接入点个数才是准的，是内存里的 volume_accesses_ 中记录的值；
+3. 本地感知不会刷新 COW 状态 pextent 的 prefer local，但手动发起的 zbs-meta volume report_access <volume_id> < cid> --include_cow 支持。
+
+
+
 ### 均匀卷
 
 * zbs cli 是只有 snapshot 能更新 new_alloc_even 
