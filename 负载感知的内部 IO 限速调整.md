@@ -1,3 +1,52 @@
+
+
+
+
+
+
+在 zbs 集群中，除了用户 IO，系统内部也会产生用于恢复、下沉、迁移数据块的 IO，二者存在对集群有限的 IO /带宽资源的竞争。
+
+
+
+
+
+
+
+
+
+在数据进行恢复/再平衡时，ZBS 会感知应用的负载和硬件能力以及恢复/迁移任务的实际完成情况，动态的调节如下参数：Meta 扫描的频率；Access 执行任务的带宽限制；Access 执行任务的并行度；期望做到在硬件能力足够和负载相对空闲的情况下尽快达到平衡目标，在硬件能力较弱或者负载较高的情况下，适当调节确保任务的成功率并且尽可能少的对业务 IO 产生性能负面影响。
+
+
+
+
+
+
+
+
+
+
+
+
+
+一次 recover 完成流程描述（主要在 recover handler 里的逻辑）
+
+一次 agile recover 的流程
+
+内部 IO 自适应调节
+
+
+
+1. 一次 reposition 的耗时组成，会在哪些地方被阻塞
+2. reposition 会被取消的几种场景
+3. recover 影响 lease 的释放，一次 recover 结束时
+4. migrate 会将 replace cid 的 block 热点情况映射到 dst cid 上
+
+
+
+每次写请求准备发往各个 Segment 进入异步等待前都会提升 Lease 中记录的 Generation，下一个请求即可使用新的 Generation。与不改变数据状态的读请求不同，写请求在 IO handler 中是不重试的，在 ZBS 链路中的 IO 重试集中在协议层（ZBS Client）避免多服务重试带来的前端协议链路失效后，内部重试带来的可能数据污染。
+
+
+
 敏捷恢复的目的地只会是 rim_cid 或者临时副本中记录的失败副本位置
 
 rim_cid 是在 access 移除副本时，若发现该副本在维护模式节点上，会在 pentry 中标记该 cid
@@ -12,6 +61,8 @@ access 认为可以敏捷恢复必须满足以下所有条件：
 gen sync 期间，会拒绝新的写副本/临时副本的 IO
 
 
+
+staging block info 是个啥，什么时候被创建、使用、销毁
 
 staging block info 什么时候被记录（RecordStagingBlockInfo 的调用位置）
 
@@ -40,23 +91,6 @@ meta 下发的 agile recover 一定是会从健康副本读。
 
 
 如果 meta 下发的 recover cmd 中设置了 replace cid，access 会先删除这个 replace cid 副本吗？
-
-
-
-
-
-给出 prefer local 会变更的几种情况总结
-
-1. 创建 volume 的时候，指定了 prefer local
-2. get lease for read 时，若 lid = 0，prefer local 优先为 volume prefer local，其次为发起这个 rpc 请求的 cid，并用在分配 vextent 上
-3. get lease for write 时，若 vextent_no < num_vextents 且  lid = 0，或者 vextent_no > num_vextents 时，prefer local 优先为 volume prefer local，其次为发起这个 rpc 请求的 cid，并用在分配 vextent 上
-4. COW 跟第 3 点一样
-5. get lease for sink 时，若需要为 cap pentry 分配 loc，prefer local 优先为 pentry 的 prefer local，其次是发起这个 rpc 请求的 cid
-6. update volume 时，若是从普通卷转换成 prior volume 且 perf pid 存在时，会用 volume 的 prefer local 去分配数据块
-7. create / update / resize / rollback / reserve volume space 时，thick extent 会直接用 volume 的 prefer local 当做自己的 prefer local 去分配数据块
-
-8. 创建 even volume 或者更新快照时指定 even mode
-9. 被 active access point 更改
 
 
 
