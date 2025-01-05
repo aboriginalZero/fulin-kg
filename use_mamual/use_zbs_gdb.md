@@ -256,7 +256,10 @@ thread apply all bt
    (gdb) thread 1
    (gdb) bt full
    (gdb) frame 1
-   (gdb) print 在这个线程中的变量
+   
+   (gdb) info locals       # 打印这个 frame 中的所有变量
+   (gdb) print <var_name>  # 打在这个 frame 中的某个变量
+   (gdb) info args
    ```
 
    下载 https://newgh.smartx.com/sijie-sun/smartx-scripts/blob/master/zbs-gdb/mongo_printers.py，并在 gdb 中 source mongo_printers.py 就可以打印 flat_hash_map 类型
@@ -264,6 +267,10 @@ thread apply all bt
    ```
    (gdb) p (('zbs::meta::MetaServer')*0xaaad15a66700)->context_->recover_manager->next_recover_scan_pid_map_
    ```
+
+   TODO（待调整），http://192.168.91.19/core/gdb/absl-printers.py / immer-printers.py
+
+   因为任意一个线程的 exit 都会让整个进程 exit 产生 coredump，所以需要先通过 thread apply all bt 看下是因为线程异常导致的 coredump
 
 5. 查看特殊类变量
 
@@ -311,7 +318,25 @@ thread apply all bt
    /opt/rh/devtoolset-11/root/bin/gdb /usr/sbin/zbs-metad /tmp/core.9128
    ```
 
-5. 在 gdb 中打印指定变量
+5. 先判断进程怎么退出的
+
+   1. 内核日志（/var/log/message*）会指明进程因什么类型的信号退出，chunk watchdog 击杀的方式是 signal 12，可以看 /usr/include/bits/signum.h 里定义的信号类型
+   
+       ```
+       Jan  4 05:08:25 dogfood-idc-elf-102 kernel: service-registr[65084]: segfault at 0 ip 000055c9e2d4389a sp 000055c9e884dd40 error 4 in zbs-chunkd[55c9e2400000+e98000]
+       Jan  4 05:08:25 dogfood-idc-elf-102 kernel: potentially unexpected fatal signal 11.
+       
+       // 触发 segfault 的函数看起来是想 print protobuf 对象
+       (gdb) p (void*)0x55c9e2d4389a
+       $1 = (void *) 0x55c9e2d4389a <google::protobuf::TextFormat::Printer::Print(google::protobuf::Message const&, google::protobuf::TextFormat::Printer::TextGenerator*) const+26>
+       ```
+   
+   2. 进程退出时停在哪个内存地址，可以进 gdb 看
+   3. 通过 `thread apply all bt`看所有线程在 coredump 时停在哪，通过栈找出可能的 UAF 等问题
+   4. 类成员变量可以通过 zbs 预留地址找， 栈变量需要先切换到对应 thread 的对应 frame 后再用 info locals 查看。
+   5. 看 meta / chunk 那个进程号的最后输出日志
+   
+5. 在 gdb 中打印 zbs 指定变量
 
    ```shell
    (gdb) p (('zbs::meta::MetaServer')*0x55c00d972000)->context_->recover_manager->recover_dst_mgrs_
@@ -342,25 +367,19 @@ thread apply all bt
    
    (gdb) p ((zbs::chunk::ChunkServer)*0x55cdb71d8000).access_handler_.recover_handler_.recover_speed_limit_
    $2 = 52428800
-   (gdb) p ((zbs::chunk::ChunkServer)*0x55cdb71d8000).access_handler_.recover_handler_.recover_mode_
-   $3 = zbs::RECOVER_AUTO
-   
-   
-   (gdb) p ((zbs::chunk::ChunkServer)*0x559ca839a000).access_handler_.layer_throttle_.mode_
-   $2 = zbs::INTERNAL_IO_AUTO
    (gdb) p ((zbs::chunk::ChunkServer)*0x559ca839a000).access_handler_.layer_throttle_.throttles_
    $7 = {_M_elems = {std::unique_ptr<zbs::chunk::AccessInternalIOThrottle> = {get() = 0x559ca82aed00},
        std::unique_ptr<zbs::chunk::AccessInternalIOThrottle> = {get() = 0x559ca9596000}}}
    (gdb) p ((zbs::chunk::AccessInternalIOThrottle)*0x559ca9596000).internal_io_speed_limit_
    $8 = 78643200
    ```
-
+   
    set max-value-size unlimited
    
    set height 0
    
    set print elements 0
-   
+
 6. 若是 intrusive list，需要考虑手动计算偏移（https://hackmd.io/@yuanC-L/HJMD9qub0）
 
    ```
@@ -379,7 +398,11 @@ thread apply all bt
                cids_ = "\002", '\000' <repeats 30 times>, field_ = {f = {2, 0, 0, 0}}}}}}}, node = {next = 0x56070cfa3ad0, prev = 0x5606fe394f18}}
    ```
 
-   
+8. 若要打印 flat_hash_map，需要加载两个文件
+
+   http://192.168.91.19/core/gdb/absl-printers.py / immer-printers.py
+
+
 
 [参考1](https://zhuanlan.zhihu.com/p/74897601)，[参考2](https://cloud.tencent.com/developer/article/1142947)
 

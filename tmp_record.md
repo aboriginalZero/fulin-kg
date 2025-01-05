@@ -1,3 +1,9 @@
+有可能维护一个 zbs 的名词表吗？减少沟通成本，比如 COW 行为和 COW 状态，一个分片处于 COW 状态，指的是 is_cow 的 flag = true。
+
+
+
+
+
 vextent no 对 FLAGS_meta_max_pextents 取余就是 lid。所以根据 lid 可以很好查 vextent no，但怎么根据 vextent no 没法直接查他属于哪一个 volume，需要遍历 meta db 中的每一个 volume 然后比对每个 vextent no 是否能跟这个 lid 对上。
 
 
@@ -26,10 +32,6 @@ zbs-chunk recover list 中展示是否 agile recover，展示 reposition read / 
 查看 IO 都在访问哪个副本
 
 zbs-perf-tools chunk access replica_io
-
-
-
-
 
 
 
