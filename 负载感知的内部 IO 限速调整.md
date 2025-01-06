@@ -64,7 +64,7 @@ zbs 默认运行在智能模式，由系统弹性调节内部 IO 限速，若需
 
 一次 recover 完成流程描述（主要在 recover handler 里的逻辑）
 
-一次 agile recover 的流程
+一次 agile recover 的流程，与 normal recover 区别仅在于增量读取。
 
 
 
@@ -73,8 +73,6 @@ zbs 默认运行在智能模式，由系统弹性调节内部 IO 限速，若需
 1. 一次 reposition 的耗时组成，会在哪些地方被阻塞
 2. reposition 会被取消的几种场景
 4. migrate 会将 replace cid 的 block 热点情况映射到 dst cid 上
-
-
 
 
 
@@ -119,18 +117,17 @@ meta 下发的 agile recover 一定是会从健康副本读。
 
 
 
-副本剔除
+在以下 2 个副本剔除的位置记录 staging block info
 
-1. sync gen 失败时，
+1. sync gen 失败时
 2. 用户 IO 写失败时，
 
 
 
-reposition io 第一次写失败，access 并不会做什么剔除之类的操作，lsm 是怎么第二次 reposition io 的？第一次写失败的部分会被利用吗？
-
-
-
-代码上怎么体现的 agile recover 开始后，恢复过程中新产生的写入请求，都会同时写入恢复源和目标端。
+1. reposition io 第一次写失败，access 并不会做什么剔除之类的操作，lsm 是怎么第二次 reposition io 的？第一次写失败的部分会被利用吗？
+2. 代码上怎么体现的 agile recover 开始后，恢复过程中新产生的写入请求，都会同时写入恢复源和目标端？
+3. 同一个 block，reposition io 是怎么跟 app io 和 sink io 做互斥的？
+4. reposition 过程为啥是逐个 block 进行，而不允许并发呢？
 
 
 
@@ -140,9 +137,12 @@ meta in zbs 中少介绍了一节 agile recover 是怎么算 src 和 dst 的，�
 
 
 
-会发起 auto special recover 的 pid 一定是一个 dead pextent，所有副本都 dead 了（所以肯定也没法发起 normal / agile recover），这时去看他有没有临时副本，有的话，从中选一个临时副本执行，src cid 会是临时副本所在节点，dst cid 是与这个临时副本配对的失败副本，replace cid 会是 dead_segments[0]
+会发起 special recover 的一定是个 dead pextent，不论是 auto 还是 manner，所有副本都 dead 了，所以肯定也没法发起 normal / agile recover。
 
-人工发起 special recover 的就不一定了。
+* manner：这时去看他有没有临时副本，有的话，从中选一个临时副本执行，src cid 会是临时副本所在节点，dst cid 是与这个临时副本配对的失败副本，replace cid 会是 dead_segments[0]
+* auto：自行指定使用哪个临时副本以及恢复方式是要 rollback failed replica 还是 force recover from temporary replica。
+
+
 
 
 
@@ -161,6 +161,156 @@ meta in zbs 中少介绍了一节 agile recover 是怎么算 src 和 dst 的，�
 1. meta 下发的 revoke reposition cmd；
 2. access 中 pending 太久；
 3. access 中在 app io 过程中发现的需要 cancel；
+
+
+
+
+
+一次 recover 完成流程描述（主要在 recover handler 里的逻辑）
+
+先 sync gen， src / dst 是否在 lease 的 loc 上
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+IO Handler
+
+
+
+
+
+
+
+perf thin space 承担之前的 cache 角色，当 lsm 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

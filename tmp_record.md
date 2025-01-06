@@ -4,13 +4,15 @@
 
 
 
+
+
+
+
+
+
+
+
 vextent no 对 FLAGS_meta_max_pextents 取余就是 lid。所以根据 lid 可以很好查 vextent no，但怎么根据 vextent no 没法直接查他属于哪一个 volume，需要遍历 meta db 中的每一个 volume 然后比对每个 vextent no 是否能跟这个 lid 对上。
-
-
-
-
-
-reposition 过程为啥是逐个 block 进行，而不允许并发呢？
 
 
 
