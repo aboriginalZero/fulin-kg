@@ -174,12 +174,15 @@ meta in zbs 中少介绍了一节 agile recover 是怎么算 src 和 dst 的，�
 
 
 
+cap  io throttle
 
 
 
+pextent io handler 和 local io handler 通过 cap io throttle 限制发往 lsm 的 cap 层 IO 并发度。只有读写 IO 会被限制。对于非读写 IO，如果同一个 pid 的读写 IO 被并发度限制而在队列中等待，非读写 IO 也会进入队列中，以便保证 IO 的 Generation 顺序。
 
 
 
+与 internal io throttle 不同，关注 IO 是否完成。
 
 
 
@@ -189,118 +192,81 @@ meta in zbs 中少介绍了一节 agile recover 是怎么算 src 和 dst 的，�
 
 
 
+flow control 的目标是，保证一个时间窗口内，空间释放与分配速度基本一致，避免集群 perf thin space 空间耗尽，LSM 返回 IO 失败，导致 IO Error 或分片剔除。
 
 
 
-IO Handler
+* flow controller (flow ctrl)：运行在 access io handler 中，定期向 Flow Manager 获取 Tokens，并根据 Tokens 控制 IO 下发。如果 IO 得到 Token，可以立即下发；如果得不到 Token，需要等超时后才能下发。通过立即下发避免 IO 等待；通过超时避免 Perf Space 快速增长。
+* flow manager (flow mgr)：根据本地 lsm 提供的 perf thin space 使用率决定是否开启限流，以及按照一定策略分配 Tokens 给各个 Flow Controller 使用；
 
+二者典型的交互流程是：
 
+1. 各个 ifc 往各个 ifm 发出 req 并等待 ifm 返回；
+2. 各个 ifm 按照一定周期（默认 100 ms）集中处理每个周期内收到的所有 ifm req 并发出一一对应的 resp；
+3. 各个 ifc 收到 resp，立即发送下一个 req；
+4. 以上过程循环反复。
 
 
 
+flow ctrl 
 
+1. io loc 组成
 
-perf thin space 承担之前的 cache 角色，当 lsm 
+   对外使用上，仅暴露一个 InterceptIO，给定 io loc。
 
+   类型为 cap 或者 IO 类型为 read，那么 io loc = 0；
 
+   1. 如果是 perf thick，因为正常副本和  recover dst 都是写 perf thick，所以不需要参与限流，临时副本所有节点写 perf thin，所以要限流；
+   2. 如果是 perf thin，临时副本、正常副本、recover dst 所在节点都需要拿 app token；
 
+   需要临时副本参与的条件是：这是一个 256k 大小的 block io，因为 lsm 内部会分配新的 256k block（虽然会 gc 旧的 256k）
 
+   promote 上来的
 
+   ProcessWrite、ProcessUnmap、DoProcessPromoteIO
 
+2. 超时时间设定
 
+   每个需要 app token 的超时时间与这个 app token 要写的节点容量有关。
 
+   如果 <= 0.9，timeout = 0.5s，0.9 - 0.98 之间是  0.5 ~ 5s，0.98 之后是 5s 
 
+   fm 同时收到所有 fc 颁发的 app token 时，才能下发。
 
+   另外，如果 Data Channel 已经失联，InterceptIO 会跳过等待 Tokens，加速 IO 完成；如果等待过程中 Data Channel 失联，也会唤醒等待的 IO。
 
+3. token 消费顺序
 
+   Flow Controller 会按照 IO 到来的顺序消费 Token，避免饥饿问题。例如 Flow Controller 有两个 IO 在等待，分别为写（1,2,3）和（1,2），其中 1 的 Token 充足；当 Flow Controller 收到来自节点 2 Flow Manager 的 Token，Flow Controller 会先让排在前面的（1,2,3）写得到 Token，即使他可能会因为缺失 3 的 token 没法立即下发。
 
 
 
+flow mgr
 
+1. 总可用 token
 
+   开启限流条件：节点视角，当 perf thin 使用率超过 90% 开启限流，随后当低于 85% 关闭限流。
 
+   每个 fm 生产的 avail token 跟 perf thin 使用率成正比，使用率越高，可用 token 越低，超过 98%，avail token 直接为 0（此时 fc 获取 token 超时后将继续下发，超时时间也是下发的）。也跟 cap 层盘的类型与数量有关。
 
+2. 各 flow ctrl 可用 token 计算
 
+   参考 ifc 中的描述
 
 
 
 
 
+当集群平均负载处于中负载及以上时，允许新的用户 IO cap 直写，但不对 cap space IO 限流，空间耗尽返回 IO 失败即可。
 
 
 
+meta 会根据集群平均负载决定使用何种下沉策略（下发给每个节点，每个节点使用的下沉策略一定是一致的）：
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+1. sink low：不允许 cap 直写；
+2. sink medium：前一秒的 256k iops 若超过 500，允许接下来的 5s 做 256k 对齐的 cap 直写；
+3. sink high：允许 256k 对齐的 cap 直写；
+4. sink very high：允许 8k 对齐的 cap 直写。
 
 
 
