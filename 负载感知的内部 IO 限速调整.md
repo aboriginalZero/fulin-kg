@@ -172,9 +172,17 @@ meta in zbs 中少介绍了一节 agile recover 是怎么算 src 和 dst 的，�
 
 
 
+总结一个  app write 可能被限制的地方，一个  internal io 可能被限制的地方。
+
 
 
 cap  io throttle
+
+
+
+如果 cap layer 不是 sata hdd 构成的，那 cap io throttle 会不会有影响。
+
+貌似没有全闪的时候关闭	
 
 
 
