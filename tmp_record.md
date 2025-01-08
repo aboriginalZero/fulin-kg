@@ -1,6 +1,74 @@
+数据服务器 HCI- NODE01
+
+ETL 服务器 NODE04
+
+供应链前端服务器 NODE03
+
+供应链数据库服务器 NODE05
+
+HG-2206-tomcat NODE06
+
+HG-BMS-DC01 NODE05
+
+shop1101 NODE01
+
+shop1102 NODE01
+
+shop1116 NODE06
+
+shop1117 NODE01
+
+shop1202 NODE06
+
+shop1207 NODE06
+
+shop1208 NODE06
+
+shop1217 NODE05
+
+shop1218 NODE04
+
+shop1219 NODE01
+
+shop1309 NODE01
+
+shop 3213 NODE04
+
+shop 3215 NODE01
+
+原 HG-shop1107 NODE01
+
+
+
+NODE04 cid 1
+
+NODE01 cid 2
+
+NODE03 cid 3
+
+NODE02 cid 4
+
+NODE06 cid 5
+
+NODE05 cid 6
+
+
+
+还有一个每日快照计划中的虚拟机没有 report prefer local
+
+
+
+11 点 35 分停掉了 migrate
+
+
+
+
+
 有可能维护一个 zbs 的名词表吗？减少沟通成本，比如 COW 行为和 COW 状态，一个分片处于 COW 状态，指的是 is_cow 的 flag = true。
 
 
+
+维护一个 migrate 优先级列表，以 volume 为粒度，每次判断 migrate 的时候，优先从这些 pid 开始，允许命令行添加和删除以及 list
 
 
 
