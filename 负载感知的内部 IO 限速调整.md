@@ -1,3 +1,32 @@
+cap  io throttle
+
+
+
+如果 cap layer 不是 sata hdd 构成的，那 cap io throttle 不会起作用。
+
+pextent io handler 和 local io handler 通过 cap io throttle 限制发往 lsm 的 cap 层 IO 并发度。只有读写 IO 会被限制。对于非读写 IO，如果同一个 pid 的读写 IO 被并发度限制而在队列中等待，非读写 IO 也会进入队列中，以便保证 IO 的 Generation 顺序。
+
+
+
+与 internal io throttle 不同，关注 IO 是否完成。
+
+
+
+1. from remote io stat 的 throttle_latency 只是用来在 prometheus 中查看 local io handler 里被阻塞了多久
+2. 跟 internal io throttle 类似，pextent io handler 中用异步方法，local io handler 用同步的原因是啥？
+3. 为啥在 LandingRWIO 中 还要调用一遍 PutCapIOCtx(cap_io_ctx)？
+4. AllocNewIODepthLimits 里，app io 量很大时怎么避免了 cap io 被饿死？
+5. 每 100ms 重新分配  4 种类型可用的 iodepth 时平滑处理了，那如果插拔 SATA HDD 盘，增减 4 个 iodepth，SetIODepthLimit() 中是否也需要平滑处理？
+6. 后到的高优先级 IO 会提升低优先级的同一个 pid 的 io 到高优先级队列里，那之后消耗的是分给高优先级的 iodepth 额度，这个影响不大？
+7. 啥时候在进入 CapIOThrottle::Run 这个函数时，state 会是 LANDING？
+8. cap io throttle 的 queue 跟 internal io throttle 的应该比较像是？分别支持 pid 和 io type 链起来
+
+
+
+
+
+
+
 ## Internal IO Limit
 
 在 zbs 集群中，除了用户 IO，系统内部也会产生用于恢复、下沉、抬升、迁移数据块的 IO，二者存在对集群有限的 IO 资源（网络/磁盘等）的竞争，为了避免内部 IO 影响业务 IO，需要有内部 IO 限流器，以指定速率拦截/放行内部 IO。
@@ -173,28 +202,6 @@ meta in zbs 中少介绍了一节 agile recover 是怎么算 src 和 dst 的，�
 
 
 总结一个  app write 可能被限制的地方，一个  internal io 可能被限制的地方。
-
-
-
-cap  io throttle
-
-
-
-如果 cap layer 不是 sata hdd 构成的，那 cap io throttle 会不会有影响。
-
-貌似没有全闪的时候关闭	
-
-
-
-pextent io handler 和 local io handler 通过 cap io throttle 限制发往 lsm 的 cap 层 IO 并发度。只有读写 IO 会被限制。对于非读写 IO，如果同一个 pid 的读写 IO 被并发度限制而在队列中等待，非读写 IO 也会进入队列中，以便保证 IO 的 Generation 顺序。
-
-
-
-与 internal io throttle 不同，关注 IO 是否完成。
-
-
-
-
 
 
 
