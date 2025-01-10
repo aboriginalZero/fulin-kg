@@ -2,6 +2,12 @@ cap  io throttle
 
 
 
+目的是
+
+没法降低延时，只是让原本一次性发给 lsm 的 io，被 cap io throttle 控制着慢慢发，避免触发 access 的 local io timeout 8s 超时。
+
+
+
 如果 cap layer 不是 sata hdd 构成的，那 cap io throttle 不会起作用。
 
 pextent io handler 和 local io handler 通过 cap io throttle 限制发往 lsm 的 cap 层 IO 并发度。只有读写 IO 会被限制。对于非读写 IO，如果同一个 pid 的读写 IO 被并发度限制而在队列中等待，非读写 IO 也会进入队列中，以便保证 IO 的 Generation 顺序。
@@ -13,13 +19,66 @@ pextent io handler 和 local io handler 通过 cap io throttle 限制发往 lsm 
 
 
 1. from remote io stat 的 throttle_latency 只是用来在 prometheus 中查看 local io handler 里被阻塞了多久
+
 2. 跟 internal io throttle 类似，pextent io handler 中用异步方法，local io handler 用同步的原因是啥？
-3. 为啥在 LandingRWIO 中 还要调用一遍 PutCapIOCtx(cap_io_ctx)？
+
+   其实也是可以是异步的。只是我们以前都是用同步的写法，它一般更清晰，不容易出错。未来估计异步化改进后，会减少 co，都改成异步的
+
+3. 为啥在 LandingRWIO 中还要调用一遍 PutCapIOCtx(cap_io_ctx)？
+
+   一开始会获取一个凭证， 在 IO 做完的时候还回去
+
 4. AllocNewIODepthLimits 里，app io 量很大时怎么避免了 cap io 被饿死？
+
+   因为 app io 默认不限 iodepth，所以它现有 io 数量的一半，用来作为其他 3 种内部 IO 的
+
 5. 每 100ms 重新分配  4 种类型可用的 iodepth 时平滑处理了，那如果插拔 SATA HDD 盘，增减 4 个 iodepth，SetIODepthLimit() 中是否也需要平滑处理？
+
+   插拔盘这种运维场景出现的概率较低，能够忍受。
+
 6. 后到的高优先级 IO 会提升低优先级的同一个 pid 的 io 到高优先级队列里，那之后消耗的是分给高优先级的 iodepth 额度，这个影响不大？
+
+   是的，比如现有一些 pid a 的 recover io，然后来了一个 pid a 的 app io，后到的 app io 把前面的 recover io 都提升上去到 app io 的队列，而 app io 不限速，所以可能会让 recover io 突破他应该有的并发度上限。
+
 7. 啥时候在进入 CapIOThrottle::Run 这个函数时，state 会是 LANDING？
+
+   在 local io handler 里被 cancel 
+
 8. cap io throttle 的 queue 跟 internal io throttle 的应该比较像是？分别支持 pid 和 io type 链起来
+
+9. 目前 reposition 是允许多个 extent 同时进行，但是每个 extent 内逐个进行。由于一个 reposition cmd 可能涉及不同的 src / dst，所以保持 extent 粒度的并发是有利于提高集群整体 reposition 进度，但如果也允许 block 粒度的并发，这样就能保证作为 reposition src / dst 的 chunk，能够更连续地处理，hdd 上性能可能会更好。比如 cap reposition 现在慢在 read 上，基本上是个 256k 随机读。
+
+8. extent 粒度有 gen，但 block 粒度没有一个类似于 gen 的概念用于对账。jiewei 提供了一个思路是这会有 1024 倍 64 byte 的内存放开，不利于之后向大规模演进。
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
