@@ -1,24 +1,65 @@
-cap  io throttle
+Cap IO Throttle
+
+zbs 中长期存在以下 2 个事实：
+
+1. 多个 Access 间、单个 Access 内都没有对所有类型的 IO 下发做统一并发度调控，这可能会导致不同 LSM 间的 IO 并发度、单个 LSM 内不同类型 IO 并发度差异都很大；
+2. 为避免 IO 长时间不返回，每个发往本地的 LSM IO 若在默认 8s 内未完成，将被剔除分片。
+
+这会导致若 LSM 先收到并发度很高的类型为 A 的 IO，会让后到的、类型为 B 的 IO 有很长的排队延迟，容易引发 B IO 超时、分片剔除，进而影响数据安全。在开启分层之前，大部分 IO 总是先落到性能较好的 SSD cache 上，影响还好，但在分层后，Cap IO 可以直接落在 SATA HDD 上，这个问题将难以忽视。
+
+为了尽量避免出现此类现象，从 zbs 5.6.0 开始，zbs 通过工作在 LSM 外围的 pextent io handler / local io handler 的 Cap IO Throttle 来限制当容量层介质是 SATA HDD 时的 Cap IO 并发度。
+
+对于所有的 Cap IO，不论是业务 IO 还是内部 IO，都需要经过 Cap IO Throttle，由 Cap IO Throttle 根据各类 Cap IO 当前并发额度决定放行/拦截。当 Cap IO 发往 LSM 时，并发度加一，当 IO 从 LSM 返回时，并发度减一。
+
+默认配置下，各节点 Cap IO 总并发度上限 = 4 * SATA HDD 数量，每 100ms 根据各类 Cap IO 权重以及现有 IO 数量重新计算一次各类 Cap IO 的并发度上限，当某类 Cap IO 没有正在执行的 IO 时，本轮得到的并发度上限为 0，否则按各类 Cap IO 权重 recover : sink : elevate : migrate = 4 : 2 : 2 : 1 计算本轮得到的并发度上限。为了避免并发度突变、性能抖动过大，每一轮调整每类 IO 的并发度上限只会在上一轮的基础上加/减一。
+
+实现上，Cap IO Throttle 不限制 APP Cap IO 的并发度，这是因为从旧版本升级到 5.6.x 的集群中的存量数据块会被认为是 Cap Pextent，但它们实际上有可能在性能层（取决于 lsm 内部 writeback 的进度），如果限制了它们的业务 IO 并发度，可能导致业务 IO 延时极高。为了避免 APP CAP IO 并发度很高时，内部 Cap IO 没有机会下发，会将 Cap APP IO 正在并发执行数量的一半作为内部 Cap IO 的并发度上限。
+
+为了保证数据块的 gen 始终有序，Cap IO Throttle 中同一 pid 的 Cap IO 需要按 FIFO 顺序执行。在这个前提下，为了保证 IO 优先级（app > recover > sink / elevate > migrate），允许后到的、高优先级的 Cap IO 提升先到的、但被拦截在低额度队列的低优先级 Cap IO 到高额度队列中。
+
+举个例子，若一开始 Cap IO Throttle 没有并发额度，
+
+1. 来了 2 个 sink IO，那么这 2 个 IO 都会在 sink 队列中等待；
+2. 来了 1 个非读写 IO（比如 get gen），那么这 3 个 IO 都会在 sink 队列中等待；
+3. 来了 1 个 recover IO，那么这 4 个 IO 都会在 recover 队列中等待；
+4. 来了 1 个 APP IO，那么这 5 个 IO 都会在 APP 队列中等待；
+
+由于 APP 队列可以认为是个并发额度无限大的队列，所以最迟在 100ms 后，5 个 IO 都将被下发，且下发顺序是先 sink 再非读写 IO 接着 recover 最后是 APP IO。
 
 
 
-目的是
-
-没法降低延时，只是让原本一次性发给 lsm 的 io，被 cap io throttle 控制着慢慢发，避免触发 access 的 local io timeout 8s 超时。
 
 
+> 不对 app cap io 限制并发度给的原因是：从旧版本升级到 5.6.x，所有现有的 PExtent 都会变成 Cap PExtent，根据 Writeback 的进度它们的数据可能在 Cache 磁盘或者 Partition 磁盘上。Local IO Handler 无法感知它们数据在哪种磁盘介质上，如果把它们的 APP IO 都做并发度限制，可能导致 APP IO 延迟极高。因此目前无法对 APP Cap IO 做并发度限制。可能需要 LSM 配合才能够更准确地判断 APP Cap IO 是否要限制并发度。
 
-如果 cap layer 不是 sata hdd 构成的，那 cap io throttle 不会起作用。
+如果是新部署的 5.6.x 集群，是不是就可以对 app cap io 做限制了？集群是升级而来还是新部署的，tuna 可以支持。
 
-pextent io handler 和 local io handler 通过 cap io throttle 限制发往 lsm 的 cap 层 IO 并发度。只有读写 IO 会被限制。对于非读写 IO，如果同一个 pid 的读写 IO 被并发度限制而在队列中等待，非读写 IO 也会进入队列中，以便保证 IO 的 Generation 顺序。
-
-
-
-与 internal io throttle 不同，关注 IO 是否完成。
+> 因此，APP Cap IO 的并发度可能很高。为了避免内部 Cap IO 抢不到并发度，当 APP Cap IO 较高时，会采用 APP Cap IO 的并发度的一半作为内部 Cap IO 并发度的总上限。
 
 
+按这个策略执行的话，如果 app io 并发度很高，假设是 100 ，那么内部 io 并发度会是 50 ，这可能大大超过硬件提供的上限（每块 hdd 仅提供 4 个并发度），如果 150 个 io 同时下发到 hdd 上，那会比较容易触发 8s 的超时吧？那 cap io throttle 不就没发挥它的作用了。
 
-1. from remote io stat 的 throttle_latency 只是用来在 prometheus 中查看 local io handler 里被阻塞了多久
+是否可以考虑，让 cap io 还是有个上限，但是权重足够大（比如是 16）。
+
+如果要保证内部 IO 并发度上限随，分层后，落到 cap 上的随机读
+
+
+
+
+
+从理论上分析，也应该有个 perf io throttle，比如同一个 pid 的 perf app io 排队排在了 perf recover io 后面，需要等待 recover io 占满了并发度。
+
+一个是 speed limit，一个是 depth limit，前者只管以一定的速率下发，不管 io 完成情况，后者关注 IO 完成情况，每完成一个才能新放行一个下去。
+
+从另一个角度讲，因为有了 internal io throttle 和 cap io throttle，让 lsm 侧的演出可能是超过 8s 的。
+
+为啥并发额度可以不随 app io 弹性变化？看起来没必要。
+
+为什么 cap io throttle 需要保证 gen 有序？
+
+
+
+1. from remote io stat 的 throttle_latency 可以用来在 prometheus 中查看 IO 在 local io handler 里被阻塞了多久。
 
 2. 跟 internal io throttle 类似，pextent io handler 中用异步方法，local io handler 用同步的原因是啥？
 
@@ -28,7 +69,7 @@ pextent io handler 和 local io handler 通过 cap io throttle 限制发往 lsm 
 
    一开始会获取一个凭证， 在 IO 做完的时候还回去
 
-4. AllocNewIODepthLimits 里，app io 量很大时怎么避免了 cap io 被饿死？
+4. AllocNewIODepthLimits 里，app io 量很大时怎么避免了 Cap IO 被饿死？
 
    因为 app io 默认不限 iodepth，所以它现有 io 数量的一半，用来作为其他 3 种内部 IO 的
 
@@ -44,7 +85,7 @@ pextent io handler 和 local io handler 通过 cap io throttle 限制发往 lsm 
 
    在 local io handler 里被 cancel 
 
-8. cap io throttle 的 queue 跟 internal io throttle 的应该比较像是？分别支持 pid 和 io type 链起来
+8. Cap IO Throttle 的 queue 跟 internal io throttle 的应该比较像是？分别支持 pid 和 io type 链起来
 
 9. 目前 reposition 是允许多个 extent 同时进行，但是每个 extent 内逐个进行。由于一个 reposition cmd 可能涉及不同的 src / dst，所以保持 extent 粒度的并发是有利于提高集群整体 reposition 进度，但如果也允许 block 粒度的并发，这样就能保证作为 reposition src / dst 的 chunk，能够更连续地处理，hdd 上性能可能会更好。比如 cap reposition 现在慢在 read 上，基本上是个 256k 随机读。
 
