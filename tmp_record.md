@@ -1,13 +1,21 @@
+如果是 zbs-meta migrate pextent 
+
+* dst cid 是可选参数，若未指定，先选 prefer local，再考虑其他低负载节点；
+* src cid 是可选参数，若指定，需要在 alive loc 上，否则报错；若未指定，后台自行选取；
+* replace cid 是可选参数，若指定，需要在 alive loc 上，否则报错；若未指定，后台自行选取；
+* keep_topo_safe 是可选参数，若指定，在迁移后拓扑降级时报错，否则后台根据拓扑安全的原则选择；
+
+这个命令执行后，需要放在 active_manual_migrate， active migrate list 中，后续
+
 
 
 
 
 1. 搞一个 RepositionPEntry，这样批量处理 reposition pentry 时能让内存命中率，除了 pentry 还可以有 chunk table 中的信息、lease owner、pid
 2. cap io throttle 中限制 app io 
+3. 可以指定 replace cid 是谁，也可以指定 dst cid 是谁
 3. 维护一个 migrate 优先级列表，以 volume 为粒度，每次判断 migrate 的时候，优先从这些 pid 开始，允许命令行添加和删除以及 list
 4. thick pextent 的 prefer local 变更
-5. zbs-chunk migrate list 在 master 上适配多 chunk
-6. 判断是否需要修改
 
 
 
