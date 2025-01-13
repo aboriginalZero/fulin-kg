@@ -1,26 +1,13 @@
-还有一个每日快照计划中的虚拟机没有 report prefer local
-
-
-
-11 点 35 分停掉了 migrate
 
 
 
 
-
-有可能维护一个 zbs 的名词表吗？减少沟通成本，比如 COW 行为和 COW 状态，一个分片处于 COW 状态，指的是 is_cow 的 flag = true。
-
-
-
-维护一个 migrate 优先级列表，以 volume 为粒度，每次判断 migrate 的时候，优先从这些 pid 开始，允许命令行添加和删除以及 list
-
-
-
-
-
-
-
-
+1. 搞一个 RepositionPEntry，这样批量处理 reposition pentry 时能让内存命中率，除了 pentry 还可以有 chunk table 中的信息、lease owner、pid
+2. cap io throttle 中限制 app io 
+3. 维护一个 migrate 优先级列表，以 volume 为粒度，每次判断 migrate 的时候，优先从这些 pid 开始，允许命令行添加和删除以及 list
+4. thick pextent 的 prefer local 变更
+5. zbs-chunk migrate list 在 master 上适配多 chunk
+6. 判断是否需要修改
 
 
 
