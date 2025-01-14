@@ -1,19 +1,45 @@
-如果是 zbs-meta migrate pextent 
+zbs-meta migrate pextent < pid> <dst_cid> [ src_cid ] [ replace_cid ] [ keep_topo_safe ] 
 
-* dst cid 是可选参数，若未指定，先选 prefer local，再考虑其他低负载节点；
-* src cid 是可选参数，若指定，需要在 alive loc 上，否则报错；若未指定，后台自行选取；
+* dst cid 是必选参数，不知道自己应该迁移到哪，那就应该走自动生成的逻辑；
+* src cid 是可选参数，若指定，需要在 alive loc 上，否则报错；若未指定，后台自行选取；（下发时 src cid 可能被修改成现存 lease owner ）
 * replace cid 是可选参数，若指定，需要在 alive loc 上，否则报错；若未指定，后台自行选取；
-* keep_topo_safe 是可选参数，若指定，在迁移后拓扑降级时报错，否则后台根据拓扑安全的原则选择；
+* keep_topo_safe 是可选参数，默认为 True，若指定，在迁移后拓扑降级时报错，否则后台根据拓扑安全的原则选择（这个 topo 安全也包含双活 2 ：1）；
 
-这个命令执行后，需要放在 active_manual_migrate， active migrate list 中，后续
+如果有 need recover 的，不让执行
+
+这个命令执行后，需要放在 active_manual_migrate_list， 后续
+
+如果 isolated 是手动触发的，允许选 isolated 之类，可以打印下。
 
 
+
+
+
+zbs-meta migrate volume <volume_id> <dst_cid> [ src_cid  ] [ replace_cid ] [ keep_topo_safe ] 
+
+* dst cid 是必选参数，不知道自己应该迁移到哪，那就应该走自动生成的逻辑；
+* src_cid 是可选参数，若指定，在 loc 包含 src_cid 时，一定从这读；
+* replace_cid 是可选参数，若指定，在 loc 包含 replace_cid 时，一定从这移除；
+* keep_topo_safe 是可选参数，默认为 True，若指定，在迁移后拓扑降级时报错，否则后台根据拓扑安全的原则选择（这个 topo 安全也包含双活 2 ：1）；
+
+
+
+默认 dst_cid 的空间只能用到 95% （不超过超高负载）
+
+
+
+
+
+
+
+disable auto migrate，否则有可能人为指定之后，再被 auto migrate 迁移了
+
+搞一个关闭自动扫描 migrate 的 rpc 接口，还是只要 munual 生成了，就忽视 auto 生成的。
 
 
 
 1. 搞一个 RepositionPEntry，这样批量处理 reposition pentry 时能让内存命中率，除了 pentry 还可以有 chunk table 中的信息、lease owner、pid
 2. cap io throttle 中限制 app io 
-3. 可以指定 replace cid 是谁，也可以指定 dst cid 是谁
 3. 维护一个 migrate 优先级列表，以 volume 为粒度，每次判断 migrate 的时候，优先从这些 pid 开始，允许命令行添加和删除以及 list
 4. thick pextent 的 prefer local 变更
 
