@@ -3,7 +3,7 @@ zbs-meta migrate pextent < pid> <dst_cid> [ src_cid ] [ replace_cid ] [ keep_top
 * dst cid 是必选参数，不知道自己应该迁移到哪，那就应该走自动生成的逻辑；
 * src cid 是可选参数，若指定，需要在 alive loc 上，否则报错；若未指定，后台自行选取；（下发时 src cid 可能被修改成现存 lease owner ）
 * replace cid 是可选参数，若指定，需要在 alive loc 上，否则报错；若未指定，后台自行选取；
-* keep_topo_safe 是可选参数，默认为 True，若指定，在迁移后拓扑降级时报错，否则后台根据拓扑安全的原则选择（这个 topo 安全也包含双活 2 ：1）；
+* keep_topo_safe 是可选参数，默认为 True，若指定，在迁移后拓扑降级时报错，否则后台需要检验拓扑安全；
 
 如果有 need recover 的，不让执行
 
@@ -11,11 +11,19 @@ zbs-meta migrate pextent < pid> <dst_cid> [ src_cid ] [ replace_cid ] [ keep_top
 
 如果 isolated 是手动触发的，允许选 isolated 之类，可以打印下。
 
+manual 触发，不会用 lease owner 去改 src
 
 
 
+面向 volume 的，比较容易被一线使用，可以严格一些。
 
-zbs-meta migrate volume <volume_id> <dst_cid> [ src_cid  ] [ replace_cid ] [ keep_topo_safe ] 
+只允许做本地聚集（dst cid = prefer local），然后必须拓扑安全，由系统自动选 src / replace。
+
+如果想要更灵活的处理（不考虑拓扑安全，想要自行指定 src / dst / replace），那就去调用 extent 粒度的接口。
+
+
+
+zbs-meta migrate volume <volume_id> <dst_cid> [ src_cid ] [ replace_cid ] [ keep_topo_safe ] 
 
 * dst cid 是必选参数，不知道自己应该迁移到哪，那就应该走自动生成的逻辑；
 * src_cid 是可选参数，若指定，在 loc 包含 src_cid 时，一定从这读；
@@ -25,6 +33,16 @@ zbs-meta migrate volume <volume_id> <dst_cid> [ src_cid  ] [ replace_cid ] [ kee
 
 
 默认 dst_cid 的空间只能用到 95% （不超过超高负载）
+
+
+
+migrate disable 只禁掉 auto migrate generate
+
+测试一个大卷的本地聚集，是否会卡死，拿锁的地方太多了
+
+
+
+禁掉 auto migrate
 
 
 
@@ -61,6 +79,10 @@ From Remote Speed: 0.00 B/s(0.00 B/s)
 zbs-chunk recover list 中展示是否 agile recover，展示 reposition read / write 的次数
 
 由 recover_stage 以及 agile_recover 来决定，这样命令行就可以支持只看 agile recover，后续来测试 agile recover 的恢复情况
+
+
+
+
 
 
 
@@ -896,7 +918,14 @@ meta 会 revoke 整个 volume lease 的 5 种情况
 
 ### prometheus 使用
 
-想修改 Metric 相关代码时，参考现有的代码增加新的 Metric，并且修改对应服务的配置文件（zbs/data/exporter/xxx_exporter.json）即可。检查修改是否生效可以直接用浏览器访问对应服务的 exporter 路径即可（端口和路径也在配置文件中）。在集群中测试 Metric 时，需要将修改的配置文件放置在集群内任意一节点的 /etc/aquarium/register_conf 路径下，并在该节点执行 zbs-deploy-manage register-service 重新注册即可
+Cap IO Throttle 相关
+
+* 查看落到 lsm 上的 IO 并发度，zbs_chunk_lsm_max_cap_write_queue_depth
+* 查看落到 lsm 上的 bdev 并发度，zbs_chunk_lsm_bdev_max_queue_depth
+
+
+
+修改 Metric 相关代码时，参考现有的代码增加新的 Metric，并且修改对应服务的配置文件（zbs/data/exporter/xxx_exporter.json）。检查修改是否生效可以直接用浏览器访问对应服务的 exporter 路径即可（端口和路径也在配置文件中）。在集群中测试 Metric 时，需要将修改的配置文件放置在集群内任意一节点的 /etc/aquarium/register_conf 路径下，并在该节点执行 zbs-deploy-manage register-service 重新注册即可。
 
 查看注册的
 
