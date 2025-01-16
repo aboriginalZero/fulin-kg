@@ -1,3 +1,13 @@
+recover 线程如果能做到所有外部会写他的变量的操作都是以 co 的方式进入，那读的话，也不需要加锁保护。
+
+
+
+最好的使用方式是在手动下发之前，先关掉 auto migrate，否则有可能会被 auto 的冲掉。
+
+
+
+
+
 zbs-meta migrate pextent < pid> <dst_cid> [ src_cid ] [ replace_cid ] [ keep_topo_safe ] 
 
 * dst cid 是必选参数，不知道自己应该迁移到哪，那就应该走自动生成的逻辑；
@@ -15,11 +25,17 @@ manual 触发，不会用 lease owner 去改 src
 
 
 
+关闭 auto disable，然后再人工触发
+
+
+
 面向 volume 的，比较容易被一线使用，可以严格一些。
 
 只允许做本地聚集（dst cid = prefer local），然后必须拓扑安全，由系统自动选 src / replace。
 
 如果想要更灵活的处理（不考虑拓扑安全，想要自行指定 src / dst / replace），那就去调用 extent 粒度的接口。
+
+本地聚集，不允许使用超过 85%，否则在开启自动调度后，还是会被迁出。
 
 
 
@@ -45,6 +61,12 @@ migrate disable 只禁掉 auto migrate generate
 禁掉 auto migrate
 
 
+
+meta gen 被更新的时机
+
+
+
+recover 也可以搞一个类似的， 让 manual reocver（包含手动下发的 special recover）有的时候，停掉 recover
 
 
 
