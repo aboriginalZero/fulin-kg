@@ -373,13 +373,7 @@ meta 会根据集群平均负载决定使用何种下沉策略（下发给每个
 
 
 
-
-
-
-
-
-
-
+[设计一个限流器](https://learning-guide.gitbook.io/system-design-interview/xi-tong-she-ji-mian-shi-nei-mu-zhi-nan-di-yi-juan/chapter-04-design-a-rate-limiter)
 
 
 
