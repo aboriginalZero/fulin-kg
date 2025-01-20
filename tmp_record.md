@@ -1,11 +1,24 @@
+1. 创建精简卷，并在客户端全盘写，记录一下副本分配，预期只有 perf thin，且 loc 一样。记录
+2. 
+
+
+
+
+
 ```
 # 拿到 recover mgr 的 thread id
 top -H -p `pidof zbs-metad`
 
 # 调查一下是否要有一个没有 strip 过的，才用函数调用关系可以看
-perf record -a -G -t <tid>
+perf record -a -g -t <tid>
 perf report
+
+perf stat -e cache-misses -e cache-references -t <tid>
 ```
+
+进程不能被 strip，否则没有函数调用关系
+
+
 
 
 
@@ -121,9 +134,26 @@ zbs-chunk recover list 中展示是否 agile recover，展示 reposition read / 
 
 
 
-查看 IO 都在访问哪个副本
+查看 IO 都在访问哪个副本 zbs-perf-tools chunk access replica_io
 
-zbs-perf-tools chunk access replica_io
+查看给到 volume 的 IO 类型，zbs-perf-tools volume probe 76f59174-ba9a-406a-8d28-5f8472e02166 --distribution rqsz --readwrite write，可以看到主要的 IO 大小为 1024 甚至更高。
+
+```
+write size(KB)             : count     distribution
+     [256.00,512.00)         : 14       |*****                           |
+     [512.00,1024.00)        : 70       |***********************         |
+    [1024.00,+Inf)           : 100      |********************************|
+```
+
+IO 可能合并的位置 
+
+1. 虚拟机侧进行过一次 IO 的合并；
+2. iSCSI 接入侧进行了一次合并；
+3. 最终底层的 IOCache 侧也会进行一次合并。
+
+https://cs.smartx.com/cases/detail?id=1092085
+
+
 
 
 
