@@ -1,5 +1,22 @@
-1. 创建精简卷，并在客户端全盘写，记录一下副本分配，预期只有 perf thin，且 loc 一样。记录
-2. 
+1. 计算 topo 的地方，都用 array 承接；
+
+2. 限制 rebalance 中遍历 pid 的数量（要注意不会一直没的迁移）；
+
+    要感受下，df 上是遍历了多少个 pid 用了 10s
+
+    需要限制各个 diff pids 中的可用上限，否则可能出现 thick diff pids 数量很大，但是都不满足迁移条件，而可以迁移的 thin diff pids 却由于扫描不到而一直无法迁移。
+
+3. 把 MigrateFilterByExtentAttr 放在 MigrateFilterByTopo 前面
+
+    先拿一遍要用的东西，可以让 MigrateFilterByExtentAttr 提前就判断了，
+
+    因为允许 migrate 时，可以拿到 now_ms 和 healthy_cids，所以可以扣出一个最小结构体
+
+4. 
+
+
+
+
 
 
 
@@ -10,8 +27,8 @@
 top -H -p `pidof zbs-metad`
 
 # 调查一下是否要有一个没有 strip 过的，才用函数调用关系可以看
-perf record -a -g -t <tid>
-perf report
+perf record -a -g -t <tid> -o <output_name>
+perf report -i <input_name>
 
 perf stat -e cache-misses -e cache-references -t <tid>
 ```
