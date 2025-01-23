@@ -1,47 +1,29 @@
-1. 计算 topo 的地方，都用 array 承接；
-
-2. 限制 rebalance 中遍历 pid 的数量（要注意不会一直没的迁移）；
-
-    要感受下，df 上是遍历了多少个 pid 用了 10s
-
-    需要限制各个 diff pids 中的可用上限，否则可能出现 thick diff pids 数量很大，但是都不满足迁移条件，而可以迁移的 thin diff pids 却由于扫描不到而一直无法迁移。
-
-3. 把 MigrateFilterByExtentAttr 放在 MigrateFilterByTopo 前面
-
-    先拿一遍要用的东西，可以让 MigrateFilterByExtentAttr 提前就判断了，
-
-    因为允许 migrate 时，可以拿到 now_ms 和 healthy_cids，所以可以扣出一个最小结构体
-
-4. 
+1. 把 scan_extents_per_round_limit 弄成根据每次 migrate scan 耗时自适应变化，这样能保证整体上耗时控制在一定范围内；
+2. recover 线程如果能做到所有外部会写他的变量的操作都是以 co 的方式进入，那读的话，也不需要加锁保护。
 
 
 
+1. meta rpc 线程借助 co 把 ManualMigrateInfo 放入 manual_candidate_migrate_vec_；
+2. doscan 中每 4s 一次遍历 manual_candidate_migrate_vec_ ，放入 passive_manual_waiting_migrate_；
+3. passive_manual_waiting_migrate_ 中若有元素，通过 std::swap 的方式放入 active_waiting_migrate_；
 
 
 
+meta rpc server 中
 
+extent 级别的，src / dst / replace 必须都指定，只做计算简单、且 4s 后基本上还满足这个条件的校验。
 
+1. enable migrate 是 false；
+2. pid 必须在 pid map 里、不是临时副本、没有已下发的（LExtentHasCmdWithPid）、ShouldNotMigrate、
+3. src cid 必须在 loc 中且健康；
+4. replace cid 必须在 loc 中；
+5. dst cid 必须不在 loc 中、不是 isolated、健康、不是高负载；
 
-```
-# 拿到 recover mgr 的 thread id
-top -H -p `pidof zbs-metad`
+volume 级别的，src / dst / replace 都不让指定
 
-# 调查一下是否要有一个没有 strip 过的，才用函数调用关系可以看
-perf record -a -g -t <tid> -o <output_name>
-perf report -i <input_name>
-
-perf stat -e cache-misses -e cache-references -t <tid>
-```
-
-进程不能被 strip，否则没有函数调用关系
-
-
-
-
-
-
-
-recover 线程如果能做到所有外部会写他的变量的操作都是以 co 的方式进入，那读的话，也不需要加锁保护。
+* dst 一定是 prefer local
+* 给用户返回 prefer local != 0 的数据块数量、prefer local != 0 但是没有本地副本的数据块数量
+* 之后再考虑分 perf / cap 展示
 
 
 
@@ -121,10 +103,11 @@ disable auto migrate，否则有可能人为指定之后，再被 auto migrate �
 
 
 
-1. 搞一个 RepositionPEntry，这样批量处理 reposition pentry 时能让内存命中率，除了 pentry 还可以有 chunk table 中的信息、lease owner、pid
-2. cap io throttle 中限制 app io 
-3. 维护一个 migrate 优先级列表，以 volume 为粒度，每次判断 migrate 的时候，优先从这些 pid 开始，允许命令行添加和删除以及 list
-4. thick pextent 的 prefer local 变更
+
+
+1. cap io throttle 中限制 app io 
+2. 维护一个 migrate 优先级列表，以 volume 为粒度，每次判断 migrate 的时候，优先从这些 pid 开始，允许命令行添加和删除以及 list
+3. thick pextent 的 prefer local 变更
 
 
 
@@ -184,12 +167,6 @@ service mgr 不负责拉起服务进程，那是什么角色来负责
 
 1. 怎么理解管理网络和虚拟机网络的区别？http://docs.fev.smartx.com/smtxos/6.1.1/elf_installation_guide/elf_installation_guide_21
 2. VLAN ID = 0 的含义是什么？
-
-
-
-1. 把 RepositionPEntry 中的 pentry 替换成一个只供 recover 使用的数据结构，把 replica_ 开成栈变量，减少拷贝时的耗时；
-
-2. 把批量处理 pids 的逻辑提出 1 或 2 个宏定义，在 7 个子 migrate 中使用。
 
 
 
@@ -312,7 +289,7 @@ Access 在 Sync perf extent 时，从 LSM 获取 perf extent valid bitmap，并�
 
 
 
-1. flat_hash_map to btree_map，从内存访问的角度更好
+1. flat_hash_map to btree_map，从内存访问的角度更好。红黑树的节点分配在内存中具有逻辑上的连续性，这意味着，虽然节点的内存地址可能不是完全连续的，但在遍历树的过程中，访问的节点在内存中的位置通常是相对靠近的，这有助于提高缓存命中率。相比之下，哈希表的节点分布更加随机，取决于哈希函数的值。即使键值相近的元素，在内存中的位置也可能相距很远，这使得缓存预取难以发挥作用。
 3. cid map 改成 std::vector，这样从内存上更有顺序性
 
 

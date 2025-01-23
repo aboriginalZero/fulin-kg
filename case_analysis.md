@@ -1,3 +1,13 @@
+### migrate scan 性能优化
+
+* 替换一个有符号表的 zbs-metad（没被 strip 过）；
+* top -H -p <meta_pid> 查看 metad 中各个线程的 tid 以及 CPU 耗时，按 f 选中 P (Last Used Cpu) 固定按 CPU 耗时排序；
+* perf record -a -g -t < tid> -o perf1.data 保存函数各项耗时（-g 表示记录函数调用关系），可以使用 ctrl+c 中断 perf 进程，或者在命令最后加上参数 --sleep n 在 n 秒后停止；
+* perf report -i perf1.data 查看；perf diff perf.data perf.data.old 比较优化结果（虽然不明显）；
+* perf stat -e cache-misses -e cache-references -t < tid> 查看 cache 命中率；
+
+
+
 ### 新创建数据块的 lease owner / prefer local 不在本地
 
 性能测试，为了避免有毛刺，最好的保证 iscsi 接入点不飘：
