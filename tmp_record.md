@@ -1,176 +1,26 @@
+我确认了一下，lsm 主动 invalidate 之后，过 10 min 没上报，meta 认为这个副本超时，就不会记在它的 alive loc 中。在 alive segment num = expected 时，不会触发 recover，所以后续他可能 loc = [1, 2, 3]，alive loc = [1, 2]。
+
+
+
+这里可能需要调整所有 thick 类型的 extent （不论 cap / perf）的行为。在 get lease 时，若发现 extent 已经分配了 pid 和 loc，但 prefer local = 0，那么用发起这个 get lease rpc 的 chunk id 去作为他的 prefer local，相当于把 update prefer local 的时机从本地感知（ 6h）提前到初次申请写 lease。（另外迁移或许也要适配，去更快触发本地聚集）
+
+even extent 的话，不需要更新 prefer local。
+
+
+
+thick extent（不论 perf / cap）创建的时候就分配了 pid 和 loc，（除非被回收）所以不会走到 lid == 0 的逻辑
+
+在 COW 的时候需要去更新 parent 的 prefer local 吗？没有，COW 用的 prefer local 也是发起 get lease rpc 的 chunk
+
+
+
+既分配了 pid 也分配了 loc
+
+
+
+
+
 rename passive_waiting_migrate_ to passive_periodic_waiting_migrate_
-
-
-
-```
-I0206 22:00:08.315049 18372(##test_suite_na) physical_extent_table.cc:477] yiwu xxx pid: 1
-I0206 22:00:08.315055 18372(##test_suite_na) physical_extent_table_entry.h:51] yiwu MigrateInfo ctor
-I0206 22:00:08.315058 18372(##test_suite_na) physical_extent_table.cc:479] yiwu yyy pid: 1
-I0206 22:00:08.315065 18372(##test_suite_na) physical_extent_table_entry.h:106] yiwu MigrateInfo move ctor
-I0206 22:00:08.315066 18372(##test_suite_na) physical_extent_table_entry.h:53] yiwu MigrateInfo dtor
-I0206 22:00:08.315068 18372(##test_suite_na) physical_extent_table.cc:477] yiwu xxx pid: 2
-I0206 22:00:08.315068 18372(##test_suite_na) physical_extent_table_entry.h:51] yiwu MigrateInfo ctor
-I0206 22:00:08.315069 18372(##test_suite_na) physical_extent_table.cc:479] yiwu yyy pid: 2
-I0206 22:00:08.315070 18372(##test_suite_na) physical_extent_table_entry.h:106] yiwu MigrateInfo move ctor
-I0206 22:00:08.315071 18372(##test_suite_na) physical_extent_table_entry.h:53] yiwu MigrateInfo dtor
-I0206 22:00:08.315073 18372(##test_suite_na) physical_extent_table.cc:477] yiwu xxx pid: 3
-I0206 22:00:08.315073 18372(##test_suite_na) physical_extent_table_entry.h:51] yiwu MigrateInfo ctor
-I0206 22:00:08.315073 18372(##test_suite_na) physical_extent_table.cc:479] yiwu yyy pid: 3
-I0206 22:00:08.315074 18372(##test_suite_na) physical_extent_table_entry.h:106] yiwu MigrateInfo move ctor
-I0206 22:00:08.315075 18372(##test_suite_na) physical_extent_table_entry.h:53] yiwu MigrateInfo dtor
-I0206 22:00:08.315076 18372(##test_suite_na) recover_manager_test.cc:2490] yiwu abc
-I0206 22:00:08.315078 18372(##test_suite_na) physical_extent_table_entry.h:53] yiwu MigrateInfo dtor
-I0206 22:00:08.315078 18372(##test_suite_na) physical_extent_table_entry.h:53] yiwu MigrateInfo dtor
-I0206 22:00:08.315079 18372(##test_suite_na) physical_extent_table_entry.h:53] yiwu MigrateInfo dtor
-
-    MigrateInfo() { LOG(INFO) << "yiwu MigrateInfo ctor"; }
-
-    ~MigrateInfo() { LOG(INFO) << "yiwu MigrateInfo dtor"; }
-
-    MigrateInfo(const MigrateInfo& info) {
-        LOG(INFO) << "yiwu MigrateInfo copy ctor";
-
-        if (this == &info) return;
-
-        this->pid = info.pid;
-        this->epoch = info.epoch;
-        this->pextent_size = info.pextent_size;
-        this->loc = info.loc;
-        this->alive_loc = info.alive_loc;
-        this->complete_loc = info.complete_loc;
-        this->existed_segment_num = info.existed_segment_num;
-        this->expected_segment_num = info.expected_segment_num;
-        this->ec_shard_num = info.ec_shard_num;
-        this->is_even = info.is_even;
-        this->ever_exist = info.ever_exist;
-        this->is_thin = info.is_thin;
-
-        this->should_not_migrate = info.should_not_migrate;
-        this->prefer_cid = info.prefer_cid;
-        this->pk = info.pk;
-        this->pt = info.pt;
-        this->rt = info.rt;
-    }
-
-    MigrateInfo& operator=(const MigrateInfo& info) {
-        LOG(INFO) << "yiwu MigrateInfo copy assign";
-
-        if (this == &info) return *this;
-
-        this->pid = info.pid;
-        this->epoch = info.epoch;
-        this->pextent_size = info.pextent_size;
-        this->loc = info.loc;
-        this->alive_loc = info.alive_loc;
-        this->complete_loc = info.complete_loc;
-        this->existed_segment_num = info.existed_segment_num;
-        this->expected_segment_num = info.expected_segment_num;
-        this->ec_shard_num = info.ec_shard_num;
-        this->is_even = info.is_even;
-        this->ever_exist = info.ever_exist;
-        this->is_thin = info.is_thin;
-
-        this->should_not_migrate = info.should_not_migrate;
-        this->prefer_cid = info.prefer_cid;
-        this->pk = info.pk;
-        this->pt = info.pt;
-        this->rt = info.rt;
-    }
-
-    MigrateInfo(MigrateInfo&& info) {
-        LOG(INFO) << "yiwu MigrateInfo move ctor";
-
-        this->pid = info.pid;
-        this->epoch = info.epoch;
-        this->pextent_size = info.pextent_size;
-        this->loc = info.loc;
-        this->alive_loc = info.alive_loc;
-        this->complete_loc = info.complete_loc;
-        this->existed_segment_num = info.existed_segment_num;
-        this->expected_segment_num = info.expected_segment_num;
-        this->ec_shard_num = info.ec_shard_num;
-        this->is_even = info.is_even;
-        this->ever_exist = info.ever_exist;
-        this->is_thin = info.is_thin;
-
-        this->should_not_migrate = info.should_not_migrate;
-        this->prefer_cid = info.prefer_cid;
-        this->pk = info.pk;
-        this->pt = info.pt;
-        this->rt = info.rt;
-        // 没有堆变量，这里也无所谓对 info 的处理
-    }
-
-    MigrateInfo& operator=(MigrateInfo&& info) {
-        LOG(INFO) << "yiwu MigrateInfo move assign";
-
-        this->pid = info.pid;
-        this->epoch = info.epoch;
-        this->pextent_size = info.pextent_size;
-        this->loc = info.loc;
-        this->alive_loc = info.alive_loc;
-        this->complete_loc = info.complete_loc;
-        this->existed_segment_num = info.existed_segment_num;
-        this->expected_segment_num = info.expected_segment_num;
-        this->ec_shard_num = info.ec_shard_num;
-        this->is_even = info.is_even;
-        this->ever_exist = info.ever_exist;
-        this->is_thin = info.is_thin;
-
-        this->should_not_migrate = info.should_not_migrate;
-        this->prefer_cid = info.prefer_cid;
-        this->pk = info.pk;
-        this->pt = info.pt;
-        this->rt = info.rt;
-
-        return *this;
-    }
-    
-    
-    
-    
-CO_TEST_F(RecoverManagerTest, YIWU) {
-    ChunkTable* chunk_table = GetMetaContext().chunk_table;
-    uint64_t per_host_num = 2400;
-
-    std::vector<cid_t> chunk;
-    LOOP(3) {
-        Chunk response;
-        RegisterChunk(GenerateChunkDataIP(i), 3401, &response);
-        cid_t cid = response.id();
-        ChunkSpaceInfo info;
-        // fake enough space
-        if (i == 1) {
-            info.set_valid_data_space(per_host_num * kExtentSize * 2);
-        } else {
-            info.set_valid_data_space(per_host_num * kExtentSize);
-        }
-        info.set_provisioned_data_space(0ULL);  // 0TB
-        chunk_table->TEST_SetChunkSpaceInfo(cid, info);
-        chunk_table->SetChunkStatus(cid, CHUNK_STATUS_CONNECTED_HEALTHY);
-        chunk.push_back(cid);
-    }
-
-    pid_t pid = 1;
-    LOOP(std::ceil(FLAGS_cap_medium_ratio * per_host_num)) {
-        CreatePExtent(&GetMetaContext(), {chunk[0], chunk[1]}, pid++, kInvalidChunkId, true, 1, true);
-    }
-
-    std::vector<pid_t> batch_pids{1, 2, 3};
-    std::vector<MigrateInfo> batch_infos;
-
-    cid_set_t healthy_cids;
-    GetMetaContext().chunk_table->ListChunkId(&healthy_cids, true);
-
-    uint64_t now_ms = GetMetaTimeMS();
-    GetMetaContext().pextent_table->BatchGetMigrateInfos(batch_pids, now_ms, healthy_cids, &batch_infos);
-    LOG(INFO) << "yiwu abc";
-}
-```
-
-
-
-
 
 
 
