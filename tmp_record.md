@@ -1,5 +1,182 @@
-1. 把 scan_extents_per_round_limit 弄成根据每次 migrate scan 耗时自适应变化，这样能保证整体上耗时控制在一定范围内；
-2. recover 线程如果能做到所有外部会写他的变量的操作都是以 co 的方式进入，那读的话，也不需要加锁保护。
+rename passive_waiting_migrate_ to passive_periodic_waiting_migrate_
+
+
+
+```
+I0206 22:00:08.315049 18372(##test_suite_na) physical_extent_table.cc:477] yiwu xxx pid: 1
+I0206 22:00:08.315055 18372(##test_suite_na) physical_extent_table_entry.h:51] yiwu MigrateInfo ctor
+I0206 22:00:08.315058 18372(##test_suite_na) physical_extent_table.cc:479] yiwu yyy pid: 1
+I0206 22:00:08.315065 18372(##test_suite_na) physical_extent_table_entry.h:106] yiwu MigrateInfo move ctor
+I0206 22:00:08.315066 18372(##test_suite_na) physical_extent_table_entry.h:53] yiwu MigrateInfo dtor
+I0206 22:00:08.315068 18372(##test_suite_na) physical_extent_table.cc:477] yiwu xxx pid: 2
+I0206 22:00:08.315068 18372(##test_suite_na) physical_extent_table_entry.h:51] yiwu MigrateInfo ctor
+I0206 22:00:08.315069 18372(##test_suite_na) physical_extent_table.cc:479] yiwu yyy pid: 2
+I0206 22:00:08.315070 18372(##test_suite_na) physical_extent_table_entry.h:106] yiwu MigrateInfo move ctor
+I0206 22:00:08.315071 18372(##test_suite_na) physical_extent_table_entry.h:53] yiwu MigrateInfo dtor
+I0206 22:00:08.315073 18372(##test_suite_na) physical_extent_table.cc:477] yiwu xxx pid: 3
+I0206 22:00:08.315073 18372(##test_suite_na) physical_extent_table_entry.h:51] yiwu MigrateInfo ctor
+I0206 22:00:08.315073 18372(##test_suite_na) physical_extent_table.cc:479] yiwu yyy pid: 3
+I0206 22:00:08.315074 18372(##test_suite_na) physical_extent_table_entry.h:106] yiwu MigrateInfo move ctor
+I0206 22:00:08.315075 18372(##test_suite_na) physical_extent_table_entry.h:53] yiwu MigrateInfo dtor
+I0206 22:00:08.315076 18372(##test_suite_na) recover_manager_test.cc:2490] yiwu abc
+I0206 22:00:08.315078 18372(##test_suite_na) physical_extent_table_entry.h:53] yiwu MigrateInfo dtor
+I0206 22:00:08.315078 18372(##test_suite_na) physical_extent_table_entry.h:53] yiwu MigrateInfo dtor
+I0206 22:00:08.315079 18372(##test_suite_na) physical_extent_table_entry.h:53] yiwu MigrateInfo dtor
+
+    MigrateInfo() { LOG(INFO) << "yiwu MigrateInfo ctor"; }
+
+    ~MigrateInfo() { LOG(INFO) << "yiwu MigrateInfo dtor"; }
+
+    MigrateInfo(const MigrateInfo& info) {
+        LOG(INFO) << "yiwu MigrateInfo copy ctor";
+
+        if (this == &info) return;
+
+        this->pid = info.pid;
+        this->epoch = info.epoch;
+        this->pextent_size = info.pextent_size;
+        this->loc = info.loc;
+        this->alive_loc = info.alive_loc;
+        this->complete_loc = info.complete_loc;
+        this->existed_segment_num = info.existed_segment_num;
+        this->expected_segment_num = info.expected_segment_num;
+        this->ec_shard_num = info.ec_shard_num;
+        this->is_even = info.is_even;
+        this->ever_exist = info.ever_exist;
+        this->is_thin = info.is_thin;
+
+        this->should_not_migrate = info.should_not_migrate;
+        this->prefer_cid = info.prefer_cid;
+        this->pk = info.pk;
+        this->pt = info.pt;
+        this->rt = info.rt;
+    }
+
+    MigrateInfo& operator=(const MigrateInfo& info) {
+        LOG(INFO) << "yiwu MigrateInfo copy assign";
+
+        if (this == &info) return *this;
+
+        this->pid = info.pid;
+        this->epoch = info.epoch;
+        this->pextent_size = info.pextent_size;
+        this->loc = info.loc;
+        this->alive_loc = info.alive_loc;
+        this->complete_loc = info.complete_loc;
+        this->existed_segment_num = info.existed_segment_num;
+        this->expected_segment_num = info.expected_segment_num;
+        this->ec_shard_num = info.ec_shard_num;
+        this->is_even = info.is_even;
+        this->ever_exist = info.ever_exist;
+        this->is_thin = info.is_thin;
+
+        this->should_not_migrate = info.should_not_migrate;
+        this->prefer_cid = info.prefer_cid;
+        this->pk = info.pk;
+        this->pt = info.pt;
+        this->rt = info.rt;
+    }
+
+    MigrateInfo(MigrateInfo&& info) {
+        LOG(INFO) << "yiwu MigrateInfo move ctor";
+
+        this->pid = info.pid;
+        this->epoch = info.epoch;
+        this->pextent_size = info.pextent_size;
+        this->loc = info.loc;
+        this->alive_loc = info.alive_loc;
+        this->complete_loc = info.complete_loc;
+        this->existed_segment_num = info.existed_segment_num;
+        this->expected_segment_num = info.expected_segment_num;
+        this->ec_shard_num = info.ec_shard_num;
+        this->is_even = info.is_even;
+        this->ever_exist = info.ever_exist;
+        this->is_thin = info.is_thin;
+
+        this->should_not_migrate = info.should_not_migrate;
+        this->prefer_cid = info.prefer_cid;
+        this->pk = info.pk;
+        this->pt = info.pt;
+        this->rt = info.rt;
+        // 没有堆变量，这里也无所谓对 info 的处理
+    }
+
+    MigrateInfo& operator=(MigrateInfo&& info) {
+        LOG(INFO) << "yiwu MigrateInfo move assign";
+
+        this->pid = info.pid;
+        this->epoch = info.epoch;
+        this->pextent_size = info.pextent_size;
+        this->loc = info.loc;
+        this->alive_loc = info.alive_loc;
+        this->complete_loc = info.complete_loc;
+        this->existed_segment_num = info.existed_segment_num;
+        this->expected_segment_num = info.expected_segment_num;
+        this->ec_shard_num = info.ec_shard_num;
+        this->is_even = info.is_even;
+        this->ever_exist = info.ever_exist;
+        this->is_thin = info.is_thin;
+
+        this->should_not_migrate = info.should_not_migrate;
+        this->prefer_cid = info.prefer_cid;
+        this->pk = info.pk;
+        this->pt = info.pt;
+        this->rt = info.rt;
+
+        return *this;
+    }
+    
+    
+    
+    
+CO_TEST_F(RecoverManagerTest, YIWU) {
+    ChunkTable* chunk_table = GetMetaContext().chunk_table;
+    uint64_t per_host_num = 2400;
+
+    std::vector<cid_t> chunk;
+    LOOP(3) {
+        Chunk response;
+        RegisterChunk(GenerateChunkDataIP(i), 3401, &response);
+        cid_t cid = response.id();
+        ChunkSpaceInfo info;
+        // fake enough space
+        if (i == 1) {
+            info.set_valid_data_space(per_host_num * kExtentSize * 2);
+        } else {
+            info.set_valid_data_space(per_host_num * kExtentSize);
+        }
+        info.set_provisioned_data_space(0ULL);  // 0TB
+        chunk_table->TEST_SetChunkSpaceInfo(cid, info);
+        chunk_table->SetChunkStatus(cid, CHUNK_STATUS_CONNECTED_HEALTHY);
+        chunk.push_back(cid);
+    }
+
+    pid_t pid = 1;
+    LOOP(std::ceil(FLAGS_cap_medium_ratio * per_host_num)) {
+        CreatePExtent(&GetMetaContext(), {chunk[0], chunk[1]}, pid++, kInvalidChunkId, true, 1, true);
+    }
+
+    std::vector<pid_t> batch_pids{1, 2, 3};
+    std::vector<MigrateInfo> batch_infos;
+
+    cid_set_t healthy_cids;
+    GetMetaContext().chunk_table->ListChunkId(&healthy_cids, true);
+
+    uint64_t now_ms = GetMetaTimeMS();
+    GetMetaContext().pextent_table->BatchGetMigrateInfos(batch_pids, now_ms, healthy_cids, &batch_infos);
+    LOG(INFO) << "yiwu abc";
+}
+```
+
+
+
+
+
+
+
+1. 像 gc mgr 一样，用 TimeLimiter 主动 yield
+2. 把 scan_extents_per_round_limit 弄成根据每次 migrate scan 耗时自适应变化，这样能保证整体上耗时控制在一定范围内；
+3. recover 线程如果能做到所有外部会写他的变量的操作都是以 co 的方式进入，那读的话，也不需要加锁保护。
 
 
 
@@ -14,7 +191,7 @@ meta rpc server 中
 extent 级别的，src / dst / replace 必须都指定，只做计算简单、且 4s 后基本上还满足这个条件的校验。
 
 1. enable migrate 是 false；
-2. pid 必须在 pid map 里、不是临时副本、没有已下发的（LExtentHasCmdWithPid）、ShouldNotMigrate、
+2. pid 必须在 pid map 里、不是临时副本、没有已下发的（LExtentHasCmdWithPid）、ShouldNotMigrate、不在 
 3. src cid 必须在 loc 中且健康；
 4. replace cid 必须在 loc 中；
 5. dst cid 必须不在 loc 中、不是 isolated、健康、不是高负载；
@@ -33,7 +210,7 @@ volume 级别的，src / dst / replace 都不让指定
 
 
 
-zbs-meta migrate pextent < pid> <dst_cid> [ src_cid ] [ replace_cid ] [ keep_topo_safe ] 
+zbs-meta migrate pextent < pid> <dst_cid> [src_cid ] [ replace_cid ] [ keep_topo_safe ] 
 
 * dst cid 是必选参数，不知道自己应该迁移到哪，那就应该走自动生成的逻辑；
 * src cid 是可选参数，若指定，需要在 alive loc 上，否则报错；若未指定，后台自行选取；（下发时 src cid 可能被修改成现存 lease owner ）
