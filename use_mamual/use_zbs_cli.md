@@ -37,6 +37,8 @@ rm -rf build && mkdir build && cd build && source /opt/rh/devtoolset-7/enable &&
 # -DBUILD_TARGET_PLATFORM=hygon 编译海光下的
 ninja -j20 zbs_test
 
+# docker 中也可以通过配置 zookeeper 来运行 ut
+
 # 屏幕中会提示出错处的日志信息，借助 newci 可以避免在本地配置 nvmf/rdma 环境跑单测
 # 但是要配好 nvmf/rdma 的相关依赖包/服务
 cd /home/code && ./newci-x86_64 -builddir zbs/build/ -p 16 -action "/run 200 FunctionalTest.MarkVolumeAllocEven"

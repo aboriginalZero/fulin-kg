@@ -114,50 +114,51 @@ prometheus prometheus HC!r0cks ，http://meta_leader_mgt_ip:9090
 
      其中，strip ./src/zbs-taskd 有选择地除去行号信息、重定位信息、调试段、typchk 段、注释段、文件头以及所有或部分符号表，后续难以调试，但能够有效减少二进制文件大小。
 
-11. 单测运行
+12. 单测运行
 
-    ```shell
-    yum -y install zookeeper rpcbind
-    systemctl start zookeeper 
-    
-    # 创建所需目录
-    mkdir -p /etc/zbs && mkdir -p /var/log/zbs && mkdir -p /var/lib/zbs/chunkd && mkdir -p /var/lib/zbs/iscsid && mkdir -p /var/lib/zbs/metad && mkdir -p /var/lib/zbs/registry && mkdir -p /var/lib/zbs/zbs-nfsd && chmod -R 1777 /var/log/zbs /var/lib/zbs
-    
-    # 创建 zbs 配置文件
-    cat > /etc/zbs/zbs.conf <<  EOF
-    [network]
-    data_ip=127.0.0.1
-    heartbeat_ip=127.0.0.1
-    vm_ip=127.0.0.1
-    web_ip=127.0.0.1
-    
-    [cluster]
-    role=standalone
-    members=127.0.0.1
-    zookeeper=127.0.0.1:2181
-    mongo=127.0.0.1:27017
-    EOF
-    
-    # 拷贝出一份 zk 配置
-    cp -v /etc/zookeeper/zoo_zbs.cfg /etc/zookeeper/zoo.cfg
-    sed -i 's/cnxTimeout=2/cnxTimeout=10/g' /etc/zookeeper/zoo.cfg
-    
-    # 启动 rpcbind
-    /sbin/rpcbind -w
-    
-    # 重启 zk
-    zkServer.sh stop
-    rm -rf /var/log/zookeeper
-    mkdir -p /var/log/zookeeper
-    chown -R zookeeper:zookeeper /var/log/zookeeper
-    zkServer.sh start || die "Failed to start zookeeper"
-    ```
+     ```shell
+     yum -y install zookeeper rpcbind
+     # docker 中无法使用 systemctl 的话，可以直接运行以下内容来运行 zookeeper
+     systemctl start zookeeper 
+     
+     # 创建所需目录
+     mkdir -p /etc/zbs && mkdir -p /var/log/zbs && mkdir -p /var/lib/zbs/chunkd && mkdir -p /var/lib/zbs/iscsid && mkdir -p /var/lib/zbs/metad && mkdir -p /var/lib/zbs/registry && mkdir -p /var/lib/zbs/zbs-nfsd && chmod -R 1777 /var/log/zbs /var/lib/zbs
+     
+     # 创建 zbs 配置文件
+     cat > /etc/zbs/zbs.conf <<  EOF
+     [network]
+     data_ip=127.0.0.1
+     heartbeat_ip=127.0.0.1
+     vm_ip=127.0.0.1
+     web_ip=127.0.0.1
+     
+     [cluster]
+     role=standalone
+     members=127.0.0.1
+     zookeeper=127.0.0.1:2181
+     mongo=127.0.0.1:27017
+     EOF
+     
+     # 拷贝出一份 zk 配置
+     cp -v /etc/zookeeper/zoo_zbs.cfg /etc/zookeeper/zoo.cfg
+     sed -i 's/cnxTimeout=2/cnxTimeout=10/g' /etc/zookeeper/zoo.cfg
+     
+     # 启动 rpcbind
+     /sbin/rpcbind -w
+     
+     # 重启 zk
+     zkServer.sh stop
+     rm -rf /var/log/zookeeper
+     mkdir -p /var/log/zookeeper
+     chown -R zookeeper:zookeeper /var/log/zookeeper
+     zkServer.sh start || die "Failed to start zookeeper"
+     ```
 
-    运行指令
+     运行指令
 
-    ```shell
-    cd /home/code/zbs/build/src && ./zbs_test --gtest_filter="*FunctionalTest.WriteResize*"  --gtest_repeat=100
-    ```
+     ```shell
+     cd /home/code/zbs/build/src && ./zbs_test --gtest_filter="*FunctionalTest.WriteResize*"  --gtest_repeat=100
+     ```
 
 12. 安装 git-review 并提交新代码到 gerrit
 

@@ -1,4 +1,19 @@
-我确认了一下，lsm 主动 invalidate 之后，过 10 min 没上报，meta 认为这个副本超时，就不会记在它的 alive loc 中。在 alive segment num = expected 时，不会触发 recover，所以后续他可能 loc = [1, 2, 3]，alive loc = [1, 2]。
+副本分配有过的优化
+
+1. cache topo，避免避免访问 topo 的申请/释放锁；
+2. comparator 中的 topo distance 的计算搞了个 fast map；
+3. ChunkSpaceInfo 的 sort 用指针，否则会有大量的 MergeFrom 调用；
+4. 
+
+
+
+迁移有个 bug 会选出一个无效的 replace cid，导致在迁移后，期望 2 副本的 extent 有 3 个副本，比如说副本位置 1 2 3。
+
+当这个数据块所在盘不健康了，数据写入会失败，会创建对应的临时副本。此时还有 2 个健康副本，所以再也不会触发 recover，这个临时副本就就没有机会被回收，那么与之关联的失败副本也一直不会被回收，这个失败副本在不健康盘上，对外表现就是这个盘一直卸载不掉。
+
+如果是手动通过命令去让 lsm 主动 invalidate 这个 pextent，过 10 min 没上报，meta 认为这个副本超时，就不会记在它的 alive loc 中。在 alive segment num = expected 时，不会触发 recover，所以后续他可能 loc = [1, 2, 3]，alive loc = [1, 2]。即使后续做 sync gen 是从 loc 里拿到每一个 cid 的 gen，并踢掉无效副本，但还是会继续生成临时副本，所以这里临时方案或许是确认健康副本数满足要求后，手动去回收临时副本。
+
+
 
 
 
@@ -11,10 +26,6 @@ even extent 的话，不需要更新 prefer local。
 thick extent（不论 perf / cap）创建的时候就分配了 pid 和 loc，（除非被回收）所以不会走到 lid == 0 的逻辑
 
 在 COW 的时候需要去更新 parent 的 prefer local 吗？没有，COW 用的 prefer local 也是发起 get lease rpc 的 chunk
-
-
-
-既分配了 pid 也分配了 loc
 
 
 
