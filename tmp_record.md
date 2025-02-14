@@ -1,9 +1,177 @@
+看一下 zk journal
+
+1. https://docs.google.com/document/d/1Xro2919inu3brs03wP1pu5gtbTmOf_Tig7H8pfdYPls/edit?tab=t.0#heading=h.uni8fzt28mtx
+2. zk journal version check，http://gerrit.smartx.com/c/zbs/+/38871
+
+
+
+手动触发迁移的命令行 zbs-client-py 提交上去，还需要给文档组提个 pr
+
+
+
 副本分配有过的优化
 
 1. cache topo，避免避免访问 topo 的申请/释放锁；
 2. comparator 中的 topo distance 的计算搞了个 fast map；
 3. ChunkSpaceInfo 的 sort 用指针，否则会有大量的 MergeFrom 调用；
 4. 
+
+
+
+
+
+在没有引发各节点负载变化前，结果未必能复用。
+
+该给到 cid1 和 cid2 的，给到了 cid3。
+
+
+
+算一下，如果一次性能消化 100 个（每个节点算被加了 100 个数据块后会不会进入下个 space load）
+
+
+
+load 负载会变化前的最小
+
+如果剩余 batch 会变
+
+
+
+batch size = 100，最后一个 batch 以逐个分配的方式进行
+
+
+
+
+
+```
+    LOG(INFO) << "yiwu update comparator idx: " << idx;
+    
+LOG(INFO) << "yiwu pid: " << pids[i] << ", loc: " << location_str(locs->at(i));
+```
+
+
+
+先不考虑 prefer local != 0 的情况，这种情况下，当 prefer local 健康且有剩余空间时，一定会选到 prefer local，那么之后的。
+
+用 Localization comparator 且 owner = 0  或者 用 TopoAware comparator 且 owner = 0，所以重点是 prefer local = 0 时，都可以用这个优化，但是这两个要分开实现。
+
+
+
+1. prefer local = 0 && LocalizationComparator
+
+    第一个副本放在容量最低的，其他按照 topo && ring id 选，得到的是跟 ratio 无关的
+
+2. prefer local != 0 && LocalizationComparator
+
+    第一个副本放在 prefer local（如果这个节点健康的话，否则还是放在容量最低的），其他按照 topo && ring id 选，得到的是跟 ratio 无关的
+
+3. prefer local = 0 && TopoAwareComparator
+
+    第一个副本放在容量最低的，其他按照 topo && ring id 以及 ratio 选
+
+4. prefer local != 0 && TopoAwareComparator
+
+    第一个副本放在 prefer local（如果这个节点健康的话，否则还是放在容量最低的），其他按照 topo && ring id 以及 ratio 选
+
+    
+
+
+
+prefer local != 0 且还能容纳，且剩下选到的 N - 1 个 cid 仍有空间，那么可以复用。
+
+
+
+如果用的是 LocalizationComparator，可以维护 key = 第一个副本位置，value = loc 的 hashmap。
+
+当 chunks_ptr 不变（可容纳节点只会减，不会加，所以算 chunks_ptr_num 就行），每个 key 对应的 map 都是固定的。
+
+
+
+topo 不均匀时的分配
+
+
+
+
+
+怎么记录，更新之后还是最低的情况。
+
+
+
+
+
+如果是根据最低容量选的，只要最低 ratio 的那个节点还是最低 ratio，每轮能容量新数据块的节点 list 不变，
+
+传进来的 prefer local = 0 或者不是健康的、没有剩余空间
+
+
+
+
+
+只要用 LocalizedComparator，不论第一个 cid 是 prefer local 还是根据最低容量选的，只要每轮能容纳新数据块的节点 list 不变，对于第一个 cid 的每种情况，结果都能复用（因为此时不看节点的 load）。
+
+如果每轮能容纳新数据块的节点 list 变了，那么清空这个 fast map，需要重新算一遍。
+
+先完成上面这种情况。
+
+
+
+
+
+只要用 TopoAwareComparator，
+
+根据负载从高往低遍历对于这一轮得到的 cid，如果这一轮给某 expected replica num 个 cid 增加空间后，依然比他右边的节点来的小，且自己还可以再容纳空间，那么下一轮可以直接复用这个结果。
+
+
+
+```
+CO_TEST_P(TieringTest, CreateLargeVolumeShouldNotTimeOut) {
+    SetTieringAbility(true);
+    Pool pool;
+    Volume volume;
+    ASSERT_STATUS(CreatePool("pool", &pool, "", 2));
+    StopWatch sw;
+    sw.Start();
+
+    uint64_t now_ms = GetMetaTimeMS();
+    uint64_t size_10t = 1024 * 64 * 4 * kExtentSize;
+
+    ECAlgorithmParam param;
+    param.set_k(22);
+    param.set_m(2);
+    param.set_ec_type(ECAlgorithmType::REED_SOLOMON);
+    param.set_name("ISAL");
+    param.mutable_rs_arg()->set_coding_tech(ECCodingTechnique::REED_SOL_VAN);
+    param.mutable_rs_arg()->set_w(8);
+
+    ASSERT_STATUS(
+        GetMeta()->CreateVolume("pool", "volume", size_10t, 2, false, 0, 0, &volume, ResiliencyType::RT_EC, &param));
+    LOG(INFO) << "yiwu time: " << GetMetaTimeMS() - now_ms;
+    std::cout << "alloc segment time: " << GetMetaTimeMS() - now_ms;
+}
+```
+
+
+
+有 prefer local 跟没有 prefer local 分开讨论
+
+没有 prefer local，第一个节点一定选 load 最低的
+
+
+
+这一轮容量最低的 3 个，
+
+
+
+创建一个 prefer local = 0 的大 thick volume 一般是在低水位
+
+
+
+
+
+如果剩余空间比例的相对顺序不变
+
+
+
+只要空间没超过，就可以接着复用上一次的结果
 
 
 
@@ -1702,6 +1870,7 @@ chunk 日志中搜 migrate pblob skip 会显示卸载盘卸不掉的 pblob，有
     3. 清空 meta 内存里各种表（chunk_table, chunk_id_map,  topo_objs_map, ）中的记录；
     4. 清空 meta 侧这个 chunk 相关 session，在 iscsi_table/nvmf_table 中把这个 chunk 标记为 inactive（避免新的数据接入），通过心跳异步告知其他 chunk 这个 chunk session 失效；
     5. 日志里出现 REMOVE CHUNK；
+3. zbs cli 里预留了 zbs-meta storage_pool remove_chunk <storage_pool id> < cid> --force 来从存储侧让某个节点进入 REMOVING 状态，之后可以通过 zbs-meta storage_pool cancel_remove < cid> 来恢复到 IN_USE 状态（可以用来避免作为 recover dst）
 
 ### 维护模式
 
