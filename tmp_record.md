@@ -9,6 +9,10 @@
 
 
 
+比较 zbs4 和 zbs5 的代码，构造测试用例来证明分配后不会马上需要迁移。
+
+
+
 副本分配有过的优化
 
 1. cache topo，避免避免访问 topo 的申请/释放锁；
@@ -18,41 +22,11 @@
 
 
 
-
-
-在没有引发各节点负载变化前，结果未必能复用。
-
-该给到 cid1 和 cid2 的，给到了 cid3。
-
-
-
-算一下，如果一次性能消化 100 个（每个节点算被加了 100 个数据块后会不会进入下个 space load）
-
-
-
-load 负载会变化前的最小
-
-如果剩余 batch 会变
-
-
-
-batch size = 100，最后一个 batch 以逐个分配的方式进行
-
-
-
-
-
 ```
     LOG(INFO) << "yiwu update comparator idx: " << idx;
     
 LOG(INFO) << "yiwu pid: " << pids[i] << ", loc: " << location_str(locs->at(i));
 ```
-
-
-
-先不考虑 prefer local != 0 的情况，这种情况下，当 prefer local 健康且有剩余空间时，一定会选到 prefer local，那么之后的。
-
-用 Localization comparator 且 owner = 0  或者 用 TopoAware comparator 且 owner = 0，所以重点是 prefer local = 0 时，都可以用这个优化，但是这两个要分开实现。
 
 
 
@@ -71,54 +45,6 @@ LOG(INFO) << "yiwu pid: " << pids[i] << ", loc: " << location_str(locs->at(i));
 4. prefer local != 0 && TopoAwareComparator
 
     第一个副本放在 prefer local（如果这个节点健康的话，否则还是放在容量最低的），其他按照 topo && ring id 以及 ratio 选
-
-    
-
-
-
-prefer local != 0 且还能容纳，且剩下选到的 N - 1 个 cid 仍有空间，那么可以复用。
-
-
-
-如果用的是 LocalizationComparator，可以维护 key = 第一个副本位置，value = loc 的 hashmap。
-
-当 chunks_ptr 不变（可容纳节点只会减，不会加，所以算 chunks_ptr_num 就行），每个 key 对应的 map 都是固定的。
-
-
-
-topo 不均匀时的分配
-
-
-
-
-
-怎么记录，更新之后还是最低的情况。
-
-
-
-
-
-如果是根据最低容量选的，只要最低 ratio 的那个节点还是最低 ratio，每轮能容量新数据块的节点 list 不变，
-
-传进来的 prefer local = 0 或者不是健康的、没有剩余空间
-
-
-
-
-
-只要用 LocalizedComparator，不论第一个 cid 是 prefer local 还是根据最低容量选的，只要每轮能容纳新数据块的节点 list 不变，对于第一个 cid 的每种情况，结果都能复用（因为此时不看节点的 load）。
-
-如果每轮能容纳新数据块的节点 list 变了，那么清空这个 fast map，需要重新算一遍。
-
-先完成上面这种情况。
-
-
-
-
-
-只要用 TopoAwareComparator，
-
-根据负载从高往低遍历对于这一轮得到的 cid，如果这一轮给某 expected replica num 个 cid 增加空间后，依然比他右边的节点来的小，且自己还可以再容纳空间，那么下一轮可以直接复用这个结果。
 
 
 
@@ -151,40 +77,6 @@ CO_TEST_P(TieringTest, CreateLargeVolumeShouldNotTimeOut) {
 
 
 
-有 prefer local 跟没有 prefer local 分开讨论
-
-没有 prefer local，第一个节点一定选 load 最低的
-
-
-
-这一轮容量最低的 3 个，
-
-
-
-创建一个 prefer local = 0 的大 thick volume 一般是在低水位
-
-
-
-
-
-如果剩余空间比例的相对顺序不变
-
-
-
-只要空间没超过，就可以接着复用上一次的结果
-
-
-
-迁移有个 bug 会选出一个无效的 replace cid，导致在迁移后，期望 2 副本的 extent 有 3 个副本，比如说副本位置 1 2 3。
-
-当这个数据块所在盘不健康了，数据写入会失败，会创建对应的临时副本。此时还有 2 个健康副本，所以再也不会触发 recover，这个临时副本就就没有机会被回收，那么与之关联的失败副本也一直不会被回收，这个失败副本在不健康盘上，对外表现就是这个盘一直卸载不掉。
-
-如果是手动通过命令去让 lsm 主动 invalidate 这个 pextent，过 10 min 没上报，meta 认为这个副本超时，就不会记在它的 alive loc 中。在 alive segment num = expected 时，不会触发 recover，所以后续他可能 loc = [1, 2, 3]，alive loc = [1, 2]。即使后续做 sync gen 是从 loc 里拿到每一个 cid 的 gen，并踢掉无效副本，但还是会继续生成临时副本，所以这里临时方案或许是确认健康副本数满足要求后，手动去回收临时副本。
-
-
-
-
-
 这里可能需要调整所有 thick 类型的 extent （不论 cap / perf）的行为。在 get lease 时，若发现 extent 已经分配了 pid 和 loc，但 prefer local = 0，那么用发起这个 get lease rpc 的 chunk id 去作为他的 prefer local，相当于把 update prefer local 的时机从本地感知（ 6h）提前到初次申请写 lease。（另外迁移或许也要适配，去更快触发本地聚集）
 
 even extent 的话，不需要更新 prefer local。
@@ -194,46 +86,6 @@ even extent 的话，不需要更新 prefer local。
 thick extent（不论 perf / cap）创建的时候就分配了 pid 和 loc，（除非被回收）所以不会走到 lid == 0 的逻辑
 
 在 COW 的时候需要去更新 parent 的 prefer local 吗？没有，COW 用的 prefer local 也是发起 get lease rpc 的 chunk
-
-
-
-
-
-rename passive_waiting_migrate_ to passive_periodic_waiting_migrate_
-
-
-
-1. 像 gc mgr 一样，用 TimeLimiter 主动 yield
-2. 把 scan_extents_per_round_limit 弄成根据每次 migrate scan 耗时自适应变化，这样能保证整体上耗时控制在一定范围内；
-3. recover 线程如果能做到所有外部会写他的变量的操作都是以 co 的方式进入，那读的话，也不需要加锁保护。
-
-
-
-1. meta rpc 线程借助 co 把 ManualMigrateInfo 放入 manual_candidate_migrate_vec_；
-2. doscan 中每 4s 一次遍历 manual_candidate_migrate_vec_ ，放入 passive_manual_waiting_migrate_；
-3. passive_manual_waiting_migrate_ 中若有元素，通过 std::swap 的方式放入 active_waiting_migrate_；
-
-
-
-meta rpc server 中
-
-extent 级别的，src / dst / replace 必须都指定，只做计算简单、且 4s 后基本上还满足这个条件的校验。
-
-1. enable migrate 是 false；
-2. pid 必须在 pid map 里、不是临时副本、没有已下发的（LExtentHasCmdWithPid）、ShouldNotMigrate、不在 
-3. src cid 必须在 loc 中且健康；
-4. replace cid 必须在 loc 中；
-5. dst cid 必须不在 loc 中、不是 isolated、健康、不是高负载；
-
-volume 级别的，src / dst / replace 都不让指定
-
-* dst 一定是 prefer local
-* 给用户返回 prefer local != 0 的数据块数量、prefer local != 0 但是没有本地副本的数据块数量
-* 之后再考虑分 perf / cap 展示
-
-
-
-最好的使用方式是在手动下发之前，先关掉 auto migrate，否则有可能会被 auto 的冲掉。
 
 
 
@@ -289,17 +141,7 @@ migrate disable 只禁掉 auto migrate generate
 
 
 
-禁掉 auto migrate
-
-
-
 meta gen 被更新的时机
-
-
-
-recover 也可以搞一个类似的， 让 manual reocver（包含手动下发的 special recover）有的时候，停掉 recover
-
-
 
 
 
@@ -312,7 +154,6 @@ disable auto migrate，否则有可能人为指定之后，再被 auto migrate �
 
 
 1. cap io throttle 中限制 app io 
-2. 维护一个 migrate 优先级列表，以 volume 为粒度，每次判断 migrate 的时候，优先从这些 pid 开始，允许命令行添加和删除以及 list
 3. thick pextent 的 prefer local 变更
 
 
@@ -321,7 +162,7 @@ vextent no 对 FLAGS_meta_max_pextents 取余就是 lid。所以根据 lid 可�
 
 
 
-可以出现 total < from local 的情况
+可能出现 total < from local 的情况
 
 ```
 [root@yiwu1 17:51:22 ~]$ zbs-chunk migrate list
@@ -333,8 +174,6 @@ From Remote Speed: 0.00 B/s(0.00 B/s)
 zbs-chunk recover list 中展示是否 agile recover，展示 reposition read / write 的次数
 
 由 recover_stage 以及 agile_recover 来决定，这样命令行就可以支持只看 agile recover，后续来测试 agile recover 的恢复情况
-
-
 
 
 
