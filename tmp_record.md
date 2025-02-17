@@ -1,3 +1,16 @@
+预期是这么用的：
+zbs-meta migrate disable，把 auto / manual 都关掉，对应的 2 个 migrate cmd队列都清空；
+zbs-meta migrate enable --mode manual，开启人工迁移；
+zbs-meta migrate volume <volume_id>，去人工迁移指定的 volume；
+想要的人工迁移完了；
+通过 zbs-meta migrate enable --mode auto 回到 auto migrate（每次从 manual 切换到 auto 的时候，后台清理掉未完成的人工迁移命令，所以这里是要求副本分布已经达到用户预期了之后，才敲这条命令）。
+
+如果只敲 zbs-meta migrate enable，不加参数的话，那就只开启 auto migrate，跟 570 之前的认知是一样的。
+
+
+
+
+
 看一下 zk journal
 
 1. https://docs.google.com/document/d/1Xro2919inu3brs03wP1pu5gtbTmOf_Tig7H8pfdYPls/edit?tab=t.0#heading=h.uni8fzt28mtx
@@ -88,6 +101,22 @@ thick extent（不论 perf / cap）创建的时候就分配了 pid 和 loc，（
 在 COW 的时候需要去更新 parent 的 prefer local 吗？没有，COW 用的 prefer local 也是发起 get lease rpc 的 chunk
 
 
+
+初次申请 write lease 的时候：
+
+* lease for sink
+
+  如果 thick cap extent 的 even = false，prefer local = 0，那么更新 prefer local 为发起 lease 的人
+
+* write lease
+
+  如果 thick perf extent 的 even = false，perfer local = 0，那么更新 prefer local 为发起 lease 的人
+
+
+
+如果能分配出来以申请 lease 节点为 prefer local 的数据块，就用新的替换旧的。
+
+旧的不再被 lextent 引用，会被 gc 吗？还在
 
 
 
