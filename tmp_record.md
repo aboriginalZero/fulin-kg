@@ -1,11 +1,8 @@
-预期是这么用的：
-zbs-meta migrate disable，把 auto / manual 都关掉，对应的 2 个 migrate cmd队列都清空；
-zbs-meta migrate enable --mode manual，开启人工迁移；
-zbs-meta migrate volume <volume_id>，去人工迁移指定的 volume；
-想要的人工迁移完了；
-通过 zbs-meta migrate enable --mode auto 回到 auto migrate（每次从 manual 切换到 auto 的时候，后台清理掉未完成的人工迁移命令，所以这里是要求副本分布已经达到用户预期了之后，才敲这条命令）。
+```
+docker exec -it registry.smtx.io/zbs/zbs-buildtime:el7-x86_64 bash 
+```
 
-如果只敲 zbs-meta migrate enable，不加参数的话，那就只开启 auto migrate，跟 570 之前的认知是一样的。
+
 
 
 
