@@ -18,9 +18,17 @@
 
 为什么在做 volume 的 thin 转 thick 时，没有先检查剩余空间是否允许它转，以及对 chunk 发 NotifyReserveSpace？
 
+之前让 prior volume 占用 cap space 的原因是啥？
+
+这个 flag 如果为 true，期望是跟现在的行为保持一致。
+
 期望达成的状态是：volume 的 thin provision 影响的是 cap 的 thin or thick，prioritized 影响的是 perf 的 thin or thick。
 
 打快照之类的行为也要更改。
+
+三种协议之间可以相互参照
+
+CreatePool / UpdatePool
 
 CreateVolume / UpdateVolume / DeallocCap
 
