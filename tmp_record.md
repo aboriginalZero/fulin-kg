@@ -1,5 +1,67 @@
-```
+在客户期望同一个集群里有全闪池和混闪池时，我们会使用 Pin 的功能起到全闪池的效果。此时卷的状态是相对稳定的，占用 Cap 空间不是必要的。
+
+- 在 Meta 中增加一个 Flag，默认为 False，当设置为 True 时候，Pin 卷的 Cap 空间占用保持 Thick 的状态；
+
+- Volume 的 Thick 属性需要单独指定，不会因为指定为 Pin 就默认变成 Thick；
+
+- 如果 Thin 的卷提升为 Pin，Cap 部分保持 Thin，同时在 Relloc Cap 时，也会分配为 Thin， 此时相当于不占 Cap 空间；
+
+- Thin Pin 卷取消 Pin 时，要做 Cap 的空间容量检查，如果剩余空间不足，则返回失败（这应该是检查 perf thin remain space）；
+
+  这个应该是 perf thin 的检查
+
+- 提供 RPC，命令行，不论卷式否是 Pin 的，都支持卷从 Thick 转化为 Thin。 Extent 在 GC 过程里自动转化，不在 RPC 过程里处理。
+
+
+
+目前 Pin 卷取消 Pin 时，会有什么行为？perf thick 转成 perf thin。
+
+为什么在做 volume 的 thin 转 thick 时，没有先检查剩余空间是否允许它转，以及对 chunk 发 NotifyReserveSpace？
+
+期望达成的状态是：volume 的 thin provision 影响的是 cap 的 thin or thick，prioritized 影响的是 perf 的 thin or thick。
+
+打快照之类的行为也要更改。
+
+CreateVolume / UpdateVolume / DeallocCap
+
+iscsi / nvmf / nfs server 的场景在 meta rpc server 都改动之后再处理。
+
+
+
+运行 tokcpp
+
+```shell
 docker exec -it registry.smtx.io/zbs/zbs-buildtime:el7-x86_64 bash 
+
+# 在容器中启用 gcc 14
+scl enable gcc-ztoolset-14 bash 
+
+# cmake 3.20 的二进制预编译包
+wget https://github.com/Kitware/CMake/releases/download/v3.20.0/cmake-3.20.0-linux-x86_64.tar.gz
+tar -xzvf cmake-3.20.0-linux-*.tar.gz
+mv cmake-3.20.0-linux-* /opt/cmake-3.20.0
+
+# 创建符号链接（全局可用）
+ln -sf /opt/cmake-3.20.0/bin/* /usr/bin/
+
+# 应输出 "cmake version 3.20.0"
+cmake --version  
+
+git clone https://github.com/google/googletest.git
+cd googletest
+git checkout release-1.12.0
+
+mkdir build && cd build
+cmake .. -DCMAKE_CXX_STANDARD=11  # 显式指定C++11标准
+make -j$(nproc)  # 并行编译加速
+
+# 默认安装到/usr/local
+make install  
+
+# 若未自动安装，手动配置，这样编译 tokcpp 时才能找到这个头文件
+cp lib/*.a /usr/lib64/
+mkdir -p /usr/include/gtest
+cp -r ../googletest/include/* /usr/include/gtest/
 ```
 
 
