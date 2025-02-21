@@ -8,29 +8,95 @@
 
 - Thin Pin 卷取消 Pin 时，要做 Cap 的空间容量检查，如果剩余空间不足，则返回失败（这应该是检查 perf thin remain space）；
 
-  这个应该是 perf thin 的检查
+  考虑到会下沉，这里需要检查 perf thin 超过的负载会不会有足够的 cap 空间给他下沉。
 
 - 提供 RPC，命令行，不论卷式否是 Pin 的，都支持卷从 Thick 转化为 Thin。 Extent 在 GC 过程里自动转化，不在 RPC 过程里处理。
 
 
 
+chunk mgr 中 topo / 维护模式相关的，是先更新 db 再更新内存。meta rpc server 中貌似不遵循这个机制，比如 SetPExtentExistence
+
+
+
 目前 Pin 卷取消 Pin 时，会有什么行为？perf thick 转成 perf thin。
 
-为什么在做 volume 的 thin 转 thick 时，没有先检查剩余空间是否允许它转，以及对 chunk 发 NotifyReserveSpace？
 
-之前让 prior volume 占用 cap space 的原因是啥？
 
-这个 flag 如果为 true，期望是跟现在的行为保持一致。
+关闭多 chunk ，集群中只允许一个 chunk 进入维护模式，开启多 chunk ，集群中只允许一个 node 进入维护模式。
 
-期望达成的状态是：volume 的 thin provision 影响的是 cap 的 thin or thick，prioritized 影响的是 perf 的 thin or thick。
+
+
+gc 只会 gc 没有被 volume 引用的，且先清理 lextent 后清理 pextent。
+
+在一次 gc scan 中标记 pentry 的 garbage 属性为 1 的那些，之后按照 garbage
+
+
+
+kPExtentMixShared 的含义是既被 thin volume 的 lextent 引用，又被 thick volume 的 lextent 引用
+
+kPExtentThickShared 的含义是只被多个 thick volume 的 lextent 引用
+
+kPExtentThickUnique 的含义是只被一个 thick volume 的 lextent 引用
+
+
+
+在 MarkRefStatusByVTable 结束时（ScanAndProcessLExtents 执行前），只改了 lid_ref_map_ 和 pid_ref_map_，这里面指明了 lextent / pextent 的 ref status 是否 unused
+
+
+
+1. 先过滤出有 volume 引用（在 vtable 中）的不为 0 的 lid；
+
+
+
+遍历 gc_lid_map 中的每个 lid，如果 lid != 0 并且没有被任何 volume 引用，并且不是 staging 状态，被放入 garbage_candidate_lextents
+
+对于 garbage_candidate_lextents 中的每个 lextent，如果他的 cap / perf pextent 的所有 child 都是 ever exist 的（也就是读写 child 的数据不需要途径 parent），才可能被回收。
+
+满足以上条件且不是 staging （持有 lextent table 锁的二次确认 staging）的 lextent，才会把 garbage 置为 1，valid 置为 0。
+
+
+
+
+
+
+
+如果一个 pextent 没有被标记成 garbage，paired pextent 也不会被标记成 garbage
+
+
+
+
+
+1. 为什么在做 volume 的 thin 转 thick 时，没有先检查剩余空间是否允许它转就直接转了，以及不需要对 chunk 发 NotifyReserveSpace 吗？
+
+   目前会 NotifyReserveSpace 的时机
+
+   1. 创建一个 nfs thick file
+   2. 创建一个 thick volume
+   3. 初次读/写发现 lid = 0，调用 AllocVExtent 时
+   4. COW 出新的 lextent 时
+   5. RemoveReplica 中创建 cap 临时副本时
+
+2. 之前让 prior volume 占用 cap space 的原因是啥？tower 上便于统计？
+
+3. 之前在 pin 卷取消 pin 时，怎么没有检查 perf thin 的剩余空间？
+
+4. nfs server 中只接受一个 file 更新成优先卷，不允许直接创建一个 prioritized file？
+
+   
+
+
+
+这个 flag 如果为 true，期望是跟现在的行为保持一致，如果为 false，期望达成的状态是 volume 的 thin provision 只影响 cap 的 thin or thick，prioritized 只影响 perf 的 thin or thick。
 
 打快照之类的行为也要更改。
 
 三种协议之间可以相互参照
 
+pextent 级别的 prioritized 含义是 perf && thick，cap pextent 一定不会是 prioritized
+
 CreatePool / UpdatePool
 
-CreateVolume / UpdateVolume / DeallocCap
+CreateVolume / UpdateVolume / CloneVolume / DeallocCap
 
 iscsi / nvmf / nfs server 的场景在 meta rpc server 都改动之后再处理。
 
