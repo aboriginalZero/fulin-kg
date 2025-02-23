@@ -440,5 +440,29 @@ Cap 直写策略（仅针对冗余类型为 Replica 的 Volume）
 
 ## 分片回收策略
 
-描述 gc 机制
+lextent / pextent 被 gc 的一般流程
 
+1. ref status 被标记成 unused。根据 db snapshot 判断 pextent / lextent 是否被引用；
+2. garbage 属性被置为 1。同时这个 pextent 也进入 valid = 0 的状态，后续一定不会被 stage，也就不会执行一些涉及到 pextent 内存变动的 rpc；
+3. 在 meta 层面被 gc，即这个 lextent / pextent 在 meta db 和 pextent table 中被删除了，lextent 到这个阶段就结束了；
+4. 在 lsm 层面被 gc，即 chunk 上报了 meta 认为它不该持有的 pextent，meta 给他发送一个 gc cmd。
+
+### 标记 lextent garbage
+
+每一轮扫描，lid_map 中除了被 volume 引用的每个 lextent 的 ref status 都是 unused。对于这些 lextent，如果它的 stage = 0 && valid = 1，并且它的 cap / perf pextent 的所有 child pextent 都是 ever exist 的（也就是读写 child 一定不需要访问 parent），它的 garbage 属性才会被标记为 1。
+
+### 标记 pextent garbage
+
+每一轮扫描，pid_map 中不满足以下 3 个条件的 pextent 的 ref status 才会是 unused。
+
+1. 被 volume 引用的每个 lextent 的每个 cap / perf pextent 的 ref status 都不会是 unused；
+2. 对于每个非 unused 且 ever exist = false 的 pextent 而言，溯源到第一个 ever exist = true 的祖先的这一路上的每个祖先 pextent，都不会是 unused（这样才能保证读 child 能读到数据），即使他们没有被任何有效 lextent 引用；
+3. 对于每个 lextent 在这一轮可以被标记成 garbage 的 cap / perf pextent 而言，这一轮它们的 ref status 一定不会是 unused 的（这样可以保证 lextent 一定比它的 pextent 先 gc）；
+
+对于 get reft = unused 的每个 pextent，如果它的 stage = 0 && valid = 1，并且自己不是临时副本的话（临时副本会在他关联的 pextent 被删除时一起删除），它的 garbage 属性才会被标记为 1。
+
+如果一个 pextent 没有被标记成 garbage（说明他的 lextent 存在，只要有 lextent 引用，pextent 的 ref status 就不会是 unused），paired pextent 也不会被标记成 garbage。
+
+### gc garbage
+
+在 SweepGarbage 中，对于这些 garbage = 1 的 lextent / pextent，会先删除 db 中的相关数据，同步等待 access 放弃持有的相关 lease、删除 meta 持有的相关 lease 后，删除内存 lextent / pextent table 中的相关数据。
