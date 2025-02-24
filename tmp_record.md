@@ -10,45 +10,55 @@
 
   考虑到会下沉，这里需要检查 perf thin 超过的负载会不会有足够的 cap 空间给他下沉。
 
-- 提供 RPC，命令行，不论卷式否是 Pin 的，都支持卷从 Thick 转化为 Thin。 Extent 在 GC 过程里自动转化，不在 RPC 过程里处理。
+  在 data report 中已经做了限制。
+
+- 提供 RPC，命令行，不论卷是否 Pin 的，都支持卷从 Thick 转化为 Thin。 Extent 在 GC 过程里自动转化，不在 RPC 过程里处理。
 
 
 
-chunk mgr 中 topo / 维护模式相关的，是先更新 db 再更新内存。meta rpc server 中貌似不遵循这个机制，比如 SetPExtentExistence
+如果是一个很大的 prior volume，就是要让
 
 
 
-meta leader刚启动，到 chunk 初次上报之前，认为 thin space = 0。假设实际这些 thin space 很大，那么在此期间，如果多分配了一些 thin pextents 可能还好（允许写 thin pextent 因为空间不足而 io error），但如果在这期间新分配了数量不少的 thick pextents。
+meta leader刚启动，到 chunk 初次上报之前，认为 thin space = 0。假设实际这些 thin space 很大，那么在此期间，如果多分配了一些 thin pextents 可能还好（允许写 thin pextent 因为空间不足而 io error），但如果在这期间新分配了数量不少的 thick pextents，那么实际上可能没有那么多空间给到 thick pextents。
 
 
 
-1. 临时副本不会被 volume 引用，那有可能会被 thin / perf 转换吗？
+1. 临时副本不会被 volume 引用（没有对应的 lextent），默认是 no prior && thin，那有可能会被 thin / perf 转换吗？
+
+   不论 volume 是 thin or thick，perf 的临时副本一定是 thin，cap 的一定是 thick，不该参与转换。
+
 2. 一个 thin prior volume 的 cap pextent 刚分配是 thick，一轮 gc 后会变成 thin 吗？（看代码可能会，找个环境试验下）
+
 3. perf thick 转 perf thin 应该要做个空间检验，避免让 perf thin 空间爆炸，至少需要避免出现刚转换完 app io 就限流了。
+
+   在 data report 期间做了限制。
+
 4. 被删除卷的 pextent，需要 2 轮 gc scan 才会从 pextent table 中删除，可以考虑让第二次快点执行，参考 is_first_empty，或者直接在唤醒的地方，3min 一次，1.5 min 一次。
+
 5. 看下 access mgr 的 HandlePExtentInfosFromChunk，看一下 meta 的 provision 变化怎么传递给 lsm 的
 
+   在 chunk 向 meta 做 data report 时，也会带上 lsm 视角的 pextent provision 状态，如果跟 pentry 中记录的不一样，meta 会让 chunk 做转换。
 
+6. 为什么在做 volume 的 thin 转 thick 时，没有先检查剩余空间是否允许它转就直接转了，以及不需要对 chunk 发 NotifyReserveSpace 吗？
 
-
-
-1. 为什么在做 volume 的 thin 转 thick 时，没有先检查剩余空间是否允许它转就直接转了，以及不需要对 chunk 发 NotifyReserveSpace 吗？
-
-   目前会 NotifyReserveSpace 的时机
+7. 目前会 NotifyReserveSpace 的时机
 
    1. 创建一个 nfs thick file
-   2. 创建一个 thick volume
-   3. 初次读/写发现 lid = 0，调用 AllocVExtent 时
-   4. COW 出新的 lextent 时
-   5. RemoveReplica 中创建 cap 临时副本时
+   1. 创建一个 thick volume
+   1. 初次读/写发现 lid = 0，调用 AllocVExtent 时
+   1. COW 出新的 lextent 时
+   1. RemoveReplica 中创建 cap 临时副本时
 
-2. 之前让 prior volume 占用 cap space 的原因是啥？tower 上便于统计？
+8. 之前让 prior volume 占用 cap space 的原因是啥？tower 上便于统计？是的。
 
-3. 之前在 pin 卷取消 pin 时，怎么没有检查 perf thin 的剩余空间？
+9. nfs server 中只接受一个 file 更新成优先卷，不允许直接创建一个 prioritized file？
 
-4. nfs server 中只接受一个 file 更新成优先卷，不允许直接创建一个 prioritized file？
+10. chunk mgr 中 topo / 维护模式相关的，是先更新 db 再更新内存。meta rpc server 中貌似不遵循这个机制，比如 SetPExtentExistence，把他们改写下。
 
-   
+11. 总结一下为啥 local io handler 里要同步，pextent io handler 里可以异步 intercept
+
+
 
 
 
@@ -1757,7 +1767,7 @@ access 中 app io 写需要拿读屏障，recover io （recover io 读写是一�
 
 2. 允许多个 app io 写并发是因为块设备不需要保证同一个 lba 上 inflight io 的先来后到；
 
-3. recover io 需要保证跟 app io 写以及其它 recover io 互斥，这是因为需要保证多个副本之间的内容是一样的。一个 recover io 包含一次读和一次写，如果 recover io 读后有 app io 写，那recover io 写可能会覆盖 app io 写，导致多副本间内容不一致。
+3. recover io 需要保证跟 app io 写以及其它 recover io 互斥，这是因为需要保证多个副本之间的内容是一样的。一个 recover io 包含一次读和一次写，如果 recover io 读后有 app io 写，那 recover io 写可能会覆盖 app io 写，导致多副本间内容不一致。
 
 互斥/并发都是按 block 粒度的，据此可以得到：
 
