@@ -14,9 +14,11 @@
 
 - 提供 RPC，命令行，不论卷是否 Pin 的，都支持卷从 Thick 转化为 Thin。 Extent 在 GC 过程里自动转化，不在 RPC 过程里处理。
 
+  还需要考虑到 chunk 处 iscsi server 的命令
 
 
-如果是一个很大的 prior volume，就是要让
+
+移除的过程，会逐渐变小
 
 
 
@@ -24,25 +26,15 @@ meta leader刚启动，到 chunk 初次上报之前，认为 thin space = 0。�
 
 
 
-1. 临时副本不会被 volume 引用（没有对应的 lextent），默认是 no prior && thin，那有可能会被 thin / perf 转换吗？
 
-   不论 volume 是 thin or thick，perf 的临时副本一定是 thin，cap 的一定是 thick，不该参与转换。
 
-2. 一个 thin prior volume 的 cap pextent 刚分配是 thick，一轮 gc 后会变成 thin 吗？（看代码可能会，找个环境试验下）
+1. 一个 thin prior volume 的 cap pextent 刚分配是 thick，一轮 gc 后会变成 thin 吗？（看代码可能会，找个环境试验下）
 
-3. perf thick 转 perf thin 应该要做个空间检验，避免让 perf thin 空间爆炸，至少需要避免出现刚转换完 app io 就限流了。
+2. 被删除卷的 pextent，需要 2 轮 gc scan 才会从 pextent table 中删除，可以考虑让第二次快点执行，参考 is_first_empty，或者直接在唤醒的地方，3min 一次，1.5 min 一次。
 
-   在 data report 期间做了限制。
+3. 为什么在做 volume 的 thin 转 thick 时，没有先检查剩余空间是否允许它转就直接转了，以及不需要对 chunk 发 NotifyReserveSpace 吗？
 
-4. 被删除卷的 pextent，需要 2 轮 gc scan 才会从 pextent table 中删除，可以考虑让第二次快点执行，参考 is_first_empty，或者直接在唤醒的地方，3min 一次，1.5 min 一次。
-
-5. 看下 access mgr 的 HandlePExtentInfosFromChunk，看一下 meta 的 provision 变化怎么传递给 lsm 的
-
-   在 chunk 向 meta 做 data report 时，也会带上 lsm 视角的 pextent provision 状态，如果跟 pentry 中记录的不一样，meta 会让 chunk 做转换。
-
-6. 为什么在做 volume 的 thin 转 thick 时，没有先检查剩余空间是否允许它转就直接转了，以及不需要对 chunk 发 NotifyReserveSpace 吗？
-
-7. 目前会 NotifyReserveSpace 的时机
+4. 目前会 NotifyReserveSpace 的时机
 
    1. 创建一个 nfs thick file
    1. 创建一个 thick volume
@@ -50,13 +42,19 @@ meta leader刚启动，到 chunk 初次上报之前，认为 thin space = 0。�
    1. COW 出新的 lextent 时
    1. RemoveReplica 中创建 cap 临时副本时
 
-8. 之前让 prior volume 占用 cap space 的原因是啥？tower 上便于统计？是的。
+   DoUpdateLun 时，如果是需要 change lun to thick，会调用 iscsi_config_update.add_op(ISCSIConfigOption::LUN_THIN_PROVISION_CHANGE);
 
-9. nfs server 中只接受一个 file 更新成优先卷，不允许直接创建一个 prioritized file？
+   
 
-10. chunk mgr 中 topo / 维护模式相关的，是先更新 db 再更新内存。meta rpc server 中貌似不遵循这个机制，比如 SetPExtentExistence，把他们改写下。
+5. nfs server 中只接受一个 file 更新成优先卷，不允许直接创建一个 prioritized file？
 
-11. 总结一下为啥 local io handler 里要同步，pextent io handler 里可以异步 intercept
+   嗯，如果是 vm 的话，是先创建一个普通 nfs file，然后编辑对应文件，开启 pin
+
+6. snapshot  一定是 prior = false && priovision = thin 吗？
+
+7. chunk mgr 中 topo / 维护模式相关的，是先更新 db 再更新内存。meta rpc server 中貌似不遵循这个机制，比如 SetPExtentExistence，把他们改写下。
+
+8. 总结一下为啥 local io handler 里要同步，pextent io handler 里可以异步 intercept
 
 
 
@@ -1791,6 +1789,10 @@ access 按一个 pextent 的 gen 不降序的方式顺序下发 io co 给 lsm（
 
 access 从 meta 拿到的 lease 中的 location 是 loc 而不是 alive loc，可参考 GenerateLayerLease()，在 sync gen  是对 loc 而不是 alive loc 上每个 cid 都 sync，实际上，让 access 做一下 sync 真正确定一下这个副本是否连通比 meta 给出的信息更靠谱，因为这个 chunk 有可能跟 meta 失联，但还跟其他 chunk 联通，此时的失联 chunk 还是可以被读写副本的。
 
+
+
+cap replica recover 的 sync 不需要 sync perf，ec recover 需要。
+
 ### remove disk
 
 卸载盘调的是 chunk rpc server 的 UmountCache/UmountPartition rpc，没做空间校验，meta 侧没参与，tuna 那边也是放行的，所以变成 tower 在做。
@@ -1832,15 +1834,23 @@ chunk 日志中搜 migrate pblob skip 会显示卸载盘卸不掉的 pblob，有
     1. 这个命令会调用 zbs 侧的 RemoveChunkFromStoragePool rpc，只做剩余空间检查，检查通过后，chunk 状态改成 REMOVING，日志里出现 REMOVE CHUNK FROM STORAGE POOL；
     2. recover manager 有个 4s 定时器会为状态为 REMOVING 的 chunk 生成迁移命令并下发，而对 migrate dst 的选取，如果是在集群 normal low/medium load，会按本地化 + 局部化 + topo 安全策略选，如果是 normal high load，优先考虑 topo 安全，然后才是剩余容量；
     3. 等待这个 chunk  pextent 全被 remove（命令行看 provisioned_data_space 为 0），chunk manager 有个 4s 的定时器会将状态为 REMOVING 且它上面的 pextent 全被 remove 的 chunk 改成 IDLE；
+    
 2. zbs-deploy-manage meta_remove_node < storage ip>
     1. 这个命令会调用 zbs 侧的 RemoveChunk rpc，此时要求 chunk 处于 IDLE；
     2. 把 chunk 的各种持久化信息从 metaDB 中删除；
     3. 清空 meta 内存里各种表（chunk_table, chunk_id_map,  topo_objs_map, ）中的记录；
     4. 清空 meta 侧这个 chunk 相关 session，在 iscsi_table/nvmf_table 中把这个 chunk 标记为 inactive（避免新的数据接入），通过心跳异步告知其他 chunk 这个 chunk session 失效；
     5. 日志里出现 REMOVE CHUNK；
-3. zbs cli 里预留了 zbs-meta storage_pool remove_chunk <storage_pool id> < cid> --force 来从存储侧让某个节点进入 REMOVING 状态，之后可以通过 zbs-meta storage_pool cancel_remove < cid> 来恢复到 IN_USE 状态（可以用来避免作为 recover dst）
+    
+3. zbs cli 里预留了 zbs-meta storage_pool remove_chunk <storage_pool id> < cid> --force 来从存储侧让某个节点进入 REMOVING 状态，之后可以通过 zbs-meta storage_pool cancel_remove < cid> 来恢复到 IN_USE 状态（可以用来避免作为 recover dst）。
+
+    需要的话还要再通过 zbs-meta migrate disable 来关闭迁移（没有 recover 的话，有 REMOVING 的节点，会 触发迁移）
 
 ### 维护模式
+
+isolated 节点上的分片，读可以读，但优先级低，基本不会读到。写的话，timeout 时间会变短（9s 到 700ms），也就是更容易被剔除。
+
+
 
 [ZBS-25686](http://jira.smartx.com/browse/ZBS-25686) 前，只在 recover 里用上了 maintenance cid， 代码是 RecoverManager::NeedRecover 中的 IsChunkInMaintenanceMode，[ZBS-25686](http://jira.smartx.com/browse/ZBS-25686) 后，在 migrate 中也用上了 maintenance cid，是借助 isolated 来实现的，isolated 包括 maintenance 和 failslow。
 
