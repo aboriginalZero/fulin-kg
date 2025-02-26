@@ -1,3 +1,22 @@
+```
+    LOG(INFO) << "yiwu volume id: " << volume.id() << ", prior: " << volume.prioritized()
+              << ", thin: " << volume.thin_provision();
+    FOREACH (pextents, it) {
+        if (it->pid() == kInvalidChunkId) {
+            continue;
+        }
+
+        LOG(INFO) << "yiwu pid: " << it->pid() << ", pt: " << PExtentType_Name(it->it->type())
+                  << ", thin: " << it->thin_provision() << ", ";
+
+        ASSERT_EQ(it->preferred_cid(), preferred_cid);
+    }
+```
+
+
+
+
+
 在客户期望同一个集群里有全闪池和混闪池时，我们会使用 Pin 的功能起到全闪池的效果。此时卷的状态是相对稳定的，占用 Cap 空间不是必要的。
 
 - 在 Meta 中增加一个 Flag，默认为 False，当设置为 True 时候，Pin 卷的 Cap 空间占用保持 Thick 的状态；
@@ -18,13 +37,7 @@
 
 
 
-移除的过程，会逐渐变小
-
-
-
 meta leader刚启动，到 chunk 初次上报之前，认为 thin space = 0。假设实际这些 thin space 很大，那么在此期间，如果多分配了一些 thin pextents 可能还好（允许写 thin pextent 因为空间不足而 io error），但如果在这期间新分配了数量不少的 thick pextents，那么实际上可能没有那么多空间给到 thick pextents。
-
-
 
 
 
@@ -118,10 +131,6 @@ cp -r ../googletest/include/* /usr/include/gtest/
 
 
 
-
-
-
-
 看一下 zk journal
 
 1. https://docs.google.com/document/d/1Xro2919inu3brs03wP1pu5gtbTmOf_Tig7H8pfdYPls/edit?tab=t.0#heading=h.uni8fzt28mtx
@@ -133,24 +142,12 @@ cp -r ../googletest/include/* /usr/include/gtest/
 
 
 
-比较 zbs4 和 zbs5 的代码，构造测试用例来证明分配后不会马上需要迁移。
-
-
-
 副本分配有过的优化
 
 1. cache topo，避免避免访问 topo 的申请/释放锁；
 2. comparator 中的 topo distance 的计算搞了个 fast map；
 3. ChunkSpaceInfo 的 sort 用指针，否则会有大量的 MergeFrom 调用；
-4. 
-
-
-
-```
-    LOG(INFO) << "yiwu update comparator idx: " << idx;
-    
-LOG(INFO) << "yiwu pid: " << pids[i] << ", loc: " << location_str(locs->at(i));
-```
+4. 按 batch 批量分配，最后一个 batch 内逐个分配，最终容忍一个 batch size 内的不精准。
 
 
 
