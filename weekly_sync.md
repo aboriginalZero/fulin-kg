@@ -1,3 +1,35 @@
+2025.3.4
+
+1. 升级过程中 recover 耗时改进。meta 侧取消已下发迁移命令、access 侧弹性恢复。
+2. migrate scan 的耗时优化。分批获取专给 migrate 使用的 pentry、搞 fast map。
+3. 拔盘故障性能。包括 meta 侧 recover dst mgr 改动和 access 侧内部 IO 流控。
+4. pin 相关的副本分配/迁移/恢复，migrate 中长期缺失的一些策略，比如低负载下 prefer local = 0 时没有做到 topo 安全之类的。
+5. ioreroute 和 recover 的售后处理。ioreroute 的部署/升级异常处理，锁处理、watchdog、ping 方式改进
+
+
+
+未来工作
+
+1. internal io speed limit 智能调节
+
+   1. 适配多实例和多路径，对网络带宽的使用
+   2. throttle 二元限流器
+   3. 不同磁盘规格提供的能力不同，只是按磁盘类型来区分过于简单
+   4. 不同平台可用上限不同
+   5. tower 在允许用户调节 recover / migrate ？
+
+2. 盘间 ec
+
+   貌似只涉及到副本分配/迁移/恢复，不需要改 IO 路径
+
+3. chunk mgr
+
+   什么时候开始比较合适
+
+4. 故障处理，类似于 tengqiu 之前的工作
+
+
+
 2024.12.13
 
 1. 售后 case 经常出现部署、升级 ioreroute 时容易各种问题， 给 io reroute 简单搞了个异常捕获机制、搞个 watchdog 之类；

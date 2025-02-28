@@ -1,22 +1,3 @@
-```
-    LOG(INFO) << "yiwu volume id: " << volume.id() << ", prior: " << volume.prioritized()
-              << ", thin: " << volume.thin_provision();
-    FOREACH (pextents, it) {
-        if (it->pid() == kInvalidChunkId) {
-            continue;
-        }
-
-        LOG(INFO) << "yiwu pid: " << it->pid() << ", pt: " << PExtentType_Name(it->it->type())
-                  << ", thin: " << it->thin_provision() << ", ";
-
-        ASSERT_EQ(it->preferred_cid(), preferred_cid);
-    }
-```
-
-
-
-
-
 在客户期望同一个集群里有全闪池和混闪池时，我们会使用 Pin 的功能起到全闪池的效果。此时卷的状态是相对稳定的，占用 Cap 空间不是必要的。
 
 - 在 Meta 中增加一个 Flag，默认为 False，当设置为 True 时候，Pin 卷的 Cap 空间占用保持 Thick 的状态；
@@ -37,7 +18,7 @@
 
 
 
-meta leader刚启动，到 chunk 初次上报之前，认为 thin space = 0。假设实际这些 thin space 很大，那么在此期间，如果多分配了一些 thin pextents 可能还好（允许写 thin pextent 因为空间不足而 io error），但如果在这期间新分配了数量不少的 thick pextents，那么实际上可能没有那么多空间给到 thick pextents。
+创建/更新/克隆/回滚
 
 
 
@@ -46,6 +27,14 @@ meta leader刚启动，到 chunk 初次上报之前，认为 thin space = 0。�
 2. 被删除卷的 pextent，需要 2 轮 gc scan 才会从 pextent table 中删除，可以考虑让第二次快点执行，参考 is_first_empty，或者直接在唤醒的地方，3min 一次，1.5 min 一次。
 
 3. 为什么在做 volume 的 thin 转 thick 时，没有先检查剩余空间是否允许它转就直接转了，以及不需要对 chunk 发 NotifyReserveSpace 吗？
+
+   一般是多久一次 keepalive ，perf thick 和 cap thick 的立即预留的时机都有哪些
+
+   在做 volume 的 thin 转 thick 时，没有先检查剩余空间是否允许它转就直接转了，如果是一个大卷，可能转过去就马上让 cap space 没空间让 cap thin 继续写入了。
+
+   回滚到一个 thick 状态前，也需要判断 thick space 是否足够。
+
+   NotifyReserveSpace 先不管了，好像都应该立即调用，缺的地方比较多。
 
 4. 目前会 NotifyReserveSpace 的时机
 
@@ -57,7 +46,7 @@ meta leader刚启动，到 chunk 初次上报之前，认为 thin space = 0。�
 
    DoUpdateLun 时，如果是需要 change lun to thick，会调用 iscsi_config_update.add_op(ISCSIConfigOption::LUN_THIN_PROVISION_CHANGE);
 
-   
+   nvmf 里好像没有 lun thin priovision change 事件
 
 5. nfs server 中只接受一个 file 更新成优先卷，不允许直接创建一个 prioritized file？
 
@@ -69,23 +58,9 @@ meta leader刚启动，到 chunk 初次上报之前，认为 thin space = 0。�
 
 8. 总结一下为啥 local io handler 里要同步，pextent io handler 里可以异步 intercept
 
+9. 手动触发迁移的命令行 zbs-client-py 提交上去，还需要给文档组提个 pr
 
 
-
-
-这个 flag 如果为 true，期望是跟现在的行为保持一致，如果为 false，期望达成的状态是 volume 的 thin provision 只影响 cap 的 thin or thick，prioritized 只影响 perf 的 thin or thick。
-
-打快照之类的行为也要更改。
-
-三种协议之间可以相互参照
-
-pextent 级别的 prioritized 含义是 perf && thick，cap pextent 一定不会是 prioritized
-
-CreatePool / UpdatePool
-
-CreateVolume / UpdateVolume / CloneVolume / DeallocCap
-
-iscsi / nvmf / nfs server 的场景在 meta rpc server 都改动之后再处理。
 
 
 
@@ -137,8 +112,6 @@ cp -r ../googletest/include/* /usr/include/gtest/
 2. zk journal version check，http://gerrit.smartx.com/c/zbs/+/38871
 
 
-
-手动触发迁移的命令行 zbs-client-py 提交上去，还需要给文档组提个 pr
 
 
 
@@ -210,91 +183,6 @@ thick extent（不论 perf / cap）创建的时候就分配了 pid 和 loc，（
 
 
 
-初次申请 write lease 的时候：
-
-* lease for sink
-
-  如果 thick cap extent 的 even = false，prefer local = 0，那么更新 prefer local 为发起 lease 的人
-
-* write lease
-
-  如果 thick perf extent 的 even = false，perfer local = 0，那么更新 prefer local 为发起 lease 的人
-
-
-
-如果能分配出来以申请 lease 节点为 prefer local 的数据块，就用新的替换旧的。
-
-旧的不再被 lextent 引用，会被 gc 吗？还在
-
-
-
-zbs-meta migrate pextent < pid> <dst_cid> [src_cid ] [ replace_cid ] [ keep_topo_safe ] 
-
-* dst cid 是必选参数，不知道自己应该迁移到哪，那就应该走自动生成的逻辑；
-* src cid 是可选参数，若指定，需要在 alive loc 上，否则报错；若未指定，后台自行选取；（下发时 src cid 可能被修改成现存 lease owner ）
-* replace cid 是可选参数，若指定，需要在 alive loc 上，否则报错；若未指定，后台自行选取；
-* keep_topo_safe 是可选参数，默认为 True，若指定，在迁移后拓扑降级时报错，否则后台需要检验拓扑安全；
-
-如果有 need recover 的，不让执行
-
-这个命令执行后，需要放在 active_manual_migrate_list， 后续
-
-如果 isolated 是手动触发的，允许选 isolated 之类，可以打印下。
-
-manual 触发，不会用 lease owner 去改 src
-
-
-
-关闭 auto disable，然后再人工触发
-
-
-
-面向 volume 的，比较容易被一线使用，可以严格一些。
-
-只允许做本地聚集（dst cid = prefer local），然后必须拓扑安全，由系统自动选 src / replace。
-
-如果想要更灵活的处理（不考虑拓扑安全，想要自行指定 src / dst / replace），那就去调用 extent 粒度的接口。
-
-本地聚集，不允许使用超过 85%，否则在开启自动调度后，还是会被迁出。
-
-
-
-zbs-meta migrate volume <volume_id> <dst_cid> [ src_cid ] [ replace_cid ] [ keep_topo_safe ] 
-
-* dst cid 是必选参数，不知道自己应该迁移到哪，那就应该走自动生成的逻辑；
-* src_cid 是可选参数，若指定，在 loc 包含 src_cid 时，一定从这读；
-* replace_cid 是可选参数，若指定，在 loc 包含 replace_cid 时，一定从这移除；
-* keep_topo_safe 是可选参数，默认为 True，若指定，在迁移后拓扑降级时报错，否则后台根据拓扑安全的原则选择（这个 topo 安全也包含双活 2 ：1）；
-
-
-
-默认 dst_cid 的空间只能用到 95% （不超过超高负载）
-
-
-
-migrate disable 只禁掉 auto migrate generate
-
-测试一个大卷的本地聚集，是否会卡死，拿锁的地方太多了
-
-
-
-meta gen 被更新的时机
-
-
-
-disable auto migrate，否则有可能人为指定之后，再被 auto migrate 迁移了
-
-搞一个关闭自动扫描 migrate 的 rpc 接口，还是只要 munual 生成了，就忽视 auto 生成的。
-
-
-
-
-
-1. cap io throttle 中限制 app io 
-3. thick pextent 的 prefer local 变更
-
-
-
 vextent no 对 FLAGS_meta_max_pextents 取余就是 lid。所以根据 lid 可以很好查 vextent no，但怎么根据 vextent no 没法直接查他属于哪一个 volume，需要遍历 meta db 中的每一个 volume 然后比对每个 vextent no 是否能跟这个 lid 对上。
 
 
@@ -334,8 +222,6 @@ IO 可能合并的位置
 3. 最终底层的 IOCache 侧也会进行一次合并。
 
 https://cs.smartx.com/cases/detail?id=1092085
-
-
 
 
 
@@ -595,31 +481,8 @@ recover manager 对于没有实际分配的数据会跳过命令下发配额的�
 
 
 
-4. 从一个  volume 可以拿到所有 vextent id，据此可以拿到 lid，接着
+4. 创建大量 volume 并删除后，pid 被消耗殆尽，
 
-    ```c++
-    Volume volume;
-    // vextent table 直接存入 meta db，并不在内存里常驻，vextent no 中带有是否 cow 的信息
-    vextent_id = volume.vextent_id(i);
-    lid = to_pextent_id(vextent_id);
-    
-    // vextent 的 location 就是 cap extent 的 location
-    std::vector<VExtent> vextents;
-    meta->GetVTable(pool_name, volume_name, &vextents);
-    
-    // 从 lextent table 中获取 lextent 的 cap/perf pid 信息
-    LExtent lextent;
-    meta->GetLExtent(lid, &lextent);
-    
-    // 从 pextent table 中获取 pextent 的 location/preferred_cid/thin_provision 信息
-    PExtent cap_pextent;
-    meta->GetPExtent(lextent.cap_pid(), &cap_pextent);
-    PExtent perf_pextent;
-    meta->GetPExtent(lextent.cap_pid(), &perf_pextent);
-    ```
-    
-    创建大量 volume 并删除后，pid 被消耗殆尽，
-    
     打快照只是 SetCow，快照的 origin_id 是源卷的 origin_id
     
     分层之后，一个只有 cap pextents 的 normal thick volume COW，不仅会分配出新的 cap pextents，还会分配出新的 perf pextents。

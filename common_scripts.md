@@ -1,3 +1,5 @@
+
+
 ### ut 里查看 volume 信息
 
 ```
@@ -42,9 +44,28 @@ auto print_volume = [&](const Volume& old_volume, const std::string& name = "vol
 };
 ```
 
+查看单个 pextent
 
+```c++
+Volume volume;
+// vextent table 直接存入 meta db，并不在内存里常驻，vextent no 中带有是否 cow 的信息
+vextent_id = volume.vextent_id(i);
+lid = to_pextent_id(vextent_id);
 
+// vextent 的 location 就是 cap extent 的 location
+std::vector<VExtent> vextents;
+meta->GetVTable(pool_name, volume_name, &vextents);
 
+// 从 lextent table 中获取 lextent 的 cap/perf pid 信息
+LExtent lextent;
+meta->GetLExtent(lid, &lextent);
+
+// 从 pextent table 中获取 pextent 的 location/preferred_cid/thin_provision 信息
+PExtent cap_pextent;
+meta->GetPExtent(lextent.cap_pid(), &cap_pextent);
+PExtent perf_pextent;
+meta->GetPExtent(lextent.cap_pid(), &perf_pextent);
+```
 
 ### 循环输出命令结果
 
