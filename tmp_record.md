@@ -803,6 +803,14 @@ gc 中的 ScanByPidRefs 会拷贝出一个 pid_perf_map 到 gc 线程中，migra
 
 
 
+临时副本有三个 generation：
+
+* BASE_PEXTENT_GEN，临时副本产生时对应的源 Extent 的 Generation
+* PEXTENT_GEN，从 BASE_PEXTENT_GEN 开始，每有一个写 IO 则递增
+* TEMPORARY_GEN，从 0 开始，由 LSM Extent 记录
+
+由于临时副本元数据和 LSM Extent 分开存储且并发更新，即 PEXTENT_GEN 和 TEMPORARY_GEN 并发更新，因此仅当 TEMPORARY_GEN + BASE_PEXTENT_GEN == PEXTENT_GEN 才可认为临时副本元数据和 LSM Extent 匹配，临时副本有效。
+
 
 
 gen sync 期间，会拒绝新的写副本/临时副本的 IO

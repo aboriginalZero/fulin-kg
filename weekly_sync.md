@@ -1,8 +1,8 @@
 2025.3.4
 
 1. 升级过程中 recover 耗时改进。meta 侧取消已下发迁移命令、access 侧弹性恢复。
-2. migrate scan 的耗时优化。分批获取专给 migrate 使用的 pentry、搞 fast map。
 3. 拔盘故障性能。包括 meta 侧 recover dst mgr 改动和 access 侧内部 IO 流控。
+3. migrate scan 的耗时优化。分批获取专给 migrate 使用的 pentry、搞 fast map。
 4. pin 相关的副本分配/迁移/恢复，migrate 中长期缺失的一些策略，比如低负载下 prefer local = 0 时没有做到 topo 安全之类的。
 5. ioreroute 和 recover 的售后处理。ioreroute 的部署/升级异常处理，锁处理、watchdog、ping 方式改进
 
@@ -13,11 +13,17 @@
 1. internal io speed limit 智能调节
 
    1. 适配多实例和多路径，对网络带宽的使用
+       1. 判断 app io 是否 busy 用的是根据磁盘类型写死的一些 iops / bps 阈值。这样不论开不开多路径，internal io 会被降低的条件总是不变，应该可以优化
+       2. cap 和 perf 在磁盘能力上是分别计算的，但网络能力上却没有。如果 cap / perf 的 internal io speed limit 上限都是由网络带宽制约的（比如全闪），开了多路径应该要有比较明显的提升。
+       2. perf 和 cap inernal io 除了考虑磁盘能力，还需要考虑他两加起来不能超过网络带宽的 50%，如果只有单层数据待恢复，那应该允许他用满 50%
    2. throttle 二元限流器
-   3. 不同磁盘规格提供的能力不同，只是按磁盘类型来区分过于简单
-   4. 不同平台可用上限不同
-   5. tower 在允许用户调节 recover / migrate ？
-   6. perf 和 cap inernal io 除了考虑磁盘能力，还需要考虑他两加起来不能超过网络带宽的 50%，如果只有单层数据待恢复，那应该允许他用满 50%
+       1. 引入真正意义上的 iops 限流，这样下沉的表现可能会更好
+   3. 不同磁盘规格提供的能力不同，只是按磁盘类型来区分过于简单，另外不同平台可用上限不同
+   4. Access 侧没有限制下发内部 IO 的带宽，有可能出现内部 IO 把 Access 侧的网口带宽打满。比如当只有业务 IO 以 iodepth 为 1 下发，它能够得到 2400MiB/s 带宽
+   4. 由于没有细化统计，Local IO Handler 侧的内部 IO 可能无法充分利用网口带宽
+       1. 内部读、写 IO 没有区分统计，而是采用总和来限制内部 IO 不超过网卡单向速度的 0.4/0.5 倍。但网口是全双工的，如收发各允许 25Gbps。
+       2. PExtent IO Handler 和 Local IO Handler 的 IO 没有区分统计。PExtent IO Handler 的 IO 不需要经过网络。例如，假设节点允许内部 IO 的磁盘带宽占用和网络带宽占用分别为 10GB/s 和 1GB/s，内部 IO 上限会限制为较小值 1GB/s；如果 PExtent IO Handler 收到了 0.5GB/s 的内部 IO，Local IO Handler 就只能收到 0.5GB/s 的内部 IO，但实际上网络和磁盘的带宽上限都没有达到。
+   5. tower 上允许用户调节 recover / migrate ？
 
 2. 盘间 ec
 
@@ -27,7 +33,7 @@
 
    什么时候开始比较合适
 
-4. 故障处理，类似于 tengqiu 之前的工作
+4. 长期来说，如果未来有故障处理，类似于 tengqiu 之前的工作
 
 
 
