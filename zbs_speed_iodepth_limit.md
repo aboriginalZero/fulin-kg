@@ -216,8 +216,6 @@ staging block info 什么时候被记录（RecordStagingBlockInfo 的调用位�
 
 
 
-
-
 1. normal recover 是全量读一个正常副本，写到没有副本（或即使有失败副本但并不使用）的节点上
 2. agile recover 是根据 staging block info 读正常副本中的指定片段，写到失败副本所在节点
 3. special recover 是去读临时副本，写到失败副本所在节点

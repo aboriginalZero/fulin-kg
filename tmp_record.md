@@ -56,9 +56,13 @@
 
 7. chunk mgr 中 topo / 维护模式相关的，是先更新 db 再更新内存。meta rpc server 中貌似不遵循这个机制，比如 SetPExtentExistence，把他们改写下。
 
+   还有 RemoveReplica rpc，难以统一修改
+
 8. 总结一下为啥 local io handler 里要同步，pextent io handler 里可以异步 intercept
 
 9. 手动触发迁移的命令行 zbs-client-py 提交上去，还需要给文档组提个 pr
+
+10. 允许 thick 转 thin 的命令行修改
 
 
 
@@ -110,76 +114,9 @@ cp -r ../googletest/include/* /usr/include/gtest/
 
 1. https://docs.google.com/document/d/1Xro2919inu3brs03wP1pu5gtbTmOf_Tig7H8pfdYPls/edit?tab=t.0#heading=h.uni8fzt28mtx
 2. zk journal version check，http://gerrit.smartx.com/c/zbs/+/38871
+2. 记下笔记，涉及到 db cluster
 
 
-
-
-
-副本分配有过的优化
-
-1. cache topo，避免避免访问 topo 的申请/释放锁；
-2. comparator 中的 topo distance 的计算搞了个 fast map；
-3. ChunkSpaceInfo 的 sort 用指针，否则会有大量的 MergeFrom 调用；
-4. 按 batch 批量分配，最后一个 batch 内逐个分配，最终容忍一个 batch size 内的不精准。
-
-
-
-1. prefer local = 0 && LocalizationComparator
-
-    第一个副本放在容量最低的，其他按照 topo && ring id 选，得到的是跟 ratio 无关的
-
-2. prefer local != 0 && LocalizationComparator
-
-    第一个副本放在 prefer local（如果这个节点健康的话，否则还是放在容量最低的），其他按照 topo && ring id 选，得到的是跟 ratio 无关的
-
-3. prefer local = 0 && TopoAwareComparator
-
-    第一个副本放在容量最低的，其他按照 topo && ring id 以及 ratio 选
-
-4. prefer local != 0 && TopoAwareComparator
-
-    第一个副本放在 prefer local（如果这个节点健康的话，否则还是放在容量最低的），其他按照 topo && ring id 以及 ratio 选
-
-
-
-```
-CO_TEST_P(TieringTest, CreateLargeVolumeShouldNotTimeOut) {
-    SetTieringAbility(true);
-    Pool pool;
-    Volume volume;
-    ASSERT_STATUS(CreatePool("pool", &pool, "", 2));
-    StopWatch sw;
-    sw.Start();
-
-    uint64_t now_ms = GetMetaTimeMS();
-    uint64_t size_10t = 1024 * 64 * 4 * kExtentSize;
-
-    ECAlgorithmParam param;
-    param.set_k(22);
-    param.set_m(2);
-    param.set_ec_type(ECAlgorithmType::REED_SOLOMON);
-    param.set_name("ISAL");
-    param.mutable_rs_arg()->set_coding_tech(ECCodingTechnique::REED_SOL_VAN);
-    param.mutable_rs_arg()->set_w(8);
-
-    ASSERT_STATUS(
-        GetMeta()->CreateVolume("pool", "volume", size_10t, 2, false, 0, 0, &volume, ResiliencyType::RT_EC, &param));
-    LOG(INFO) << "yiwu time: " << GetMetaTimeMS() - now_ms;
-    std::cout << "alloc segment time: " << GetMetaTimeMS() - now_ms;
-}
-```
-
-
-
-这里可能需要调整所有 thick 类型的 extent （不论 cap / perf）的行为。在 get lease 时，若发现 extent 已经分配了 pid 和 loc，但 prefer local = 0，那么用发起这个 get lease rpc 的 chunk id 去作为他的 prefer local，相当于把 update prefer local 的时机从本地感知（ 6h）提前到初次申请写 lease。（另外迁移或许也要适配，去更快触发本地聚集）
-
-even extent 的话，不需要更新 prefer local。
-
-
-
-thick extent（不论 perf / cap）创建的时候就分配了 pid 和 loc，（除非被回收）所以不会走到 lid == 0 的逻辑
-
-在 COW 的时候需要去更新 parent 的 prefer local 吗？没有，COW 用的 prefer local 也是发起 get lease rpc 的 chunk
 
 
 
@@ -300,16 +237,6 @@ recover write 也有可能 unmap 写，这部分不需要统计进来。
 
 
 
-app write extent，是每写其中一个 block 就对 extent gen 加一次 1
-
-所以处于 recovering 状态的 extent，如果在 recover 结束前有 app write（recover dst lsm 上处于 recovering 的 extent 是不允许被 app read），会对 track_gen ++，这样在 normal RecoverEnd 的 gen verify 才能对得上。
-
-recover write 与 app write 带来的 gen 在 lsm 中是如何变化，access 怎么跟 lsm 校对的
-
-
-
-
-
 1. sink io 的 dst 在 CheckAndGetLeaseForDrain 之后能知道，但它是从 perf 读，写到 cap
 
 2. reposition io 的 dst 在 meta cmd 中知道，replica src 也可以从 meta cmd 中知道，但是 ec src 只能在最终的 io_res.succ_cids 中查到
@@ -384,17 +311,15 @@ MLAG 集群中不同节点能力有差，有时候升级慢是在重启某个 ch
 
 
 
-1. perf 和 cap inernal io 除了考虑磁盘能力，还需要考虑他两加起来不能超过网络带宽的 50%，如果只有单层数据待恢复，那应该允许他用满 50%。
 
-    目前的实现里，假设 cap / perf 都在满负载恢复，两边都 500 MB/s，那 app io 可能就抢不到网络带宽了。
 
-2. recover dst 没有优选 topo safety，可能造成 recover 后要立马 migrate。
+1. recover dst 没有优选 topo safety，可能造成 recover 后要立马 migrate。
 
-3. access reposition 的 Counter 改成 metric，否则影响前端展示、metric 使用，检查 recover/migrate speed 在前端界面和 prometheus 中的数值是否准确，meta 侧跟 chunk 侧的 total speed 和 local speed 和 remote speed；
+2. access reposition 的 Counter 改成 metric，否则影响前端展示、metric 使用，检查 recover/migrate speed 在前端界面和 prometheus 中的数值是否准确，meta 侧跟 chunk 侧的 total speed 和 local speed 和 remote speed；
 
-4. access 在读 COW 出来还没写过的 pextent 时，如果读全部副本都失败，主动 refresh location 去读 parent 上的数据；
+3. access 在读 COW 出来还没写过的 pextent 时，如果读全部副本都失败，主动 refresh location 去读 parent 上的数据；
 
-5. 在 133.171 上挂载 8 个 64T 的大卷做 ummap 试一下，如果还是慢，说明有可能是接入协议的问题。
+4. 在 133.171 上挂载 8 个 64T 的大卷做 ummap 试一下，如果还是慢，说明有可能是接入协议的问题。
 
     在 zbs 日志中看一下有没有 fail to ping 的日志，另外看一下多个卷做 unmap 的 zbs-chunk show_polling_stats 中 chunk-main 的 CPU 占用率。
 
@@ -421,13 +346,7 @@ cd /var/log/zbs && ll -rth zbs-chunkd.log* 按照日期排序找文件
 
 
 
-汇总一下临时副本，结合文档，https://docs.google.com/document/d/1L1I-_md5jE4GyqPItkioh1TzQXEgRhNFqIHtIwN-43k/edit#heading=h.moqcl2aq3auh
-
 什么时候会 verifyread 而不是普通的 read
-
-有了临时副本，staging block info 的含义是啥？指明从 recover src 上读哪些 4k 粒度的数据块
-
-
 
 普通读的时候是否会 sync，会的，在 AccessIOHandler::DoReadVExtent() 中调用，像写一样，也会剔除 gen 不符预期的副本、在 sync 失败时清理本地 lease， 读 COW 出来的 pentry 但 parent 不在本地的情况调用一次 RefreshChildExtentLocation rpc
 
@@ -646,12 +565,6 @@ chunk recover 执行的慢可能原因：慢盘、缓存击穿、normal instead 
 * chunk_lsm_recover_timeout_sec = 10 min，在 lsm 侧每 60s 检查一次 recover pextent，如果 recover 时间超过 10 min 都没有结束，会将 extent 标记为 EXTENT_STATUS_INVALID，dst cid 上的这个 pextent inode 会被 lsm gc，之后接着 recover 会抛出 ENotFound（这个 pid 后续跟随 data report  给到 meta，不过 meta 没有对 EXTENT_STATUS_INVALID 特别处理）
 
 
-
-
-
-敏捷恢复为减少内存使用，是有单次最大数量的限制。不过 100G 的写盘应该不会触发这个上限。
-
-调查为啥升级时触发的敏捷恢复数量不及预期可以从维护模式时是否 lease 没清空的角度出发调查。
 
 
 
@@ -884,6 +797,74 @@ gc 中的 ScanByPidRefs 会拷贝出一个 pid_perf_map 到 gc 线程中，migra
 
 ### 临时副本
 
+汇总一下临时副本，结合文档，https://docs.google.com/document/d/1L1I-_md5jE4GyqPItkioh1TzQXEgRhNFqIHtIwN-43k/edit#heading=h.moqcl2aq3auh
+
+有了临时副本，staging block info 的含义是啥？指明从 recover src 上读哪些 4k 粒度的数据块
+
+
+
+
+
+gen sync 期间，会拒绝新的写副本/临时副本的 IO
+
+
+
+staging block info 是个啥，什么时候被创建、使用、销毁
+
+* 创建：sync 或 write 失败时
+* 使用：
+* 销毁：
+  * 不满足 agile recover 条件后，退化到 normal recover 时，在执行 normal recover 之前；
+  * 一次 agile recover 失败，第二次并不能接着使用。
+
+
+
+staging block info 什么时候被记录（RecordStagingBlockInfo 的调用位置）
+
+
+
+1. normal recover 是全量读一个正常副本，写到没有副本（或即使有失败副本但并不使用）的节点上
+2. agile recover 是根据 staging block info 读正常副本中的指定片段，写到失败副本所在节点
+3. special recover 是去读临时副本，写到失败副本所在节点
+
+agile recover 可以跟 special recover 叠加吗？不会，agile recover 一定是从健康副本上读。
+
+meta 下发的 agile recover 一定是会从健康副本读。
+
+原本在节点重启或 lease 失效后，将无法再触发 agile recover，但在 zbs 5.3.0 启用了临时副本后，新的 Lease Owner 在 Sync Generation 阶段会获取有效的临时副本上的增量数据 bitmap 信息来重建 IO 记录并保存在 staging block info 中以保证更有效的触发敏捷恢复能力。
+
+
+
+在以下 2 个副本剔除的位置记录 staging block info
+
+1. sync gen 失败时
+2. 用户 IO 写失败时，
+
+
+
+1. reposition io 第一次写失败，access 并不会做什么剔除之类的操作，lsm 是怎么第二次 reposition io 的？第一次写失败的部分会被利用吗？
+2. 代码上怎么体现的 agile recover 开始后，恢复过程中新产生的写入请求，都会同时写入恢复源和目标端？
+3. 同一个 block，reposition io 是怎么跟 app io 和 sink io 做互斥的？
+4. reposition 过程为啥是逐个 block 进行，而不允许并发呢？
+
+
+
+
+
+敏捷恢复为减少内存使用，是有单次最大数量的限制。不过 100G 的写盘应该不会触发这个上限。
+
+调查为啥升级时触发的敏捷恢复数量不及预期可以从维护模式时是否 lease 没清空的角度出发调查。
+
+
+
+app write extent，是每写其中一个 block 就对 extent gen 加一次 1
+
+所以处于 recovering 状态的 extent，如果在 recover 结束前有 app write（recover dst lsm 上处于 recovering 的 extent 是不允许被 app read），会对 track_gen ++，这样在 normal RecoverEnd 的 gen verify 才能对得上。
+
+recover write 与 app write 带来的 gen 在 lsm 中是如何变化，access 怎么跟 lsm 校对的
+
+
+
 临时副本的有效性是两方面的，一方面是临时副本自己有效，另一方面是临时副本的失败副本有效。因为临时副本的数据 + 失败副本的数据才是完整的数据，如果有一方不完整，那整体都是不完整的。
 
 
@@ -987,9 +968,20 @@ meta 会 revoke 整个 volume lease 的 5 种情况
 
 1. create snapshot
 2. rollback volume、move src volume to dst（rollback 的老接口）
-3. reclaim volume temporary replica（命令行调用，但是有必要回收整个 volume lease 吗？）
 4. delete volume
 5. resize volume
+5. reserve volume space，一般是 vaai 调用
+5. reclaim volume temporary replica，手动触发 zbs cli 回收某个卷的临时副本
+5. create consistency group snapshot，创建一致性快照组
+
+
+
+meta 会 revoke 某个 pid 的 lease 的情况包括但不限于：
+
+1. gc scan 中的 sweep garbage、provision change
+2. set pextent existence，当传入的 gen = 0 时，貌似只有 ec 会发起 gen = 0 的这个 rpc
+3. reset volume extents prefer local
+4. 待补充
 
 ### prometheus 使用
 
@@ -1412,6 +1404,15 @@ recover 性能统计
 5. ComposeRecoverPerf(ListRecoverResponse* recover_list, RecoverPerf* perf)
 
 AccessHandler::ComposeAccessPerf(AccessDataReportRequest* request, bool only_summary) 这个统计的是普通 io，ComposeRecoverPerf 统计的 reposition io 相关的。
+
+### 副本分配
+
+副本分配有过的优化
+
+1. cache topo，避免避免访问 topo 的申请/释放锁；
+2. comparator 中的 topo distance 的计算搞了个 fast map；
+3. ChunkSpaceInfo 的 sort 用指针，否则会有大量的 MergeFrom 调用；
+4. 按 batch 批量分配，最后一个 batch 内逐个分配，最终容忍一个 batch size 内的不精准。
 
 ### 副本剔除
 
