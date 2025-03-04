@@ -803,13 +803,45 @@ gc 中的 ScanByPidRefs 会拷贝出一个 pid_perf_map 到 gc 线程中，migra
 
 
 
+special recover 里读临时副本，写失败副本，跟 normal recover 在 lsm 侧的操作是一样的。
+
+读临时副本的哪些 [offset, len] 在临时副本的 block_bitmap / unmap_bitmap 中有记录
+
+leveldb 中记录的是 TemporaryExtent 和 TemporaryUnmapBitmapSegment，
+
+```
+message TemporaryExtent {
+    required uint32 pid = 1;
+    required uint64 epoch = 2;
+    required uint32 temporary_pid = 3;
+    required uint64 temporary_epoch = 4;
+    required uint64 base_pextent_generation = 5;
+    required uint64 pextent_generation = 6;
+    optional uint32 unmap_times = 7;
+}
+```
+
+need_clean_attr 的判断标准是 gen 是 28 的倍数，这个有什么说法吗？
+
+RecoverReadTemporaryReplica 和 ReadTemporaryReplica 的区别是啥
+
+
+
 临时副本有三个 generation：
 
 * BASE_PEXTENT_GEN，临时副本产生时对应的源 Extent 的 Generation
-* PEXTENT_GEN，从 BASE_PEXTENT_GEN 开始，每有一个写 IO 则递增
 * TEMPORARY_GEN，从 0 开始，由 LSM Extent 记录
+* PEXTENT_GEN，从 BASE_PEXTENT_GEN 开始，每有一个写 IO 则递增
 
 由于临时副本元数据和 LSM Extent 分开存储且并发更新，即 PEXTENT_GEN 和 TEMPORARY_GEN 并发更新，因此仅当 TEMPORARY_GEN + BASE_PEXTENT_GEN == PEXTENT_GEN 才可认为临时副本元数据和 LSM Extent 匹配，临时副本有效。
+
+
+
+一个是临时副本如何产生
+
+
+
+一个是临时副本如何使用
 
 
 
