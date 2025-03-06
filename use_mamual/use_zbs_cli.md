@@ -331,6 +331,10 @@ zbs-nvmf ns create <subsystem_name> <ns_id_0-256> <Gib_size>
    iscsiadm -m node -T iqn.2016-02.com.smartx:system:zp-iscsi -l
    # 重连 iscsi targets
    iscsiadm -m session -R
+   
+   # 退出目标
+   iscsiadm -m session --logout
+   iscsiadm -m node -o delete
    # 查看存储设备，/dev/sdd 为连接的 iscsi 存储设备信息
    fdisk -l
    # 格式化设备
