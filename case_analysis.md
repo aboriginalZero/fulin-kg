@@ -1,3 +1,15 @@
+### 处理 ever exist = false && origin pid = 0 的待恢复数据
+
+1. 确保 cid12 的存储 ip 还是 10.168.240.70，端口还是10200，os 是 smtx os 5.1.4；
+2. 在 3 个 OS 被重装节点的集群（包含 cid 12）中把所有 meta 都 stop 掉，systemctl stop zbs-metad；
+3. 把 cid 12 的所有 journal / cache / partition 盘都强制卸掉并格式化，清空其中数据；
+4. 把 cid 12 的 chunk stop 掉，systemctl stop zbs-chunkd；
+5. 把 cid12 节点的 /etc/zbs/uuid 文件删除，rm -f /var/lib/zbs/cluster_uuid；
+6. 把 cid12 节点的 lsmdb 删掉，cd /var/lib/zbs/lsm2db/ && rm -rf .*；
+7. 修改 /etc/sysconfig/zbs-chunkd 中的 ZK_HOSTS 的值到正常集群；
+8. 把 cid12 的 chunk start 起来，预期跟已有集群（正常的 6 节点集群）的 meta 建立连接；
+9. 手动触发 recover，zbs-meta recover scan_immediate，等待 ever exist = false、只剩最后一个副本在 cid12 上的 pid  完成数据恢复。
+
 ### migrate scan 性能优化
 
 * 替换一个有符号表的 zbs-metad（没被 strip 过）；

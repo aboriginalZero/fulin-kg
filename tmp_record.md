@@ -1,6 +1,12 @@
-1. 主动观察 df 上的升级时长耗时，要主动找活干；
-2. 售后调查问题时，已经调查完了，但是没有给出解决方案；
-3. 代码还是不够自然，如果需要 yutian 通过 slack 来找，就说明写的还是不够清楚。
+win iso 在 arm 下要用 uefi 格式的，x86 可以用 bios
+
+通过 auto smartx.com 创建 windows 之后，要添加 E1000 模式的网卡，这样 win 才能联网，iscsi 测试 https://docs.google.com/document/d/136oMy5L3amyi69s_F_iFL_d_RcPR2afsWWA3Y7eZs1Y/edit?tab=t.0
+
+
+
+http://docs.fev.smartx.com/smtxzbs/5.6.1/zbs_configuration/zbs_configuration_16 效果
+
+需要补充一开始创建了 thick volume 的测试
 
 
 
@@ -1745,6 +1751,9 @@ chunk 日志中搜 migrate pblob skip 会显示卸载盘卸不掉的 pblob，有
     3. 等待这个 chunk  pextent 全被 remove（命令行看 provisioned_data_space 为 0），chunk manager 有个 4s 的定时器会将状态为 REMOVING 且它上面的 pextent 全被 remove 的 chunk 改成 IDLE；
     
 2. zbs-deploy-manage meta_remove_node < storage ip>
+   
+    可以加 --offline_host_ips 避免 session expired 的多个节点卸载不掉，另外这个命令还会去 ping 存储网是否通的，所以要强制移除某个节可能需要把它的存储网 down 掉。
+    
     1. 这个命令会调用 zbs 侧的 RemoveChunk rpc，此时要求 chunk 处于 IDLE；
     2. 把 chunk 的各种持久化信息从 metaDB 中删除；
     3. 清空 meta 内存里各种表（chunk_table, chunk_id_map,  topo_objs_map, ）中的记录；
