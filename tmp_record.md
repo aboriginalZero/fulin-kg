@@ -1,10 +1,63 @@
+只有刚创建时，是 thick 才会报错，
+
+如果 thick 转 thin 后再转换 thick，并不会报错
+
+```
+[root@localhost ~]# blkdiscard /dev/sdb
+blkdiscard: /dev/sdb: BLKDISCARD ioctl failed: Operation not supported
+```
+
+thick 转 thin 后的 unmap，客户端虽然还会有报错，但是 unmap 是有效果的
+
+
+
+thick 转 thin 后的第一次 unmap，会报错，第二次就不会了（这个过程可能 centos8 内核自动做了 iscsi session refresh）
+
+```
+[root@localhost ~]# blkdiscard /dev/sdb
+blkdiscard: /dev/sdb: BLKDISCARD ioctl failed: Operation not supported
+[root@localhost ~]# blkdiscard /dev/sdb
+[root@localhost ~]#
+```
+
+内核认为他是 thin，之后下发 unmap 不报错。
+
+
+
+win 不一样，初次扫描的时候如果是 thick，后面即使转 thin，多次 trim 都会失败。需要断开跟 target 的连接后再连接。
+
+
+
+
+
+还是按 3 年规划，今年面试要面起来，国庆回来可以着手准备面试，要把除刷题外的其他东西都在平时准备好。
+
+1. 把 AI 用起来
+2. 把 zhihu 用起来，关注存储 + AI 相关工作
+3. 看技术书要及时做笔记，不然之后也忘了
+
+
+
+1. 把已有的工作写简历
+    1. 限流
+    2. 临时副本和敏捷恢复
+    3. io reroute
+2. 了解 raft 协议，zbs 中 dbcluster 的使用
+3. 熟悉分布式系统的一些笼统概念
+
+
+
+
+
+
+
 win iso 在 arm 下要用 uefi 格式的，x86 可以用 bios
 
 通过 auto smartx.com 创建 windows 之后，要添加 E1000 模式的网卡，这样 win 才能联网，iscsi 测试 https://docs.google.com/document/d/136oMy5L3amyi69s_F_iFL_d_RcPR2afsWWA3Y7eZs1Y/edit?tab=t.0
 
 
 
-http://docs.fev.smartx.com/smtxzbs/5.6.1/zbs_configuration/zbs_configuration_16 效果
+http://docs.fev.smartx.com/smtxzbs/5.6.1/zbs_configuration/zbs_configuration_16 win 客户端配置 iscsi
 
 需要补充一开始创建了 thick volume 的测试
 
@@ -1216,7 +1269,11 @@ rdma 的网络环境测试由自己的 ib 测试方法，不能只看 ping 的�
 
 ### reposition 性能测试
 
+```
+fio -ioengine=libaio -invalidate=1 -iodepth=32 -direct=1 -bs=256k -filename=/dev/sda -name=name -rw=write;
+
 fio -ioengine=libaio -invalidate=1 -iodepth=128 -ramp_time=0 -runtime=300000 -time_based -direct=1 -bs=4k -filename=/dev/sdc -name=wrtie_sdc -rw=randwrite;
+```
 
 
 
