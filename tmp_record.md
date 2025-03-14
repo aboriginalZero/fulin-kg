@@ -1,73 +1,47 @@
-```
-// 创建，这是一个 external_use = true 的 target
-I0222 17:01:04.457939  6364 iscsi_server.cc:552] [CREATE ISCSI TARGET]: [REQUEST]: name: "AUTOGEN-BY-CROSS-MIGRATION-9c800cbb-3faf-4537-80c8-a0484cccec68" storage_pool_id: "system" replica_num: 2 thin_provision: true external_use: true whitelist: "*/*" iqn_whitelist_v2: "*/*" stripe_num: 4 stripe_size: 262144, [RESPONSE]: ST:OK, id: "11bd0685-82f0-4fb6-a402-262b9bcc7a19" name: "autogen-by-cross-migration-9c800cbb-3faf-4537-80c8-a0484cccec68" iqn_name: "iqn.2016-02.com.smartx:system:autogen-by-cross-migration-9c800cbb-3faf-4537-80c8-a0484cccec68" created_time { seconds: 1740214864 nseconds: 456397748 } iqn_date: "2016-02" iqn_naming_auth: "com.smartx" pool { name: "autogen-by-cross-migration-9c800cbb-3faf-4537-80c8-a0484cccec68" id: "11bd0685-82f0-4fb6-a402-262b9bcc7a19" created_time { seconds: 1740214864 nseconds: 456397748 } storage_pool_id: "system" replica_num: 2 thin_provision: true mod_verf: 4081795745 whitelist: "*/*" stripe_num: 4 stripe_size: 262144 } external_use: true iqn_whitelist_v2: "*/*", [TIME]: 1616 us.
-I0222 17:01:04.479809  6364 iscsi_server.cc:1446] [CREATE ISCSI LUN]: [REQUEST]: lun_path { pool_path { pool_name: "autogen-by-cross-migration-9c800cbb-3faf-4537-80c8-a0484cccec68" } lun_name: "cm7fyzz2c7pw625udddhm0s8b" } size: 53687091200 replica_num: 2 throttling { iops: 0 iops_rd: 0 iops_wr: 0 iops_max: 0 iops_rd_max: 0 iops_wr_max: 0 iops_max_length: 1 iops_rd_max_length: 1 iops_wr_max_length: 1 bps: 0 bps_rd: 0 bps_wr: 0 bps_max: 0 bps_rd_max: 0 bps_wr_max: 0 bps_max_length: 1 bps_rd_max_length: 1 bps_wr_max_length: 1 } allowed_initiators: "*/*" stripe_num: 4, [RESPONSE]: ST:OK, lun_id: 1 pool_id: "11bd0685-82f0-4fb6-a402-262b9bcc7a19" volume_id: "b0eb9488-2e5c-48cc-af0d-43063d052cc5" created_time { seconds: 1740214864 nseconds: 477048602 } size: 53687091200 description: "" replica_num: 2 thin_provision: true throttling { iops: 0 iops_rd: 0 iops_wr: 0 iops_max: 0 iops_rd_max: 0 iops_wr_max: 0 iops_max_length: 1 iops_rd_max_length: 1 iops_wr_max_length: 1 bps: 0 bps_rd: 0 bps_wr: 0 bps_max: 0 bps_rd_max: 0 bps_wr_max: 0 bps_max_length: 1 bps_rd_max_length: 1 bps_wr_max_length: 1 } name: "cm7fyzz2c7pw625udddhm0s8b" naa: "3384dc5e2d8849be0" allowed_initiators: "*/*" stripe_num: 4 stripe_size: 262144 pr_info { gen: 0 }, [TIME]: 2796 us.
-
-// 分配出来的 prefer local = 2
-I0222 17:01:04.791750  6364 meta_rpc_server.cc:1031] [ALLOC PEXTENT]: pid: 103563 volume: name: "b0eb9488-2e5c-48cc-af0d-43063d052cc5" size: 53687091200 created_time { seconds: 1740214864 nseconds: 477048602 } id: "b0eb9488-2e5c-48cc-af0d-43063d052cc5" parent_id: "11bd0685-82f0-4fb6-a402-262b9bcc7a19" replica_num: 2 thin_provision: true iops_burst: 0 bps_burst: 0 throttling { iops: 0 iops_rd: 0 iops_wr: 0 iops_max: 0 iops_rd_max: 0 iops_wr_max: 0 iops_max_length: 1 iops_rd_max_length: 1 iops_wr_max_length: 1 bps: 0 bps_rd: 0 bps_wr: 0 bps_max: 0 bps_rd_max: 0 bps_wr_max: 0 bps_max_length: 1 bps_rd_max_length: 1 bps_wr_max_length: 1 } stripe_num: 4 stripe_size: 262144 loc: [2 1 ]
-
-// 移动到 zbs-iscsi-datastore-1737250067411s 这个 target，这个 target 的 external_use 在现有日志里看不到了，默认是 false
-I0222 17:12:54.577244  6364 iscsi_server.cc:2334] [MOVE ISCSI LUN]: [REQUEST]: lun_path { pool_path { pool_name: "zbs-iscsi-datastore-1737250067411s" } lun_id: 146 lun_name: "bc19a7c1-1ab4-4454-8ef2-7bbb7471d047" } src_lun_path { pool_path { pool_name: "autogen-by-cross-migration-9c800cbb-3faf-4537-80c8-a0484cccec68" } lun_id: 1 }, [RESPONSE]: ST:OK, lun_id: 146 pool_id: "c1c47c7e-a814-49a2-99b4-9e742b572e72" volume_id: "b0eb9488-2e5c-48cc-af0d-43063d052cc5" created_time { seconds: 1740214864 nseconds: 477048602 } size: 53687091200 description: "" replica_num: 2 thin_provision: true throttling { iops: 0 iops_rd: 0 iops_wr: 0 iops_max: 0 iops_rd_max: 0 iops_wr_max: 0 iops_max_length: 1 iops_rd_max_length: 1 iops_wr_max_length: 1 bps: 0 bps_rd: 0 bps_wr: 0 bps_max: 0 bps_rd_max: 0 bps_wr_max: 0 bps_max_length: 1 bps_rd_max_length: 1 bps_wr_max_length: 1 } name: "bc19a7c1-1ab4-4454-8ef2-7bbb7471d047" naa: "3384dc5e2d8849be0" allowed_initiators: "*/*" stripe_num: 4 stripe_size: 262144 pr_info { gen: 0 }, [TIME]: 5700 us.
-
-// 更新 new_allowed_initiators 和 single_access
-I0222 18:03:02.560324  6364 iscsi_server.cc:1997] [UPDATE ISCSI LUN]: [REQUEST]: lun_path { pool_path { pool_name: "zbs-iscsi-datastore-1737250067411s" } lun_id: 146 } new_allowed_initiators: "iqn.2013-11.org.smartx:b7519173-9204-46b2-b534-cb9081bb104e.f9970356-d580-11ef-83d6-52540054db1b.0", [RESPONSE]: ST:OK, lun_id: 146 pool_id: "c1c47c7e-a814-49a2-99b4-9e742b572e72" volume_id: "b0eb9488-2e5c-48cc-af0d-43063d052cc5" created_time { seconds: 1740214864 nseconds: 477048602 } size: 53687091200 description: "" replica_num: 2 thin_provision: true throttling { iops: 0 iops_rd: 0 iops_wr: 0 iops_max: 0 iops_rd_max: 0 iops_wr_max: 0 iops_max_length: 1 iops_rd_max_length: 1 iops_wr_max_length: 1 bps: 0 bps_rd: 0 bps_wr: 0 bps_max: 0 bps_rd_max: 0 bps_wr_max: 0 bps_max_length: 1 bps_rd_max_length: 1 bps_wr_max_length: 1 } name: "bc19a7c1-1ab4-4454-8ef2-7bbb7471d047" naa: "3384dc5e2d8849be0" allowed_initiators: "iqn.2013-11.org.smartx:b7519173-9204-46b2-b534-cb9081bb104e.f9970356-d580-11ef-83d6-52540054db1b.0" stripe_num: 4 stripe_size: 262144 pr_info { gen: 0 }, [TIME]: 1388 us.
-I0222 18:03:02.561908  6364 iscsi_server.cc:1997] [UPDATE ISCSI LUN]: [REQUEST]: lun_path { pool_path { pool_name: "zbs-iscsi-datastore-1737250067411s" } lun_id: 146 } single_access: true, [RESPONSE]: ST:OK, lun_id: 146 pool_id: "c1c47c7e-a814-49a2-99b4-9e742b572e72" volume_id: "b0eb9488-2e5c-48cc-af0d-43063d052cc5" created_time { seconds: 1740214864 nseconds: 477048602 } size: 53687091200 description: "" replica_num: 2 thin_provision: true throttling { iops: 0 iops_rd: 0 iops_wr: 0 iops_max: 0 iops_rd_max: 0 iops_wr_max: 0 iops_max_length: 1 iops_rd_max_length: 1 iops_wr_max_length: 1 bps: 0 bps_rd: 0 bps_wr: 0 bps_max: 0 bps_rd_max: 0 bps_wr_max: 0 bps_max_length: 1 bps_rd_max_length: 1 bps_wr_max_length: 1 } name: "bc19a7c1-1ab4-4454-8ef2-7bbb7471d047" naa: "3384dc5e2d8849be0" allowed_initiators: "iqn.2013-11.org.smartx:b7519173-9204-46b2-b534-cb9081bb104e.f9970356-d580-11ef-83d6-52540054db1b.0" single_access: true stripe_num: 4 stripe_size: 262144 pr_info { gen: 0 }, [TIME]: 1428 us.
-
-// 10.189.0.15 对应的 cid = 3
-I0222 18:03:02.677644  6364 iscsi_server.cc:3483] [GET SERVICE PORTAL]: [REQUEST]: initiator: "iqn.2013-11.org.smartx:b7519173-9204-46b2-b534-cb9081bb104e.f9970356-d580-11ef-83d6-52540054db1b.0" target_name: "zbs-iscsi-datastore-1737250067411s" initiator_ip: "127.0.0.1" conn_server_ip: "127.0.0.1" local_access_ip: "10.189.0.15", [RESPONSE]: ST:OK, portal: "10.189.0.15:3261", [TIME]: 130 us.
-I0222 18:03:02.679751  6364 iscsi_server.cc:3483] [GET SERVICE PORTAL]: [REQUEST]: initiator: "iqn.2013-11.org.smartx:b7519173-9204-46b2-b534-cb9081bb104e.f9970356-d580-11ef-83d6-52540054db1b.0" target_name: "zbs-iscsi-datastore-1737250067411s" initiator_ip: "127.0.0.1" conn_server_ip: "127.0.0.1" local_access_ip: "10.189.0.15", [RESPONSE]: ST:OK, portal: "10.189.0.15:3261", [TIME]: 71 us.
-
-// 定期快照
-I0222 23:30:02.040215 35846 meta_rpc_server.cc:2209] [CREATE SNAPSHOT]: [REQUEST]: path { volume_path { pool_path { pool_id: "c1c47c7e-a814-49a2-99b4-9e742b572e72" } volume_id: "b0eb9488-2e5c-48cc-af0d-43063d052cc5" } snapshot_name: "c3465cf6-61b1-4a2d-adec-13b66b91b6eb" } description: "Snapshot with vm snapshot", [RESPONSE]: ST:OK, name: "c3465cf6-61b1-4a2d-adec-13b66b91b6eb" size: 53687091200 created_time { seconds: 1740238202 nseconds: 38493710 } id: "7bc6b752-8d6b-4f3f-bc38-de70b728f245" parent_id: "b0eb9488-2e5c-48cc-af0d-43063d052cc5" origin_id: "" replica_num: 2 thin_provision: true description: "Snapshot with vm snapshot" iops_burst: 0 bps_burst: 0 throttling { iops: 0 iops_rd: 0 iops_wr: 0 iops_max: 0 iops_rd_max: 0 iops_wr_max: 0 iops_max_length: 1 iops_rd_max_length: 1 iops_wr_max_length: 1 bps: 0 bps_rd: 0 bps_wr: 0 bps_max: 0 bps_rd_max: 0 bps_wr_max: 0 bps_max_length: 1 bps_rd_max_length: 1 bps_wr_max_length: 1 } stripe_num: 4 stripe_size: 262144 is_snapshot: true diff_size: 46170898432 nfs_meta { } snapshot_pool_id: "c1c47c7e-a814-49a2-99b4-9e742b572e72", [TIME]: 1776 us.
-I0222 23:30:02.040241 35846 iscsi_server.cc:2522] [CREATE LUN SNAPSHOT]: [REQUEST]: lun_path { pool_path { pool_name: "zbs-iscsi-datastore-1737250067411s" } lun_id: 146 } snapshot_name: "c3465cf6-61b1-4a2d-adec-13b66b91b6eb" snapshot_desc: "Snapshot with vm snapshot", [RESPONSE]: ST:OK, name: "c3465cf6-61b1-4a2d-adec-13b66b91b6eb" size: 53687091200 created_time { seconds: 1740238202 nseconds: 38493710 } id: "7bc6b752-8d6b-4f3f-bc38-de70b728f245" parent_id: "b0eb9488-2e5c-48cc-af0d-43063d052cc5" origin_id: "" replica_num: 2 thin_provision: true description: "Snapshot with vm snapshot" iops_burst: 0 bps_burst: 0 throttling { iops: 0 iops_rd: 0 iops_wr: 0 iops_max: 0 iops_rd_max: 0 iops_wr_max: 0 iops_max_length: 1 iops_rd_max_length: 1 iops_wr_max_length: 1 bps: 0 bps_rd: 0 bps_wr: 0 bps_max: 0 bps_rd_max: 0 bps_wr_max: 0 bps_max_length: 1 bps_rd_max_length: 1 bps_wr_max_length: 1 } stripe_num: 4 stripe_size: 262144 is_snapshot: true diff_size: 46170898432 nfs_meta { } snapshot_pool_id: "c1c47c7e-a814-49a2-99b4-9e742b572e72", [TIME]: 1866 us.
-
-// 快照后的第一个 IO，此时都会触发 COW
-I0222 23:30:03.984448 35846 meta_rpc_server.cc:1008] [COW PEXTENT]: pid: 103560 new pid: 113547 loc: [2 1 ] volume: name: "b0eb9488-2e5c-48cc-af0d-43063d052cc5" size: 53687091200 created_time { seconds: 1740214864 nseconds: 477048602 } id: "b0eb9488-2e5c-48cc-af0d-43063d052cc5" parent_id: "c1c47c7e-a814-49a2-99b4-9e742b572e72" origin_id: "7bc6b752-8d6b-4f3f-bc38-de70b728f245" replica_num: 2 thin_provision: true iops_burst: 0 bps_burst: 0 throttling { iops: 0 iops_rd: 0 iops_wr: 0 iops_max: 0 iops_rd_max: 0 iops_wr_max: 0 iops_max_length: 1 iops_rd_max_length: 1 iops_wr_max_length: 1 bps: 0 bps_rd: 0 bps_wr: 0 bps_max: 0 bps_rd_max: 0 bps_wr_max: 0 bps_max_length: 1 bps_rd_max_length: 1 bps_wr_max_length: 1 } stripe_num: 4 stripe_size: 262144
-
-// 超过 6h 有 IO，此时触发到 cid3 的本地化聚集
-I0223 01:00:32.527303 35846 meta_rpc_server.cc:3983] Refresh preferred cid of extents. volume id: b0eb9488-2e5c-48cc-af0d-43063d052cc5 cid: 3 pextents num: 0
-```
+加一个获取 token 的数量的统计。
 
 
+
+
+
+
+
+在C++中，只要在函数体内出现了 `co_await` 、`co_return` 和 `co_yield` 这三个操作符中的其中一个，这个函数就成为了协程。
+
+https://zplutor.github.io/2022/03/25/cpp-coroutine-beginner/
+
+重点看怎么把 tokcpp 用起来，他是对这些的封装
+
+
+
+
+
+
+
+便于阅读 c++ 20 代码
 
 ```
-// 临时创建了一个 external_use = true 的 target
-I0222 17:16:30.691839  6364 iscsi_server.cc:552] [CREATE ISCSI TARGET]: [REQUEST]: name: "AUTOGEN-BY-CROSS-MIGRATION-1014952a-b83e-44bc-aee5-10ab42c47bd8" storage_pool_id: "system" replica_num: 2 thin_provision: true external_use: true whitelist: "*/*" iqn_whitelist_v2: "*/*" stripe_num: 4 stripe_size: 262144, [RESPONSE]: ST:OK, id: "d0f2dd6b-0549-44fa-8aed-a12e45bc26a7" name: "autogen-by-cross-migration-1014952a-b83e-44bc-aee5-10ab42c47bd8" iqn_name: "iqn.2016-02.com.smartx:system:autogen-by-cross-migration-1014952a-b83e-44bc-aee5-10ab42c47bd8" created_time { seconds: 1740215790 nseconds: 690395141 } iqn_date: "2016-02" iqn_naming_auth: "com.smartx" pool { name: "autogen-by-cross-migration-1014952a-b83e-44bc-aee5-10ab42c47bd8" id: "d0f2dd6b-0549-44fa-8aed-a12e45bc26a7" created_time { seconds: 1740215790 nseconds: 690395141 } storage_pool_id: "system" replica_num: 2 thin_provision: true mod_verf: 4081795745 whitelist: "*/*" stripe_num: 4 stripe_size: 262144 } external_use: true iqn_whitelist_v2: "*/*", [TIME]: 1499 us.
-
-// 创建一个 lun，这个 lun 后续会被 tower 通过 zbs client 来把源集群的 lun 数据拷贝过来
-I0222 17:18:32.398697  6364 iscsi_server.cc:1446] [CREATE ISCSI LUN]: [REQUEST]: lun_path { pool_path { pool_name: "autogen-by-cross-migration-1014952a-b83e-44bc-aee5-10ab42c47bd8" } lun_name: "cm7fzmfn47qnd25udbwmtdsjw" } size: 322122547200 replica_num: 2 throttling { iops: 0 iops_rd: 0 iops_wr: 0 iops_max: 0 iops_rd_max: 0 iops_wr_max: 0 iops_max_length: 1 iops_rd_max_length: 1 iops_wr_max_length: 1 bps: 0 bps_rd: 0 bps_wr: 0 bps_max: 0 bps_rd_max: 0 bps_wr_max: 0 bps_max_length: 1 bps_rd_max_length: 1 bps_wr_max_length: 1 } allowed_initiators: "*/*" stripe_num: 4, [RESPONSE]: ST:OK, lun_id: 2 pool_id: "d0f2dd6b-0549-44fa-8aed-a12e45bc26a7" volume_id: "80eacc17-1a68-4048-85d6-9e6e7c48004d" created_time { seconds: 1740215912 nseconds: 393239553 } size: 322122547200 description: "" replica_num: 2 thin_provision: true throttling { iops: 0 iops_rd: 0 iops_wr: 0 iops_max: 0 iops_rd_max: 0 iops_wr_max: 0 iops_max_length: 1 iops_rd_max_length: 1 iops_wr_max_length: 1 bps: 0 bps_rd: 0 bps_wr: 0 bps_max: 0 bps_rd_max: 0 bps_wr_max: 0 bps_max_length: 1 bps_rd_max_length: 1 bps_wr_max_length: 1 } name: "cm7fzmfn47qnd25udbwmtdsjw" naa: "3304d86a3d71ccae0" allowed_initiators: "*/*" stripe_num: 4 stripe_size: 262144 pr_info { gen: 0 }, [TIME]: 5585 us.
-
-// 副本分配到 [2, 1]，当时的接入点是 2，接入点不是虚拟机所在物理节点的原因是这个 lun 所在 target 的 external_use = true，会遵循分离模式下的接入点分配规则，此时不关注物理节点，选了负载最低的节点，具体分配规则参考 https://docs.google.com/document/d/1t14uKF6YCaijgXAq-bS-WR_I1SaLhYxbOnKXhspBtlQ/edit?tab=t.0#heading=h.jkuch9fydba0
-I0222 17:18:32.631953  6364 meta_rpc_server.cc:1031] [ALLOC PEXTENT]: pid: 109778 volume: name: "80eacc17-1a68-4048-85d6-9e6e7c48004d" size: 322122547200 created_time { seconds: 1740215912 nseconds: 393239553 } id: "80eacc17-1a68-4048-85d6-9e6e7c48004d" parent_id: "d0f2dd6b-0549-44fa-8aed-a12e45bc26a7" replica_num: 2 thin_provision: true iops_burst: 0 bps_burst: 0 throttling { iops: 0 iops_rd: 0 iops_wr: 0 iops_max: 0 iops_rd_max: 0 iops_wr_max: 0 iops_max_length: 1 iops_rd_max_length: 1 iops_wr_max_length: 1 bps: 0 bps_rd: 0 bps_wr: 0 bps_max: 0 bps_rd_max: 0 bps_wr_max: 0 bps_max_length: 1 bps_rd_max_length: 1 bps_wr_max_length: 1 } stripe_num: 4 stripe_size: 262144 loc: [2 1 ]
-
-// elf 将 lun 转换为虚拟卷创建虚拟机，这个 lun 被移动到另一个 target，这个 target 的 external_use = false
-I0222 17:24:46.726493  6364 iscsi_server.cc:2334] [MOVE ISCSI LUN]: [REQUEST]: lun_path { pool_path { pool_name: "zbs-iscsi-datastore-1737250067411s" } lun_id: 31 lun_name: "4bad4ee9-a5a1-4a4f-86a5-71c7bf2ad853" } src_lun_path { pool_path { pool_name: "autogen-by-cross-migration-1014952a-b83e-44bc-aee5-10ab42c47bd8" } lun_id: 2 }, [RESPONSE]: ST:OK, lun_id: 31 pool_id: "c1c47c7e-a814-49a2-99b4-9e742b572e72" volume_id: "80eacc17-1a68-4048-85d6-9e6e7c48004d" created_time { seconds: 1740215912 nseconds: 393239553 } size: 322122547200 description: "" replica_num: 2 thin_provision: true throttling { iops: 0 iops_rd: 0 iops_wr: 0 iops_max: 0 iops_rd_max: 0 iops_wr_max: 0 iops_max_length: 1 iops_rd_max_length: 1 iops_wr_max_length: 1 bps: 0 bps_rd: 0 bps_wr: 0 bps_max: 0 bps_rd_max: 0 bps_wr_max: 0 bps_max_length: 1 bps_rd_max_length: 1 bps_wr_max_length: 1 } name: "4bad4ee9-a5a1-4a4f-86a5-71c7bf2ad853" naa: "3304d86a3d71ccae0" allowed_initiators: "*/*" stripe_num: 4 stripe_size: 262144 pr_info { gen: 0 }, [TIME]: 7660 us.
-
-// 一开始的临时 target 没用，被删除了
-I0222 17:27:25.254911  6364 iscsi_server.cc:1086] [DELETE ISCSI TARGET]: [REQUEST]: pool_name: "autogen-by-cross-migration-1014952a-b83e-44bc-aee5-10ab42c47bd8", [RESPONSE]: ST:OK, , [TIME]: 1714 us.
-
-// 虚拟机有定期快照
-I0222 17:31:39.547363  6364 meta_rpc_server.cc:2209] [CREATE SNAPSHOT]: [REQUEST]: path { volume_path { pool_path { pool_id: "c1c47c7e-a814-49a2-99b4-9e742b572e72" } volume_id: "80eacc17-1a68-4048-85d6-9e6e7c48004d" } snapshot_name: "3ed34c6e-698a-4bfa-aa0b-7c06ec5ee9de" } description: "Snapshot with vm snapshot", [RESPONSE]: ST:OK, name: "3ed34c6e-698a-4bfa-aa0b-7c06ec5ee9de" size: 322122547200 created_time { seconds: 1740216699 nseconds: 546039905 } id: "f88c319e-3459-4fed-a011-7de68f034022" parent_id: "80eacc17-1a68-4048-85d6-9e6e7c48004d" origin_id: "" replica_num: 2 thin_provision: true description: "Snapshot with vm snapshot" iops_burst: 0 bps_burst: 0 throttling { iops: 0 iops_rd: 0 iops_wr: 0 iops_max: 0 iops_rd_max: 0 iops_wr_max: 0 iops_max_length: 1 iops_rd_max_length: 1 iops_wr_max_length: 1 bps: 0 bps_rd: 0 bps_wr: 0 bps_max: 0 bps_rd_max: 0 bps_wr_max: 0 bps_max_length: 1 bps_rd_max_length: 1 bps_wr_max_length: 1 } stripe_num: 4 stripe_size: 262144 is_snapshot: true diff_size: 166966853632 nfs_meta { } snapshot_pool_id: "c1c47c7e-a814-49a2-99b4-9e742b572e72", [TIME]: 1414 us.
-I0222 17:31:39.547394  6364 iscsi_server.cc:2522] [CREATE LUN SNAPSHOT]: [REQUEST]: lun_path { pool_path { pool_name: "zbs-iscsi-datastore-1737250067411s" } lun_id: 31 } snapshot_name: "3ed34c6e-698a-4bfa-aa0b-7c06ec5ee9de" snapshot_desc: "Snapshot with vm snapshot", [RESPONSE]: ST:OK, name: "3ed34c6e-698a-4bfa-aa0b-7c06ec5ee9de" size: 322122547200 created_time { seconds: 1740216699 nseconds: 546039905 } id: "f88c319e-3459-4fed-a011-7de68f034022" parent_id: "80eacc17-1a68-4048-85d6-9e6e7c48004d" origin_id: "" replica_num: 2 thin_provision: true description: "Snapshot with vm snapshot" iops_burst: 0 bps_burst: 0 throttling { iops: 0 iops_rd: 0 iops_wr: 0 iops_max: 0 iops_rd_max: 0 iops_wr_max: 0 iops_max_length: 1 iops_rd_max_length: 1 iops_wr_max_length: 1 bps: 0 bps_rd: 0 bps_wr: 0 bps_max: 0 bps_rd_max: 0 bps_wr_max: 0 bps_max_length: 1 bps_rd_max_length: 1 bps_wr_max_length: 1 } stripe_num: 4 stripe_size: 262144 is_snapshot: true diff_size: 166966853632 nfs_meta { } snapshot_pool_id: "c1c47c7e-a814-49a2-99b4-9e742b572e72", [TIME]: 1832 us.
-
-// elf 会更新这个 lun 的 new_allowed_initiators 和 single_access = true
-I0222 17:58:41.712082  6364 iscsi_server.cc:1997] [UPDATE ISCSI LUN]: [REQUEST]: lun_path { pool_path { pool_name: "zbs-iscsi-datastore-1737250067411s" } lun_id: 31 } new_allowed_initiators: "iqn.2013-11.org.smartx:96d2924c-954e-4c08-82d9-cb9458f20889.96cda94a-d581-11ef-9bb7-5254006ad19d.0", [RESPONSE]: ST:OK, lun_id: 31 pool_id: "c1c47c7e-a814-49a2-99b4-9e742b572e72" volume_id: "80eacc17-1a68-4048-85d6-9e6e7c48004d" created_time { seconds: 1740215912 nseconds: 393239553 } size: 322122547200 description: "" replica_num: 2 thin_provision: true throttling { iops: 0 iops_rd: 0 iops_wr: 0 iops_max: 0 iops_rd_max: 0 iops_wr_max: 0 iops_max_length: 1 iops_rd_max_length: 1 iops_wr_max_length: 1 bps: 0 bps_rd: 0 bps_wr: 0 bps_max: 0 bps_rd_max: 0 bps_wr_max: 0 bps_max_length: 1 bps_rd_max_length: 1 bps_wr_max_length: 1 } name: "4bad4ee9-a5a1-4a4f-86a5-71c7bf2ad853" naa: "3304d86a3d71ccae0" allowed_initiators: "iqn.2013-11.org.smartx:96d2924c-954e-4c08-82d9-cb9458f20889.96cda94a-d581-11ef-9bb7-5254006ad19d.0" stripe_num: 4 stripe_size: 262144 pr_info { gen: 0 }, [TIME]: 1205 us.
-I0222 17:58:41.713294  6364 iscsi_server.cc:1997] [UPDATE ISCSI LUN]: [REQUEST]: lun_path { pool_path { pool_name: "zbs-iscsi-datastore-1737250067411s" } lun_id: 31 } single_access: true, [RESPONSE]: ST:OK, lun_id: 31 pool_id: "c1c47c7e-a814-49a2-99b4-9e742b572e72" volume_id: "80eacc17-1a68-4048-85d6-9e6e7c48004d" created_time { seconds: 1740215912 nseconds: 393239553 } size: 322122547200 description: "" replica_num: 2 thin_provision: true throttling { iops: 0 iops_rd: 0 iops_wr: 0 iops_max: 0 iops_rd_max: 0 iops_wr_max: 0 iops_max_length: 1 iops_rd_max_length: 1 iops_wr_max_length: 1 bps: 0 bps_rd: 0 bps_wr: 0 bps_max: 0 bps_rd_max: 0 bps_wr_max: 0 bps_max_length: 1 bps_rd_max_length: 1 bps_wr_max_length: 1 } name: "4bad4ee9-a5a1-4a4f-86a5-71c7bf2ad853" naa: "3304d86a3d71ccae0" allowed_initiators: "iqn.2013-11.org.smartx:96d2924c-954e-4c08-82d9-cb9458f20889.96cda94a-d581-11ef-9bb7-5254006ad19d.0" single_access: true stripe_num: 4 stripe_size: 262144 pr_info { gen: 0 }, [TIME]: 1091 us.
-
-// 此时 lun 在 external_use = false 的 target 里，此时接入点分配到 10.189.0.18，是 cid 5，即他所在物理节点的 cid
-I0222 17:58:42.019794  6364 iscsi_server.cc:3483] [GET SERVICE PORTAL]: [REQUEST]: initiator: "iqn.2013-11.org.smartx:96d2924c-954e-4c08-82d9-cb9458f20889.96cda94a-d581-11ef-9bb7-5254006ad19d.0" target_name: "zbs-iscsi-datastore-1737250067411s" initiator_ip: "127.0.0.1" conn_server_ip: "127.0.0.1" local_access_ip: "10.189.0.18", [RESPONSE]: ST:OK, portal: "10.189.0.18:3261", [TIME]: 123 us.
-I0222 17:58:42.022046  6364 iscsi_server.cc:3483] [GET SERVICE PORTAL]: [REQUEST]: initiator: "iqn.2013-11.org.smartx:96d2924c-954e-4c08-82d9-cb9458f20889.96cda94a-d581-11ef-9bb7-5254006ad19d.0" target_name: "zbs-iscsi-datastore-1737250067411s" initiator_ip: "127.0.0.1" conn_server_ip: "127.0.0.1" local_access_ip: "10.189.0.18", [RESPONSE]: ST:OK, portal: "10.189.0.18:3261", [TIME]: 63 us.
-
-// 之后的写是 COW 
-I0222 17:59:00.323796  6364 meta_rpc_server.cc:1008] [COW PEXTENT]: pid: 110664 new pid: 112769 loc: [2 1 ] volume: name: "80eacc17-1a68-4048-85d6-9e6e7c48004d" size: 322122547200 created_time { seconds: 1740215912 nseconds: 393239553 } id: "80eacc17-1a68-4048-85d6-9e6e7c48004d" parent_id: "c1c47c7e-a814-49a2-99b4-9e742b572e72" origin_id: "f88c319e-3459-4fed-a011-7de68f034022" replica_num: 2 thin_provision: true iops_burst: 0 bps_burst: 0 throttling { iops: 0 iops_rd: 0 iops_wr: 0 iops_max: 0 iops_rd_max: 0 iops_wr_max: 0 iops_max_length: 1 iops_rd_max_length: 1 iops_wr_max_length: 1 bps: 0 bps_rd: 0 bps_wr: 0 bps_max: 0 bps_rd_max: 0 bps_wr_max: 0 bps_max_length: 1 bps_rd_max_length: 1 bps_wr_max_length: 1 } stripe_num: 4 stripe_size: 262144
-
-// 本地化聚集到 cid 5
-I0223 01:17:50.893507 35846 meta_rpc_server.cc:3983] Refresh preferred cid of extents. volume id: 80eacc17-1a68-4048-85d6-9e6e7c48004d cid: 5 pextents num: 0
+// c_cpp_properties.json
+{
+    "configurations": [
+        {
+            "name": "Linux",
+            "includePath": [
+                "${default}",
+                "${workspaceFolder}/**",
+                "/opt/rh/gcc-ztoolset-14/root/usr/include/**",
+                "/usr/include/**"
+            ],
+            "defines": [],
+            "compilerPath": "/opt/rh/gcc-ztoolset-14/root/usr/bin/g++",
+            "cStandard": "c17",
+            "cppStandard": "c++20",
+            "intelliSenseMode": "linux-gcc-x64"
+        }
+    ],
+    "version": 4
+}
 ```
-
-
-
-
 
 
 
