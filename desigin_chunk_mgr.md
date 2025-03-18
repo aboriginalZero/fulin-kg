@@ -30,6 +30,8 @@ Chunk 的信息与包含的 PExtent id 集合，考虑到单个 Chunk 上不太�
 
 当 chunk mgr 感知到节点拓扑结构变化时，会通知新的 topo info 给 service mgr，service mgr 会据此调整 chunk mgr 的服务副本分布以满足拓扑安全。
 
+不需要总是在心跳中传递 topo info version，当 chunk mgr 发现 topo 变化后，主动通知到对方（不同于目前在同一进程内用原子变量的 topo version，跨进程且大概率跨网络的场景，没法保证对方一定收到，所以需要周星期在心跳里传递 topo id）
+
 
 
 先理出一个大纲，需要考虑升级过程
@@ -267,6 +269,70 @@ Chunk 的信息与包含的 PExtent id 集合，考虑到单个 Chunk 上不太�
      
 
      是否需要为 iomesh 场景添加 node mgr 的概念？
+
+     
+
+     meta1 的节点注册（实际上仅有 chunk 注册）
+
+     1. tuna 行为
+        1. 调用 zbs-meta chunk register <rpc_ip> <rpc_port> [data_port]
+     2. chunk mgr 行为
+        1. 检查 license，最大允许物理节点个数、集群已运行时间；
+        2. 创建 chunk topo obj，若有需要也创建 node topo obj，chunk 的 parent 一定是 node；
+        3. 持久化 chunk、chunk topo obj；
+        4. 更新 topo version、node map version。
+
+     
+
+     meta2 的节点注册
+
+     区分 meta 注册和 chunk 注册
+
+     
+
+     meta2 的节点注册
+
+     1. tuna 行为
+        1. 
+     2. chunk mgr 行为
+
+     
+
+     不是所有的 Node 上都同时有 Chunk 和 Meta，比如存储节点上只有 Chunk、IOMesh 场景下的管理节点可能只有 Meta。Chunk 的注册还是保留
+
+     
+
+     meta2 里 tower 上需要暴露有元数据服务的概念吗？
+
+     比如也展示有元数据服务的位置吗？
+
+     
+
+     meta / chunk 需要有自身属于哪个物理节点的标志，这样物理节点移动了，作为 child 的所有 chunk 和 meta 都跟着移动。
+
+     
+
+     搞个 node mgr，管理节点层级的资源，为了保持兼容，还是放在 chunk mgr 里。
+
+     这样
+
+     
+
+     chunk mgr 的
+
+     貌似在 5.7.0 里就可以有 node mgr 和 node table
+
+     在 tower 上不暴露一个节点里有哪些 
+
+     每一个 node （每个 data ip 确定一个 node）有哪些
+
+     
+
+     是不是应该有个 node mgr，记录 node 的 data ip 跟 
+
+     node mgr 也集成到 chunk mgr 中
+
+     
 
      
 
