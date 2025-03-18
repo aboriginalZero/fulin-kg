@@ -262,84 +262,98 @@ Chunk 的信息与包含的 PExtent id 集合，考虑到单个 Chunk 上不太�
 
 12. 运维动作如扩缩容
 
-     这两部分关注下 servcie mgr 的设计文档
+      这两部分关注下 servcie mgr 的设计文档
 
-     目前拓扑的设计是，必须通过创建 chunk 来创建 node，在删除 chunk 后，node 会被自动删除。iomesh 下有不运行 chunk 的管理节点，没办法关联到 chunk/node 获取拓扑。chunk manager 最好能允许没有 chunk 的 node 存在，service manager 就能够通过 ip 将管理节点关联到 node 拓扑。或者把 chunk 这一级拓扑重命名为 service，元数据服务和数据服务共同使用这一拓扑层级，这样可以同时展示一个 node 是否运行元数据服务以及运行的数据服务的数量。chunk manager 在管理时需要能进行对这两种服务进行区分。
+      目前拓扑的设计是，必须通过创建 chunk 来创建 node，在删除 chunk 后，node 会被自动删除。iomesh 下有不运行 chunk 的管理节点，没办法关联到 chunk/node 获取拓扑。chunk manager 最好能允许没有 chunk 的 node 存在，service manager 就能够通过 ip 将管理节点关联到 node 拓扑。或者把 chunk 这一级拓扑重命名为 service，元数据服务和数据服务共同使用这一拓扑层级，这样可以同时展示一个 node 是否运行元数据服务以及运行的数据服务的数量。chunk manager 在管理时需要能进行对这两种服务进行区分。
 
-     
+      
 
-     是否需要为 iomesh 场景添加 node mgr 的概念？
+      是否需要为 iomesh 场景添加 node mgr 的概念？
 
-     
+      
 
-     meta1 的节点注册（实际上仅有 chunk 注册）
+      meta1 的节点注册（实际上仅有 chunk 注册）
 
-     1. tuna 行为
-        1. 调用 zbs-meta chunk register <rpc_ip> <rpc_port> [data_port]
-     2. chunk mgr 行为
-        1. 检查 license，最大允许物理节点个数、集群已运行时间；
-        2. 创建 chunk topo obj，若有需要也创建 node topo obj，chunk 的 parent 一定是 node；
-        3. 持久化 chunk、chunk topo obj；
-        4. 更新 topo version、node map version。
+      1. tuna 行为
+         1. 调用 zbs-meta chunk register <rpc_ip> <rpc_port> [data_port]
+      2. chunk mgr 行为
+         1. 检查 license，最大允许物理节点个数、集群已运行时间；
+         2. 创建 chunk topo obj，若有需要也创建 node topo obj，chunk 的 parent 一定是 node；
+         3. 持久化 chunk、chunk topo obj；
+         4. 更新 topo version、node map version。
 
-     
+      
 
-     meta2 的节点注册
+      meta2 的节点注册
 
-     区分 meta 注册和 chunk 注册
+      区分 meta 注册和 chunk 注册
 
-     
+      
 
-     meta2 的节点注册
+      meta2 的节点注册
 
-     1. tuna 行为
-        1. 
-     2. chunk mgr 行为
+      1. tuna 行为
+         1. 
+      2. chunk mgr 行为
 
-     
+      
 
-     不是所有的 Node 上都同时有 Chunk 和 Meta，比如存储节点上只有 Chunk、IOMesh 场景下的管理节点可能只有 Meta。Chunk 的注册还是保留
+      不是所有的 Node 上都同时有 Chunk 和 Meta，比如存储节点上只有 Chunk、IOMesh 场景下的管理节点可能只有 Meta。Chunk 的注册还是保留
 
-     
+      
 
-     meta2 里 tower 上需要暴露有元数据服务的概念吗？
+      meta2 里 tower 上需要暴露有元数据服务的概念吗？
 
-     比如也展示有元数据服务的位置吗？
+      比如也展示有元数据服务的位置吗？
 
-     
+      
 
-     meta / chunk 需要有自身属于哪个物理节点的标志，这样物理节点移动了，作为 child 的所有 chunk 和 meta 都跟着移动。
+      meta / chunk 需要有自身属于哪个物理节点的标志，这样物理节点移动了，作为 child 的所有 chunk 和 meta 都跟着移动。
 
-     
+      
 
-     搞个 node mgr，管理节点层级的资源，为了保持兼容，还是放在 chunk mgr 里。
+      搞个 node mgr，管理节点层级的资源，为了保持兼容，还是放在 chunk mgr 里。
 
-     这样
+      这样
 
-     
+      
 
-     chunk mgr 的
+      chunk mgr 的
 
-     貌似在 5.7.0 里就可以有 node mgr 和 node table
+      貌似在 5.7.0 里就可以有 node mgr 和 node table
 
-     在 tower 上不暴露一个节点里有哪些 
+      在 tower 上不暴露一个节点里有哪些 
 
-     每一个 node （每个 data ip 确定一个 node）有哪些
+      每一个 node （每个 data ip 确定一个 node）有哪些
 
-     
+      
 
-     是不是应该有个 node mgr，记录 node 的 data ip 跟 
+     是不是应该有个 node mgr，记录 node 的 data ip 跟 cid 的关系
 
      node mgr 也集成到 chunk mgr 中
 
      
 
+     搞个 node mgr，有如下好处：
+
+     1. 一个节点可能只有 meta，或者只有 chunk，或者同时有 meta 和 chunk，现有的基于 chunk 的设置未必适用；
+     2. 节点有是否维护模式的标记（持久化），若节点进入维护模式，该节点上的元数据服务 leader 需要提前迁出，数据服务需要进入 chunk 维护模式；
+     3. node 粒度的 topo info，同一个节点上的 meta serivce / chunk 拥有相同的 topo 信息，ring id 应该分开设置（元数据服务需要有 ring id 吗？）；
+
      
 
-     1. 增加节点的接口由 Service Manager 提供， Service Manager 在增加自身的节点流程也会调用 Chunk Manager 注册新的节点。节点增加后，新节点上的 Chunk 服务由外部的扩容流程（TUNA 提供）注册到 Chunk Manager 上
-     2. 移除节点，chunk mgr 应该还是复用之前提供的接口，需要看看代码，移除节点还是做了很多清理工作，需要理一遍。
-
      
+
+     为了便于兼容，node mgr 应该运行在 chunk mgr 里？
+
+      
+
+      
+
+      1. 增加节点的接口由 Service Manager 提供， Service Manager 在增加自身的节点流程也会调用 Chunk Manager 注册新的节点。节点增加后，新节点上的 Chunk 服务由外部的扩容流程（TUNA 提供）注册到 Chunk Manager 上
+      2. 移除节点，chunk mgr 应该还是复用之前提供的接口，需要看看代码，移除节点还是做了很多清理工作，需要理一遍。
+
+      
 
 13. 需要考虑一下对外提供哪些 rpc
 
