@@ -1,3 +1,143 @@
+meta1 中，每个节点已分配空间包含 4 部分，allocated space = thin space + new thin space + thick space + rx space。各项含义如下：
+
+1. thin space：本次 lsm 心跳上报的所有 thin 分片占用空间，若只考虑 replica，那一定是 256 KiB 的倍数；
+2. new thin space：两次 lsm 心跳上报之间新分配的 thin 分片占用空间，若只考虑 replica，那一定是 256 MiB 的倍数；
+3. thick space：所有 thick 分片占用空间，若只考虑 replica，那一定是 256 MiB 的倍数；
+4. rx space：节点作为恢复/迁移目的地的预留空间，若只考虑 replica，那一定是 256 MiB 的倍数，在没有恢复/迁移时总是为 0。
+
+在这个模式下，不同 Chunk 在占用相同空间的情况下持有的精简置备的 Extent 数量是不同的。在极端场景下比如稀疏的 thin extent 突然写入大量数据，会造成某些节点快速过载，此时期望通过节点容量均衡策略来均衡各个节点的已分配空间。
+
+
+
+thin space =  thin space (lsm report) + new thin space +  thin reserve space + thin rx space
+
+thick space = thick space (calculate by pid set) + thick reserve space + thick rx space
+
+对于 reserve / rx space，不论 thin / thick 都是按 256 MiB 来算。
+
+reserve space 用在 
+
+
+
+ReserveSpaceForAllocation 
+
+FreeSpaceForAllocation
+
+
+
+extent mgr 接受 chunk 的 extent 粒度的空间汇报，chunk 能提供吗？
+
+data report 每 5s 汇报一次，1 次汇报 10w 个，大数据量下更新太慢了，而 chunk 更新 thin_used_data_space 是每次 keepalive 都会更新一次，更实时一些。
+
+
+
+在 chunk mgr 上维护有哪些 pid 以及他们占用的空间
+
+
+
+meta2 中 chunk mgr 不清楚具体的 pid，只会有 pid_count 和 pid_space
+
+
+
+chunk mgr 还需要维护一个 new_thin_pids，每次 chunk 跟 chunk mgr 做 keepalive 的时候，都把他清空。
+
+
+
+recover 时，先找 chunk mgr 预留，预留时也需要携带 space version。
+
+
+
+每个 extent mgr 都有自己的 space version，chunk mgr 跟每个 extent mgr 的 session 里记录了 space version，后者这个 space version 只在每次 extent mgr 向他 report space 的时候更新？
+
+
+
+chunk mgr leader 为每个 exent mgr 都维护了：
+
+1. 一个 <space version, space info> 的预留空间相关的 map，space info 的含义是这个 extent mgr 视角里的每个 chunk 持有各种类型 pid 的 count 和 space。这个预留空间的方式可能是为 allocation，也可能是为 reposition 预留的空间；
+
+2. 一个 space version + space info，含义是 extent mgr 上一次 data report 时的 space version 和 space info
+
+   extent mgr 在 data report 之前，要先让 space version + 1，然后等待之前 space version 的空间分配请求都完成后（不论是 allocation 还是 reposition，不论是成功还是失败，预期他们都在一个 rpc 超时时间内完成），才统计此时的 pid count 和 space 给到 chunk mgr。
+
+3. 
+
+
+
+典型交互流程
+
+1. volume mgr 创建一个 thick volume；
+2. extent mgr 创建 lextent 以及为了创建 thick pextent 向 chunk mgr 申请预留空间；
+3. chunk mgr 根据当下各个 chunk 的负载情况，为这些 thick pextent 分配 loc，并且暂时记在预留空间里；
+4. extent mgr 拿到 locs 后，持久化 pextent，更新 pextent table，然后更新 chunk space table；
+5. extent mgr 汇总 chunk space table 中的信息，以 version = x 的 space info 汇报给 chunk mgr；
+6. chunk mgr 据此更新自己的 space 视图，并删除 version < x 的预留空间信息。
+
+
+
+> 在 Report Report 时，Extent Manager 会将 Space Version = x 立刻加一并记录 x + 1 时的 Chunk 空间信息。后续的分配请求使用 Space Version = x + 1 发送。此次 Report Space 则需要等待之前 Space Version 的空间分配请求完成，Report 的延迟取决于 RPC 设置的超时时间。
+
+是否可能出现，在收到所有 version <= x 的 alloc resp 前，发出了 version = x + 1 的 alloc 请求并收到了回复，那么此时在 chunk mgr 侧的预留空间就多算了，总体空间会偏大。
+
+
+
+等待之前 Space Version 的空间分配请求完成的方式
+
+最差需要等待一个 rpc 超时时间。
+
+每个 alloc for reposition / allocation request 之前先对这个 version 记录的 inflight req ++，
+
+extent mgr 要维护一个 version, inflight req 的 ordered map，在完成 chunk space info 更新后才 inflight req -- 
+
+
+
+chunk mgr 能收到 space version = x 的 report space 说明在 extent mgr 那 space version < x 的操作都已经进到 pid set 了。
+
+
+
+chunk mgr 视角里的 chunk 空间，等于最近一次 extent mgr 的 report space（其中的 space version = x） 中的 thick space + chunk 汇报的 thin_used_data_space + 以 x 为值，预留的部分
+
+预留空间可以只算会让他变多的部分，需要指明 cap / perf 和 thin / thick
+
+1. for allocation
+
+   预留成功后，extent mgr 在收到 alloc resp 后，在处理完 pextent table 后，对于他的 chunk space table，如果是 thin，放入 new_thin_pids，如果是 thick，放入 thick pids
+
+2. for reposition
+
+   只影响 reposition dst，不影响 src / replace
+
+   预留成功后，会放入 extent mgr 的 rx_pids
+
+
+
+每个 extent mgr 有自己的 space version，
+
+数据块真的在 extent mgr 分配了之后，chunk 给到 chunk mgr 的 keepalive 里才有意义
+
+
+
+extent mgr 需要上报的内容是 
+
+
+
+异常处理
+
+extent mgr 重启
+
+chunk 侧的预留信息还在，只是 session 断开重连，
+
+chunk mgr 重启
+
+所有预留空间信息都丢失了，在跟 extent mgr 建立 session 后，要求他们立即 report space 一次（这里可能会有较长的等待时间）
+
+
+
+
+
+平均分 migrate quota，虽然最终总会收敛，但可能让 migrate 慢在 meta 侧
+
+
+
 meta 改进设计
 
 **Chunk Manager**
