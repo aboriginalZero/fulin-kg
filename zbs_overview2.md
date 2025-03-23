@@ -1,3 +1,9 @@
+数据分配里可以提下 zbs
+
+
+
+
+
 ## 分片分配策略
 
 zbs 保证每个节点最多持有 1 个 PExtent 的一个分片，不论冗余类型是 replica 还是 ec，在分配每个数据块 PExtent 的分片位置时, zbs 都会根据集群负载（集群中负载最高的节点负载）以及各个 PExtent 的 prefer local 节点所处负载的不同，使用不同的分配策略，具体分片分配策略遵循如下原则：
@@ -466,3 +472,138 @@ lextent / pextent 被 gc 的一般流程
 ### gc garbage
 
 在 SweepGarbage 中，对于这些 garbage = 1 的 lextent / pextent，会先删除 db 中的相关数据，同步等待 access 放弃持有的相关 lease、删除 meta 持有的相关 lease 后，删除内存 lextent / pextent table 中的相关数据。
+
+## IO 限流
+
+### 业务 IO 限流
+
+从 zbs 5.6.0 开始，非常驻缓存卷的大部分业务 IO 将会写在性能层非常驻缓存区（perf thin space），当 perf thin space 下沉腾出空间的速率赶不上业务 IO 的写入速率时，可能出现容量层仍有空间，但 perf thin space 空间耗尽，用户 IO 写入失败，导致分片剔除甚至返回 IO Error。
+
+为了尽量避免出现此类问题，zbs 通过 flow control 机制来抑制用户 IO 的写入速率，为释放 perf thin space 的下沉 IO 争取时间。
+
+flow control 机制中包含 2 类角色：
+
+* flow manager (flow mgr)，工作在 LSM 侧，根据本地 LSM 提供的 perf thin 使用情况决定是否开启限流，按照一定的策略为各个 flow ctrl 颁发 app token；
+* flow controller (flow ctrl)，工作在 Access 侧，按一定周期向各个 flow mgr 索要 app token，对于每个 block 粒度的业务 IO，若有可用 token，直接放行，否则经过一定的超时时间后再下发。
+
+二者典型的交互流程如下：
+
+1. 各个 flow ctrl 往各个 flow mgr 发出 token 请求并等待 flow mgr 回复；
+2. 各个 flow mgr 以一定周期处理每个周期内收到的所有 flow ctrl 的请求，并发出一一对应的回复；
+3. 各个 flow ctrl 收到回复后，放行相关用户 IO，立即发送下一个请求给 flow mgr；
+4. 以上过程循环反复。
+
+当节点的 perf thin space 使用率超过 90% 开启限流，随后在低于 85% 时关闭限流。
+
+开启限流时，每个 flow manager 在每一轮可颁发的 app token 总数量与自身 perf thin space 使用率、容量层磁盘类型、磁盘数量相关。perf thin space 使用率越低、容量层磁盘数量越多、类型越好（NVME SSD > SATA SSD > SATA HDD），可颁发 token 总数量越多。定量计算参考 [Access for Tiering](https://docs.google.com/document/d/12P9oHQXEzRmOJ0RMdbdHoTF1_RkO7Ar_EUYoIAEKx08/edit?tab=t.0#heading=h.wth3yjpd4fxm) 。特别的，当 perf thin space 使用率超过 98%，可颁发 token 总数量为 0，这意味着用户 IO 只能等待 5s 超时后方能下发。
+
+flow mgr 总是等待一个时间周期（默认 100ms）收到每个 flow ctrl 的请求后，再计算各个 flow ctrl 的可用 token 数量，这样有利于公平分配 token。每次交互，各个 flow ctrl 从 flow mgr 得到的 app token 数量（granted_token）与 2 个因素有关：
+
+1. 本轮这个 flow ctrl 想要的 token 数量占所有 flow ctrl 想要的 token 数量的比例；
+2. 过去这个 flow ctrl 的 token 消费数量占所有 flow ctrl 的 token 消费数量的比例；
+
+对二者加权求和得到颁发比例，乘上可颁发 token 总数量，就是本轮这个 flow ctrl 能从 flow mgr 获得的 app token 数量。
+
+flow ctrl 以用户 IO 到来的顺序消费从各个 flow mgr 获得的 app token。举个例子，若有 2 个 IO 被拦截，分别为 loc=[1, 2, 3] 的 IO A 和 loc=[1, 2] 的 IO B，其中只有节点 2 3 开启限流，当 flow mgr 收到节点 2 的 app token 时，会让先到的 IO A 消费，尽管 IO A 可能因为缺失节点 3 的 app token 无法立即放行。另外，若用户 IO 长时间无法获取所有想要的 app token，会被超时放行，超时时间与 loc 中 perf thin 空间最紧张节点的使用率负相关，具体来说，若其使用率低于 90%，等于 0.5s，若其高于 98%，等于 5s，其余在 0.5s ~ 5s 之间。
+
+只有满足 perf、write、所在 block 未申请过 token 这 3 种条件的用户 IO 才需要 app token。特别的，若是一个 256 KiB 大小的 perf write（对应 LSM 行为是分配一个新的 pblob），那么认为一定没有申请过 token，本次写入需要 app token。另外，根据 IO 所在卷是否常驻缓存（perf thick or not），需要 app token 的节点列表 loc 组成并不相同，对于 perf thick write，仅临时副本所在节点需要 app token，对于 perf thin write，正常副本、临时副本所在节点、恢复/迁移目的地节点都需要 app token。
+
+### 内部 IO 限流
+
+#### 限流器
+
+在 zbs 集群中，除了用户 IO，系统内部也会产生用于恢复、下沉、抬升、迁移数据块的 IO，二者存在对集群有限的 IO 资源（网络/磁盘等）的竞争，为了避免内部 IO 影响业务 IO，需要有内部 IO 限流器，以指定速率拦截/放行内部 IO。
+
+每个节点的容量层与性能层有各自独立的内部 IO 限速器，以 block 为粒度拦截/放行内部 IO，实现上分为 2 个组件：
+
+* internal flow control：工作在 Access 侧、拦截/放行以自己作为 lease owner 收到的 internal io 的分布式限流器。
+* internal io throttle：工作在 LSM 侧、拦截/放行以自己作为 internal src 或 dst 收到的 internal io 的单机限流器；
+
+对于同一类型的内部 IO 而言，以先进先出的方式放行，当同时有多种内部 IO 共存时，默认会以 recover > sink = elevate > migrate 的优先级轮转放行，保证高优先级 IO 尽快完成，同时也避免低优先级 IO 迟迟不被调度。另外，不论当前限速器承载了多少数据量、已放行的 IO 是否完成，影响放行效果的因素只有内部 IO 限速（internal io speed limit）。大部分情况下，内部 IO 只要被 internal flow controller 放行，也会被 internal io throttle 直接放行。
+
+与 flow control 机制类似，internal flow control 机制中也有 internal flow controller（ifc）和 internal flow manager(ifm) 这 2 种角色。当 Access 通过心跳从 Meta 接受各种内部 IO 命令后（sink IO 特殊一些，可由 access 自行发起），以 block 为粒度，若 ifc 同时持有作为 ifm 的 internal src / dst chunk 颁发的 internal token，IO 将被放行，否则被拦截。更具体的，internal token 的颁发与消费规则参考 [ZBS 内部 IO 流控分析与改进](https://docs.google.com/document/d/128Lall-xo_EIPijNqf3IF4RclUhDGORWIgfY18h9cac/edit?tab=t.0#heading=h.qiis55i97kjd) 。
+
+从 zbs 5.6.1+ 采用新的内部 IO 流控机制之后，大多数情况下业务写 IO 不再会因为所访问的 Block 正处于恢复、下沉、迁移被内部 IO 限流阻塞时出现很大的 IO 延迟现象（业务读 IO 一直以来都不会）。
+
+#### 弹性调节
+
+为了避免内部 IO 影响业务 IO 以及充分利用 IO 资源，需要针对不同的业务 IO 负载自适应地调整内部 IO 限速，即智能调节（auto mode）。当业务处于高峰期，限制内部 IO 流量，而在业务相对空闲时，放开内部 IO 限速，让待变化的数据块尽快去到预期位置。
+
+Access 默认每 4s 检查自身是否需要调整内部 IO 限速，限速调整遵循快下降、慢上升的原则。对于每个节点来说，判断 IO 繁忙或空闲的指标是 iops 和 bps（延迟受 IO 大小、网络波动、磁盘故障影响明显，波动较大，并未采用），IO 流量包含本地（from local）流量和远程（from remote）流量两部分。
+
+弹性调节规则如下：
+
+1. 内部 IO 限速的默认值是最大值的 30%；
+2. 若业务 IO 的 iops / bps 超过繁忙阈值，每次将内部 IO 限速降低到当前限速的 50%，直到限速最小值；
+3. 若业务 IO 的 iops / bps 未超过繁忙阈值且内部 IO bps 超过当前限速的 80%，每次将内部 IO 限速提高到当前限速的 150%，直到限速最大值。
+
+zbs 默认运行在智能模式，由系统弹性调节内部 IO 限速。若需要人工设定，可通过 zbs cli 切换到静态模式（static mode）下进行，该模式下只允许对所有 chunk 设置相同的限速值，如果 chunk 自身硬件能力可提供的内部 IO 限速最大值小于静态设定值，只会使用内部 IO 限速最大值，另外不支持将限速设置为 0 MiB/s。
+
+不论哪种模式，各节点的内部 IO 限速最小值是 1MiB/s，内部 IO 限速最大值与业务 IO 繁忙阈值与节点硬件能力有关。
+
+业务 IO 繁忙阈值取决于所在层级已挂载且健康的磁盘类型和数量，大部分情况下，单一层级（容量层/性能层）中都会是相同类型的磁盘，如果混合部署了不同类型的磁盘，那么以最强类型的繁忙阈值为准（而非累加）。
+
+* NVME SSD：不论数量多少，只提供 500 MiB/s 的 bps、5000 的 iops
+* SATA SSD：不论数量多少，只提供 150 MiB/s 的 bps、1500 的 iops
+* SATA HDD：每块提供 20 MiB/s 的 bps、80 的 iops
+* Unknown： 不论数量多少，只提供 100 MiB/s 的 bps、100 的 iops
+
+内部 IO 限速最大值取决于磁盘限速和网络限速之间的最小值，其中网络限速最大值取决于集群是否开启 RDMA 以及存储网络带宽，磁盘限速最大值取决于所在层级已挂载且健康的磁盘类型和数量（虽然相同类型、型号的磁盘，在容量不同时磁盘能提供的 iops/bps 上限不同，比如 P5620 NVMe SSD 1.6 TB 跟 6.4TB 的 4k iops 上限分别是 20w 和 30w，但目前暂时还不需要如此精细的控制）。
+
+* 网络
+    * TCP： 40% * 存储网带宽
+    * RDMA：50% * 存储网带宽
+* 磁盘
+    * NVME SSD：每块提供 600 MiB/s 的带宽
+    * SATA SSD：每块提供 250 MiB/s 的带宽
+    * SATA HDD：每块提供 80 MiB/s 的带宽
+    * Unknown： 每块提供 100 MiB/s 的带宽
+
+以目前最常见的硬件组合（2 * NVME SSD + 4 * SATA HDD + 10 Gbps 网卡，未开启 RDMA）为例：
+
+* 性能层：业务 IO 繁忙阈值是 500 MiB/s 的 bps、5000 的 iops。内部 IO 限速最大值是 476.84 MiB/s（磁盘上限 = 2 * 600 = 1200 MiB/s，网络上限 = 40% * 10000 Mbps = 476.84 MiB/s，二者取最小值）；
+* 容量层：业务 IO 繁忙阈值是 80 MiB/s 的 bps、320 的 iops。内部 IO 限速最大值是 320 MiB/s（磁盘上限 = 4 * 80 = 320 MiB/s，网络上限 = 40% * 10000 Mbps = 476.84 MiB/s，二者取最小值）。
+
+### Cap IO 限流
+
+zbs 中为了避免 IO 长时间不返回，每个发往本地 LSM 的 IO 若在默认的 8s 内未完成，相关分片将被剔除。另外，zbs 中多个 Access 间、单个 Access 内都没有对所有类型的 IO 下发做统一并发度调控，这可能会导致不同 LSM 间的 IO 并发度、单个 LSM 内不同类型 IO 并发度差异都很大。
+
+以上 2 点事实可能会导致 LSM 先收到并发度很高的类型为 A 的 IO，让后到的、类型为 B 的 IO 有很长的排队延迟，容易引发 B IO 超时、分片剔除，进而影响数据安全。在开启分层之前，缓存击穿后 IO 将直接落在 SATA HDD 上，在分层之后，容量层与性能层相互独立，Cap IO 可以直接落在 SATA HDD 上，这个问题的出现概率大大增加了。
+
+为了尽量避免出现此类问题，从 zbs 5.6.0 开始，zbs 通过 Cap IO Throttle 来限制各节点的 Cap IO 并发度。
+
+当节点的容量层介质是 SATA HDD 时，对于所有的 Cap IO，不论是业务 IO 还是内部 IO，不论是读写 IO 还是非读写 IO，都需要经过工作在 pextent io handler / local io handler（位于 LSM 外围）的 Cap IO Throttle，由 Cap IO Throttle 根据各类 Cap IO 当前并发额度决定放行/拦截。当 Cap IO 发往 LSM 时，该类 IO 并发度加一，当 IO 从 LSM 返回时，该类 IO 并发度减一。
+
+实现上，考虑到从旧版本升级到 5.6.x 的集群中的存量数据块会被认为是 Cap Pextent，但它们实际上有可能在性能层（取决于 LSM 内部 writeback 的进度），如果限制了它们的业务 IO 并发度，可能导致业务 IO 延时极高，因此 Cap IO Throttle 不限制业务 Cap IO 的并发度。在此基础上，为了避免业务 CAP IO 并发度很高时，内部 Cap IO 没有机会下发，会将当前正在执行的业务 Cap IO 数量的一半作为内部 Cap IO 的并发度上限（这个处理方式有待后续优化）。
+
+默认配置下，各节点 Cap IO 总并发度上限 = 4 * SATA HDD 数量。每 100ms 根据各类 Cap IO 权重以及现有 IO 数量重新计算一次各类 Cap IO 的并发度上限。当某类 Cap IO 没有正在执行的 IO 时，本轮得到的并发度上限为 0，否则按各类 Cap IO 权重 recover : sink : elevate : migrate = 4 : 2 : 2 : 1 计算本轮得到的并发度上限。为了避免并发度突变时性能抖动明显，每一轮调整每类 IO 的并发度上限时只会在上一轮的基础上加/减一。
+
+为了保证数据块的 gen 始终有序，Cap IO Throttle 中同一 pid 的所有类型的 Cap IO 需要按 FIFO 顺序放行。在此基础上，为了保证 IO 优先级（app > recover > sink / elevate > migrate），允许后到的、高优先级的读写 Cap IO 提升先到的、但被拦截在低优先级等待队列的低优先级 Cap IO 到高优先级等待队列中，避免高优先级 IO 因低优先级 IO 长时间没有可用并发额度而迟迟无法执行。
+
+举个例子，假设 Cap IO Throttle 目前所有等待队列都没有可用并发额度，以下不同类型的 IO 都是同一个数据块的 IO，并有如下事件流：
+
+1. 来了 2 个 sink IO，那么这 2 个 IO 都会在 sink 等待队列中阻塞；
+2. 来了 1 个非读写 IO（比如 get gen），那么这 3 个 IO 都会在 sink 等待队列中阻塞；
+3. 来了 1 个 recover IO，那么这 4 个 IO 都会在 recover 等待队列中阻塞；
+4. 来了 1 个 APP IO，那么这 5 个 IO 都会在 APP 等待队列中阻塞。
+
+默认情况下 Cap IO Throttle 不限制 APP Cap IO 的并发度，可以认为 APP 等待队列是个并发额度无限大的队列，所以最迟在 100ms 后，上述 5 个 IO 都将被放行，且放行顺序会是先 sink 再非读写 IO 接着 recover 最后是 APP IO。
+
+Cap IO Throttle 具体实现参考 [Access for Tiering](https://docs.google.com/document/d/12P9oHQXEzRmOJ0RMdbdHoTF1_RkO7Ar_EUYoIAEKx08/edit?tab=t.0#heading=h.16o3ugr2s82p)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
