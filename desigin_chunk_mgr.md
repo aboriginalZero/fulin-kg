@@ -15,23 +15,11 @@ thick space = thick space (calculate by pid set) + thick reserve space + thick r
 
 对于 reserve / rx space，不论 thin / thick 都是按 256 MiB 来算。
 
-reserve space 用在 
-
 
 
 ReserveSpaceForAllocation 
 
 FreeSpaceForAllocation
-
-
-
-extent mgr 接受 chunk 的 extent 粒度的空间汇报，chunk 能提供吗？
-
-data report 每 5s 汇报一次，1 次汇报 10w 个，大数据量下更新太慢了，而 chunk 更新 thin_used_data_space 是每次 keepalive 都会更新一次，更实时一些。
-
-
-
-在 chunk mgr 上维护有哪些 pid 以及他们占用的空间
 
 
 
@@ -42,13 +30,7 @@ meta2 中 chunk mgr 不清楚具体的 pid，只会有 pid_count 和 pid_space
 chunk mgr 还需要维护一个 new_thin_pids，每次 chunk 跟 chunk mgr 做 keepalive 的时候，都把他清空。
 
 
-
 recover 时，先找 chunk mgr 预留，预留时也需要携带 space version。
-
-
-
-每个 extent mgr 都有自己的 space version，chunk mgr 跟每个 extent mgr 的 session 里记录了 space version，后者这个 space version 只在每次 extent mgr 向他 report space 的时候更新？
-
 
 
 chunk mgr leader 为每个 exent mgr 都维护了：
@@ -174,10 +156,6 @@ Chunk 的信息与包含的 PExtent id 集合，考虑到单个 Chunk 上不太�
 
 
 
-先理出一个大纲，需要考虑升级过程
-
-
-
 1. node 信息管理
 
    1. topo info 的 CURD
@@ -257,8 +235,6 @@ Chunk 的信息与包含的 PExtent id 集合，考虑到单个 Chunk 上不太�
    类似于 ifc 带宽的分配，
 
    chunk mgr 有个总额，
-
-   
 
    
 
