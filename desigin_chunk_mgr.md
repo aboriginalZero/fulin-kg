@@ -224,12 +224,6 @@ Chunk 的信息与包含的 PExtent id 集合，考虑到单个 Chunk 上不太�
 
    
 
-   每一轮下发命令总额由 extent mgr 自己来定，但是各个 chunk 的下发命令限制就跟 chunk mgr 交互来知晓。
-
-   在清理已完成的命令时，会清空 
-
-   
-
    sink 限制的是每个 lease owner 发起的数量
 
    类似于 ifc 带宽的分配，
@@ -268,7 +262,7 @@ Chunk 的信息与包含的 PExtent id 集合，考虑到单个 Chunk 上不太�
 
    不同于 elevate 和 migrate，cmd avail slot 会影响到 sink 的 lease owner 选择、recover 的 src / dst 选择，所以没法直接得到 waiting cmd num，以下考虑只按 executing_cmd_num 去做分配。
 
-   
+   只根据已有 
 
    如果 extent mgr 某个分片移除，需要把预留给他的 min 删掉。
 
@@ -338,12 +332,6 @@ Chunk 的信息与包含的 PExtent id 集合，考虑到单个 Chunk 上不太�
     1. 对于新创建的 cap / perf thick pextent，extent mgr 需要向 chunk mgr 发出批量的空间分配请求，chunk mgr 检查、预扣除、持久化后返回 extent mgr 数据块的 loc 信息
     2. cap / perf thin pextent 在实际写入、申请 write lease 的时候，需要 chunk mgr 分配空间。
 
-5. 响应 gc， 包括数据块制备类型转换、garbage petent 的删除，把 pid 从 chunk table 中的 pid set 删除；
-
-6. sink mgr，控制 drain mgr 的行为，包括根据集群平均负载设置下发 drain cmd 的频率、是否允许 drain parent / idle extent 之类的控制信息；
-
-    Sink 事件本身保持 Access 自主触发的机制。但是 Sink 模式，即是否需要加速 Sink 需要有全局视野的模块决定。因为 Chunk Manager 负责管理收集和管理集群中的空间状态。所以基于空间产生的策略调节部分由它负责比较自然
-
 7. remove && replace 的处理
 
     Access 在 IO 异常或者在完成 Recover Migrate 任务要调整 Location 时，将向对应 Lid/Pid （取决于 Pid 是否有自己的 Lease）所属的 Extent Manager 发出 Segment 变化请求。Extent Manager 先更新自己的 Location 信息后异步的通过心跳通知 Chunk Manager Location 变化信息（Pid 上报通常是分片的，但是对于刚刚变化过的 Extent 可以考虑有一个独立的快速上报在下次心跳里直接携带，以让空间变化更为灵敏一些）
@@ -364,7 +352,7 @@ Chunk 的信息与包含的 PExtent id 集合，考虑到单个 Chunk 上不太�
 
 8. license 检查中Chunk 数量和可分配的物理空间检查，license 以 service mgr 保存的为准，chunk mgr 向他拷贝一份
 
-    license 校验逻辑都放在 service mgr 中做， chunk mgr 给 service mgr 提供集群的 zone 数量、chunk 数量以及当前集群容量（需要放在心跳中吗？）。
+    license 校验逻辑都放在 service mgr 中做， chunk mgr 给 service mgr 提供集群的 zone 数量、chunk 数量以及当前集群容量（需要放在心跳中吗？还是等 service mgr 主动获取）。
 
 9. topo info 以 chunk mgr 保存的为准，在周期性心跳中跟其他 mgr 传递一个 topo info version，其他 mgr 收到后如果发现与自身的不同，那么主动找 chunk mgr 拉取最新的 topo info。
 
