@@ -54,6 +54,8 @@ I0325 20:53:28.586683 1495855 chunk_server_main.cc:181] v5.6.2-rc80.0; Built by:
 
 加一个获取 ifc token 的数量的统计。
 
+meta reposition 日志打印里，ever exist = false 时，多打印一下 healthy cids
+
 
 
 只有刚创建时，是 thick 才会报错，
@@ -88,8 +90,6 @@ win 不一样，初次扫描的时候如果是 thick，后面即使转 thin，�
 
 
 
-还是按 3 年规划，今年面试要面起来，国庆回来可以着手准备面试，要把除刷题外的其他东西都在平时准备好。
-
 1. 把 AI 用起来
 2. 把 zhihu 用起来，关注存储 + AI 相关工作
 3. 看技术书要及时做笔记，不然之后也忘了
@@ -102,8 +102,6 @@ win 不一样，初次扫描的时候如果是 thick，后面即使转 thin，�
     3. io reroute
 2. 了解 raft 协议，zbs 中 dbcluster 的使用
 3. 熟悉分布式系统的一些笼统概念
-
-
 
 
 
