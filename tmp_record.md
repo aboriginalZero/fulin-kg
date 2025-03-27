@@ -1,3 +1,57 @@
+```
+// 被创建时的 loc
+/var/log/zbs/zbs-metad.log.20250327-022151.9395:59834:I0327 03:37:14.919509 44213(meta-rpc-server) meta_rpc_server.cc:2410] [ALLOC PT_CAP PEXTENT FOR SINK]  lid: 202346 lentry: {epoch: 698993, perf_pid: 1476945, perf_epoch: 1476945, cap_pid: 1476946, cap_epoch: 1476946, prioritized: 0, garbage: 0, valid: 1, staging: 1, encrypt_metadata_id: 54, vextent_no: 64 }, perf_pentry: {loc: "[ 0:10 1:8 ]", alive loc: "[ 0:10 1:8 ]", epoch: 1476945, generation: 1, origin_pid: 1476167, origin_epoch: 1476167, ever_exist: 1, garbage: 0, valid: 1, expected_replica_num: 2, staging: 0, thin_provision: 1, preferred_cid: 1, even: 0, pt: "PT_PERF", rt: "RT_REPLICA", ec_param: "None", sinkable: 1, allocated_space: 536870912, thin_uniq_size: 64749568, thin_shared_size: 472121344, cow_from_snapshot: 1 }, cap_pentry: {loc: "[ 0:3 1:8 2:1 3:4 ]", alive loc: "[ 0:3 1:8 2:1 3:4 ]", epoch: 1476946, generation: 0, origin_pid: 0, origin_epoch: 0, ever_exist: 0, garbage: 0, valid: 1, expected_replica_num: 4, staging: 0, thin_provision: 1, preferred_cid: 1, even: 0, pt: "PT_CAP", rt: "RT_EC", ec_param: "name: "ISAL" k: 3 m: 1 rs_arg { w: 8 coding_tech: REED_SOL_VAN } block_size: 4096 ec_type: REED_SOLOMON", sinkable: 0, allocated_space: 0, thin_uniq_size: 0, thin_shared_size: 0, cow_from_snapshot: 0 }
+
+// 中间过程可以有空间
+
+// 符合局部化的是 [1, 4, 3, 2]
+I0327 04:01:21.477607 33073(recover-manager) recover_manager.cc:589] [REPOSITION] distribute migrate cmd for pid: 1476946 lid: 202346 src: 8 dst: 2 replace: 8 owner: 5 prefer local: 1 pt: PT_CAP is_thick: 0 rt: RT_EC ever exist: 0 current loc: [ 0:3 1:8 2:1 3:4 ] alive loc: [ ] dst_shard_idx: 1
+I0327 04:06:02.001063 33073(recover-manager) recover_manager.cc:589] [REPOSITION] distribute migrate cmd for pid: 1516385 lid: 220698 src: 2 dst: 10 replace: 2 owner: 2 prefer local: 6 pt: PT_CAP is_thick: 0 rt: RT_EC ever exist: 1 current loc: [ 0:2 1:8 2:9 3:6 ] alive loc: [ 0:2 1:8 2:9 3:6 ] dst_shard_idx: 0
+I0327 04:06:02.708657 44213(meta-rpc-server) meta_rpc_server.cc:7069] [ENABLE SCAN RECOVER IMMEDIATE]: [REQUEST]: , [RESPONSE]: ST:OK, , [TIME]: 0 us.
+
+// 这个 migrate 的过程里，检查了 loc 跟 replace cid 的关系
+
+0327 04:06:18 附近，cid 5 和 8 跟 leader cid 7 心跳失败，后续发起 recover
+
+-rw-r--r--   1 root root   2963172 Mar 27 04:06 zbs-chunkd.log.20250327-040334.39447
+-rw-r--r--   1 root root      4096 Mar 27 04:06 zbs-chunkd.log.20250327-040621.34450
+-rw-r--r--   1 root root  52429097 Mar 27 06:10 zbs-chunkd.log.20250327-041006.5644
+-rw-r--r--   1 root root  52428961 Mar 27 06:43 zbs-chunkd.log.20250327-061038.5644
+```
+
+
+
+
+
+```
+/var/log/zbs/zbs-chunkd.log.20250327-075624.10705:17755:I0327 07:56:29.515724 10763(c1-sess-follow) access_handler.cc:811] Session created: session_epoch { uuid: "326cdf10-7e14-4a8e-88d1-ea6862c8e3e8" epoch: 1066222722 } lease_expire_ns: 6333821776196
+/var/log/zbs/zbs-chunkd.log.20250327-075624.10705:18374:I0327 07:56:30.569005 10710(c1-chunk-main) meta.h:533] Set session uuid: 326cdf10-7e14-4a8e-88d1-ea6862c8e3e8
+/var/log/zbs/zbs-chunkd.log.20250327-075624.10705:29240:I0327 08:00:05.111052 10710(c1-chunk-main) recover_handler.cc:90] [REPOSITION] get notification, put cmd into pending queue: pid: 1677307 lease { owner { uuid: "326cdf10-7e14-4a8e-88d1-ea6862c8e3e8" ip: "10.0.128.25" num_ip: 427819018 port: 10201 cid: 3 secondary_data_ip: "20.0.128.25" zone: "default" scvm_mode_host_data_ip: "" alive_sec: 214 machine_uuid: "82094f12-0607-11f0-8d4f-d5e3e1daaf82" } pid: 296982 location: 524803 epoch: 793629 expected_replica_num: 3 } dst_chunk: 7 replace_chunk: 3 src_chunk: 3 is_migrate: true epoch: 1677307 active_location: 524803 pextent_type: PT_PERF thin_provision: true start_ms: 6370359
+
+/var/log/zbs/zbs-chunkd.log.20250327-080300.46259:19148:I0327 08:03:04.011291 46316(c1-sess-follow) session_follower.cc:706] Leave old session: session_epoch { uuid: "326cdf10-7e14-4a8e-88d1-ea6862c8e3e8" epoch: 298503357 } group: "access" lease_expire_ns: 15973996034999 items { key: "ZBS-ISCSI" value: "dummy" type: ITEM_TYPE_ISCSI } items { key: "has_auto_special_recover_ability" value: "true" type: ITEM_TYPE_BASIC_INFO } items { key: "has_chunk_zk_session_ability" value: "true" type: ITEM_TYPE_BASIC_INFO } items { key: "has_config_push_ability" value: "true" type: ITEM_TYPE_BASIC_INFO } items { key: "has_dc_multipath_ability" value: "true" type: ITEM_TYPE_BASIC_INFO } items { key: "has_encryption_ability" value: "true" type: ITEM_TYPE_BASIC_INFO } items { key: "has_internal_flow_control_ability" value: "true" type: ITEM_TYPE_BASIC_INFO } items { key: "has_lextent_ability" value: "true" type: ITEM_TYPE_BASIC_INFO } items { key: "has_offload_unmap_ability" value: "true" type: ITEM_TYPE_BASIC_INFO } items { key: "has_temporary_replica_ability" value: "true" type: ITEM_TYPE_BASIC_INFO } items { key: "has_thick_extent_feature_ability" value: "true" type: ITEM_TYPE_BASIC_INFO } items { key: "has_tiering_ability" value: "true" type: ITEM_TYPE_BASIC_INFO } items { key: "has_unmap_ability" value: "true" type: ITEM_TYPE_BASIC_INFO } items { key: "host_data_ip" value: "" type: ITEM_TYPE_BASIC_INFO } items { key: "ip" value: "10.0.128.25" type: ITEM_TYPE_BASIC_INFO } items { key: "machine_id" value: "82094f12-0607-11f0-8d4f-d5e3e1daaf82" type: ITEM_TYPE_BASIC_INFO } items { key: "port" value: "10201" type: ITEM_TYPE_BASIC_INFO } items { key: "sec_data_ip" value: "20.0.128.25" type: ITEM_TYPE_BASIC_INFO } items { key: "sec_valid" value: "true" type: ITEM_TYPE_BASIC_INFO } items { key: "zone" value: "default" type: ITEM_TYPE_BASIC_INFO }
+
+
+
+
+I0327 11:46:31.903249 4025567 chunk_server_main.cc:181] v5.6.2-rc80.0; Built by: root; workdir: /root/zbs/rpm/rpmbuild/BUILD/zbs-5.6.2; on: e664e844a469; at: 2025-03-04T20:08:15; os: Linux; arch: x86_64; os version: 5.10.0-202.0.0.el7.v28.x86_64; major version: 5; minor version: 6; update version: 2; extra version: rc80; spdk version: 6ed235ad3; dpdk version: d653502554; revision: 0; cmake: 3.20.2; generator: /usr/bin/ninja-build; cc: GNU; cxx: GNU; compiler version: 7.3.0; features: systemd tracing rdma counters; compiler features: Release -march=znver1 -mno-aes -mno-pclmul -mno-sha -mno-rdseed -mno-rdrnd c++17 debuginfo tcmalloc sg_io cds_wfcq_ptr_t cgroup cgroup_log pthread harden pic pie warning werror; vendor: SMTX; edition: ENTERPRISE; mode: HCI;
+==== Recent Changes Start:
+4b0a3bb87 ZBS-29015 Persistent extent when ever_exist changed
+022217667 ZBS-29017 access: ec should not RemoveReplica with empty replica list
+
+
+I0325 20:53:28.586683 1495855 chunk_server_main.cc:181] v5.6.2-rc80.0; Built by: root; workdir: /root/zbs/rpm/rpmbuild/BUILD/zbs-5.6.2; on: e664e844a469; at: 2025-03-04T20:08:15; os: Linux; arch: x86_64; os version: 5.10.0-202.0.0.el7.v28.x86_64; major version: 5; minor version: 6; update version: 2; extra version: rc80; spdk version: 6ed235ad3; dpdk version: d653502554; revision: 0; cmake: 3.20.2; generator: /usr/bin/ninja-build; cc: GNU; cxx: GNU; compiler version: 7.3.0; features: systemd tracing rdma counters; compiler features: Release -march=znver1 -mno-aes -mno-pclmul -mno-sha -mno-rdseed -mno-rdrnd c++17 debuginfo tcmalloc sg_io cds_wfcq_ptr_t cgroup cgroup_log pthread harden pic pie warning werror; vendor: SMTX; edition: ENTERPRISE; mode: HCI;
+==== Recent Changes Start:
+4b0a3bb87 ZBS-29015 Persistent extent when ever_exist changed
+022217667 ZBS-29017 access: ec should not RemoveReplica with empty replica list
+243554ab0 ZBS-29068 bdev: fix the incompatible vendor name
+```
+
+
+
+
+
+
+
 加一个获取 ifc token 的数量的统计。
 
 
