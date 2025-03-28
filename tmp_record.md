@@ -48,13 +48,11 @@ I0325 20:53:28.586683 1495855 chunk_server_main.cc:181] v5.6.2-rc80.0; Built by:
 
 
 
-
-
-
-
 加一个获取 ifc token 的数量的统计。
 
-meta reposition 日志打印里，ever exist = false 时，多打印一下 healthy cids
+zbs cli 支持手动迁移。
+
+
 
 
 
