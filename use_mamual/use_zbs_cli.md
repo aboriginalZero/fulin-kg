@@ -85,7 +85,7 @@ source scripts/init_build_env.sh
 pip install -e .
 # 指定自己嵌套集群的 meta leader ip，存储 IP 或管理 IP 都可以
 # 如果 zbs-chunk 的命令，填的 chunk ip 如果下线，请求就会失败
-zbs-meta --meta_ip <meta_leader_mgt_ip> migrate get_mode_info
+zbs-meta --meta_ip <meta_leader_mgt_ip> --meta_port 10206 migrate get_mode_info
 zbs-chunk --chunk_ip <chunk_mgt_ip> internal_io get 
 ```
 

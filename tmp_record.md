@@ -1,88 +1,150 @@
+172.20.134.154 上的 yiwu 目录
+
 ```
-// 被创建时的 loc
-/var/log/zbs/zbs-metad.log.20250327-022151.9395:59834:I0327 03:37:14.919509 44213(meta-rpc-server) meta_rpc_server.cc:2410] [ALLOC PT_CAP PEXTENT FOR SINK]  lid: 202346 lentry: {epoch: 698993, perf_pid: 1476945, perf_epoch: 1476945, cap_pid: 1476946, cap_epoch: 1476946, prioritized: 0, garbage: 0, valid: 1, staging: 1, encrypt_metadata_id: 54, vextent_no: 64 }, perf_pentry: {loc: "[ 0:10 1:8 ]", alive loc: "[ 0:10 1:8 ]", epoch: 1476945, generation: 1, origin_pid: 1476167, origin_epoch: 1476167, ever_exist: 1, garbage: 0, valid: 1, expected_replica_num: 2, staging: 0, thin_provision: 1, preferred_cid: 1, even: 0, pt: "PT_PERF", rt: "RT_REPLICA", ec_param: "None", sinkable: 1, allocated_space: 536870912, thin_uniq_size: 64749568, thin_shared_size: 472121344, cow_from_snapshot: 1 }, cap_pentry: {loc: "[ 0:3 1:8 2:1 3:4 ]", alive loc: "[ 0:3 1:8 2:1 3:4 ]", epoch: 1476946, generation: 0, origin_pid: 0, origin_epoch: 0, ever_exist: 0, garbage: 0, valid: 1, expected_replica_num: 4, staging: 0, thin_provision: 1, preferred_cid: 1, even: 0, pt: "PT_CAP", rt: "RT_EC", ec_param: "name: "ISAL" k: 3 m: 1 rs_arg { w: 8 coding_tech: REED_SOL_VAN } block_size: 4096 ec_type: REED_SOLOMON", sinkable: 0, allocated_space: 0, thin_uniq_size: 0, thin_shared_size: 0, cow_from_snapshot: 0 }
-
-// 中间过程可以有空间
-
-// 符合局部化的是 [1, 4, 3, 2]
-I0327 04:01:21.477607 33073(recover-manager) recover_manager.cc:589] [REPOSITION] distribute migrate cmd for pid: 1476946 lid: 202346 src: 8 dst: 2 replace: 8 owner: 5 prefer local: 1 pt: PT_CAP is_thick: 0 rt: RT_EC ever exist: 0 current loc: [ 0:3 1:8 2:1 3:4 ] alive loc: [ ] dst_shard_idx: 1
-I0327 04:06:02.001063 33073(recover-manager) recover_manager.cc:589] [REPOSITION] distribute migrate cmd for pid: 1516385 lid: 220698 src: 2 dst: 10 replace: 2 owner: 2 prefer local: 6 pt: PT_CAP is_thick: 0 rt: RT_EC ever exist: 1 current loc: [ 0:2 1:8 2:9 3:6 ] alive loc: [ 0:2 1:8 2:9 3:6 ] dst_shard_idx: 0
-I0327 04:06:02.708657 44213(meta-rpc-server) meta_rpc_server.cc:7069] [ENABLE SCAN RECOVER IMMEDIATE]: [REQUEST]: , [RESPONSE]: ST:OK, , [TIME]: 0 us.
-
-// 这个 migrate 的过程里，检查了 loc 跟 replace cid 的关系
-
-0327 04:06:18 附近，cid 5 和 8 跟 leader cid 7 心跳失败，后续发起 recover
-
--rw-r--r--   1 root root   2963172 Mar 27 04:06 zbs-chunkd.log.20250327-040334.39447
--rw-r--r--   1 root root      4096 Mar 27 04:06 zbs-chunkd.log.20250327-040621.34450
--rw-r--r--   1 root root  52429097 Mar 27 06:10 zbs-chunkd.log.20250327-041006.5644
--rw-r--r--   1 root root  52428961 Mar 27 06:43 zbs-chunkd.log.20250327-061038.5644
+// cid2
+p (('zbs::meta::MetaServer')*0x5615f4b42000)->context_->chunk_table->chunk_table_
+p ('::zbs::meta::ChunkTableEntry')(*0x5615f545fb00)
+p ('::zbs::ChunkSpaceInfo')(*0x5615f550ef00)
 ```
 
 
 
-
+一定是被 insert 到 cap_thick_reserved_pids，但是没有被 erase，都是 ec 相关的
 
 ```
-/var/log/zbs/zbs-chunkd.log.20250327-075624.10705:17755:I0327 07:56:29.515724 10763(c1-sess-follow) access_handler.cc:811] Session created: session_epoch { uuid: "326cdf10-7e14-4a8e-88d1-ea6862c8e3e8" epoch: 1066222722 } lease_expire_ns: 6333821776196
-/var/log/zbs/zbs-chunkd.log.20250327-075624.10705:18374:I0327 07:56:30.569005 10710(c1-chunk-main) meta.h:533] Set session uuid: 326cdf10-7e14-4a8e-88d1-ea6862c8e3e8
-/var/log/zbs/zbs-chunkd.log.20250327-075624.10705:29240:I0327 08:00:05.111052 10710(c1-chunk-main) recover_handler.cc:90] [REPOSITION] get notification, put cmd into pending queue: pid: 1677307 lease { owner { uuid: "326cdf10-7e14-4a8e-88d1-ea6862c8e3e8" ip: "10.0.128.25" num_ip: 427819018 port: 10201 cid: 3 secondary_data_ip: "20.0.128.25" zone: "default" scvm_mode_host_data_ip: "" alive_sec: 214 machine_uuid: "82094f12-0607-11f0-8d4f-d5e3e1daaf82" } pid: 296982 location: 524803 epoch: 793629 expected_replica_num: 3 } dst_chunk: 7 replace_chunk: 3 src_chunk: 3 is_migrate: true epoch: 1677307 active_location: 524803 pextent_type: PT_PERF thin_provision: true start_ms: 6370359
-
-/var/log/zbs/zbs-chunkd.log.20250327-080300.46259:19148:I0327 08:03:04.011291 46316(c1-sess-follow) session_follower.cc:706] Leave old session: session_epoch { uuid: "326cdf10-7e14-4a8e-88d1-ea6862c8e3e8" epoch: 298503357 } group: "access" lease_expire_ns: 15973996034999 items { key: "ZBS-ISCSI" value: "dummy" type: ITEM_TYPE_ISCSI } items { key: "has_auto_special_recover_ability" value: "true" type: ITEM_TYPE_BASIC_INFO } items { key: "has_chunk_zk_session_ability" value: "true" type: ITEM_TYPE_BASIC_INFO } items { key: "has_config_push_ability" value: "true" type: ITEM_TYPE_BASIC_INFO } items { key: "has_dc_multipath_ability" value: "true" type: ITEM_TYPE_BASIC_INFO } items { key: "has_encryption_ability" value: "true" type: ITEM_TYPE_BASIC_INFO } items { key: "has_internal_flow_control_ability" value: "true" type: ITEM_TYPE_BASIC_INFO } items { key: "has_lextent_ability" value: "true" type: ITEM_TYPE_BASIC_INFO } items { key: "has_offload_unmap_ability" value: "true" type: ITEM_TYPE_BASIC_INFO } items { key: "has_temporary_replica_ability" value: "true" type: ITEM_TYPE_BASIC_INFO } items { key: "has_thick_extent_feature_ability" value: "true" type: ITEM_TYPE_BASIC_INFO } items { key: "has_tiering_ability" value: "true" type: ITEM_TYPE_BASIC_INFO } items { key: "has_unmap_ability" value: "true" type: ITEM_TYPE_BASIC_INFO } items { key: "host_data_ip" value: "" type: ITEM_TYPE_BASIC_INFO } items { key: "ip" value: "10.0.128.25" type: ITEM_TYPE_BASIC_INFO } items { key: "machine_id" value: "82094f12-0607-11f0-8d4f-d5e3e1daaf82" type: ITEM_TYPE_BASIC_INFO } items { key: "port" value: "10201" type: ITEM_TYPE_BASIC_INFO } items { key: "sec_data_ip" value: "20.0.128.25" type: ITEM_TYPE_BASIC_INFO } items { key: "sec_valid" value: "true" type: ITEM_TYPE_BASIC_INFO } items { key: "zone" value: "default" type: ITEM_TYPE_BASIC_INFO }
-
-
-
-
-I0327 11:46:31.903249 4025567 chunk_server_main.cc:181] v5.6.2-rc80.0; Built by: root; workdir: /root/zbs/rpm/rpmbuild/BUILD/zbs-5.6.2; on: e664e844a469; at: 2025-03-04T20:08:15; os: Linux; arch: x86_64; os version: 5.10.0-202.0.0.el7.v28.x86_64; major version: 5; minor version: 6; update version: 2; extra version: rc80; spdk version: 6ed235ad3; dpdk version: d653502554; revision: 0; cmake: 3.20.2; generator: /usr/bin/ninja-build; cc: GNU; cxx: GNU; compiler version: 7.3.0; features: systemd tracing rdma counters; compiler features: Release -march=znver1 -mno-aes -mno-pclmul -mno-sha -mno-rdseed -mno-rdrnd c++17 debuginfo tcmalloc sg_io cds_wfcq_ptr_t cgroup cgroup_log pthread harden pic pie warning werror; vendor: SMTX; edition: ENTERPRISE; mode: HCI;
-==== Recent Changes Start:
-4b0a3bb87 ZBS-29015 Persistent extent when ever_exist changed
-022217667 ZBS-29017 access: ec should not RemoveReplica with empty replica list
-
-
-I0325 20:53:28.586683 1495855 chunk_server_main.cc:181] v5.6.2-rc80.0; Built by: root; workdir: /root/zbs/rpm/rpmbuild/BUILD/zbs-5.6.2; on: e664e844a469; at: 2025-03-04T20:08:15; os: Linux; arch: x86_64; os version: 5.10.0-202.0.0.el7.v28.x86_64; major version: 5; minor version: 6; update version: 2; extra version: rc80; spdk version: 6ed235ad3; dpdk version: d653502554; revision: 0; cmake: 3.20.2; generator: /usr/bin/ninja-build; cc: GNU; cxx: GNU; compiler version: 7.3.0; features: systemd tracing rdma counters; compiler features: Release -march=znver1 -mno-aes -mno-pclmul -mno-sha -mno-rdseed -mno-rdrnd c++17 debuginfo tcmalloc sg_io cds_wfcq_ptr_t cgroup cgroup_log pthread harden pic pie warning werror; vendor: SMTX; edition: ENTERPRISE; mode: HCI;
-==== Recent Changes Start:
-4b0a3bb87 ZBS-29015 Persistent extent when ever_exist changed
-022217667 ZBS-29017 access: ec should not RemoveReplica with empty replica list
-243554ab0 ZBS-29068 bdev: fix the incompatible vendor name
+(gdb) p ('::zbs::ChunkSpaceInfo')(*0x5615f550ef00)
+$26 = {<google::protobuf::Message> = {<google::protobuf::MessageLite> = {_vptr.MessageLite = 0x5615f2dc07e0 <vtable for zbs::ChunkSpaceInfo+16>, _internal_metadata_ = {ptr_ = 0, static kUnknownFieldsTagMask = 1, static kMessageOwnedArenaTagMask = 2,
+        static kPtrTagMask = 3, static kPtrValueMask = -4}}, <No data fields>}, static kIndexInFileMessages = 48, static _class_data_ = {
+    copy_to_from = 0x5615f2a0ccc0 <google::protobuf::Message::CopyWithSourceCheck(google::protobuf::Message&, google::protobuf::Message const&)>,
+    merge_to_from = 0x5615f2641530 <zbs::ChunkSpaceInfo::MergeImpl(google::protobuf::Message&, google::protobuf::Message const&)>}, {_impl_ = {_has_bits_ = {has_bits_ = {4261412863, 127}}, _cached_size_ = {size_ = {<std::__atomic_base<int>> = {static _S_alignment = 4,
+            _M_i = 0}, static is_always_lock_free = true}}, valid_data_space_ = 322116255744, used_data_space_ = 7247757312, provisioned_data_space_ = 301056131072, valid_cache_space_ = 187902722048, used_cache_space_ = 0, id_ = 2, temporary_replica_num_ = 0,
+      dirty_cache_space_ = 1879027220, total_data_capacity_ = 322116255744, failure_data_space_ = 0, failure_cache_space_ = 0, total_cache_capacity_ = 187902722048, temporary_replica_space_ = 0, num_rx_pids_ = 0, num_tx_pids_ = 0, allocated_data_space_ = 301056131072,
+      num_reserved_pids_ = 3871, num_recover_src_pids_ = 0, thin_used_data_space_ = 0, perf_valid_data_space_ = 187902722048, perf_used_data_space_ = 0, perf_total_data_capacity_ = 187902722048, perf_failure_data_space_ = 0, planned_prioritized_space_ = 1879027220,
+      allocated_prioritized_space_ = 1610612736, downgraded_prioritized_space_ = 0, perf_allocated_data_space_ = 1879027220, perf_thin_used_data_space_ = 0, perf_num_rx_pids_ = 0, perf_num_tx_pids_ = 0, perf_num_reserved_pids_ = 0, perf_num_recover_src_pids_ = 0,
+      perf_planned_space_ = 187902722048, valid_free_cache_space_ = 187902722048, perf_thick_reserved_space_ = 1878786048, perf_thick_used_data_space_ = 0, perf_thin_inherited_space_ = 0, thin_inherited_space_ = 0, prioritized_num_rx_pids_ = 0}}}
 ```
 
 
 
-加一个获取 ifc token 的数量的统计。
-
-zbs cli 支持手动迁移。
 
 
+日志可以统一改成 ShortDebugInfo
 
 
 
-只有刚创建时，是 thick 才会报错，
-
-如果 thick 转 thin 后再转换 thick，并不会报错
-
-```
-[root@localhost ~]# blkdiscard /dev/sdb
-blkdiscard: /dev/sdb: BLKDISCARD ioctl failed: Operation not supported
-```
-
-thick 转 thin 后的 unmap，客户端虽然还会有报错，但是 unmap 是有效果的
+如果被 sync 过，lsm 会给 ever exist = false 的分配元数据，那么之后也会 data report，这样就会在 alive loc 里
 
 
 
-thick 转 thin 后的第一次 unmap，会报错，第二次就不会了（这个过程可能 centos8 内核自动做了 iscsi session refresh）
+chunk
 
 ```
-[root@localhost ~]# blkdiscard /dev/sdb
-blkdiscard: /dev/sdb: BLKDISCARD ioctl failed: Operation not supported
-[root@localhost ~]# blkdiscard /dev/sdb
-[root@localhost ~]#
+// 1  2 3 4 5
+// 9 10 6 7 8 
+
+// cid3 的日志
+I0327 08:03:07.846385 78777(access-manager) chunk_table.cc:1557] Chunk 3 status change: CHUNK_STATUS_INITIALIZING --> CHUNK_STATUS_CONNECTED_HEALTHY
+
+
+// 申请
+107634:I0327 07:09:29.302529 22408(c1-chunk-main) drain_handler.h:65] [DRAIN EXTENT]: receive new cmd, lid: 280045 lepoch: 776692 pid: 1640788 perf_epoch: 1640788 cid: 5 start_ms: 12669024 timeout_ms: 1200000
+127507:I0327 07:11:35.370658 22408(c1-chunk-main) drain_handler.cc:619] [DRAIN EXTENT]: Handle drain cmd, lid: 280045 lepoch: 776692 pid: 1640788 perf_epoch: 1640788 cid: 5 start_ms: 10819473 timeout_ms: 1170000
+127510:W0327 07:11:35.371354 22408(c1-chunk-main) drain_handler.cc:556] get lease for drain again, current session: 86f720b0-b760-46a2-a44a-d4cdfaebb3d5, lease: lease_id: 280045, lease_epoch: 776692, proxy_lid: 0, proxy_epoch: 0, owner: 1, cow: 0, expired: 1, version: "LV_LAYERED"  perf_pextent_info: pid: 1640788, epoch: 1640788, origin_pid: 1639933, origin_epoch: 1639933, ever_exist: 1, meta_generation: 1, expect_replica_num: 3, loc: "[5 1 4 ]", cow_from_snapshot: 1  capacity_pextent_info: pid: 1640789, epoch: 1640789, origin_pid: 0, origin_epoch: 0, ever_exist: 0, meta_generation: 0, expect_replica_num: 4, loc: "[ 0:1 1:4 2:3 3:5 ]", cow_from_snapshot: 0 , ec_param: name: "ISAL" k: 2 m: 2 rs_arg { w: 8 coding_tech: REED_SOL_VAN } block_size: 4096 ec_type: REED_SOLOMON, cmd: lid: 280045
+127517:E0327 07:11:35.371470 22408(c1-chunk-main) drain_handler.h:130] [DRAIN EXTENT]: failed to run cmd, cmd: lid: 280045 lepoch: 776692 pid: 1640788 perf_epoch: 1640788 cid: 5 start_ms: 10819473 timeout_ms: 1170000, st: [ENotOwner]: current session: 86f720b0-b760-46a2-a44a-d4cdfaebb3d5, lease: lease_id: 280045, lease_epoch: 776692, proxy_lid: 0, proxy_epoch: 0, owner: 1, cow: 0, expired: 1, version: "LV_LAYERED"  perf_pextent_info: pid: 1640788, epoch: 1640788, origin_pid: 1639933, origin_epoch: 1639933, ever_exist: 1, meta_generation: 1, expect_replica_num: 3, loc: "[5 1 4 ]", cow_from_snapshot: 1  capacity_pextent_info: pid: 1640789, epoch: 1640789, origin_pid: 0, origin_epoch: 0, ever_exist: 0, meta_generation: 0, expect_replica_num: 4, loc: "[ 0:1 1:4 2:3 3:5 ]", cow_from_snapshot: 0 , ec_param: name: "ISAL" k: 2 m: 2 rs_arg { w: 8 coding_tech: REED_SOL_VAN } block_size: 4096 ec_type: REED_SOLOMON
+
+
+// 中间的相关变化，cid3 在 07:11:36 expired，08:03:07 才恢复 healthy
+34162:I0327 07:11:36.039108 104695(access-manager) chunk_table.cc:1557] Chunk 3 status change: CHUNK_STATUS_CONNECTED_HEALTHY --> CHUNK_STATUS_SESSION_EXPIRED
+34290:I0327 07:11:37.625046 104695(access-manager) chunk_table.cc:1557] Chunk 6 status change: CHUNK_STATUS_CONNECTED_HEALTHY --> CHUNK_STATUS_SESSION_EXPIRED
+39497:I0327 07:11:52.741299 104695(access-manager) chunk_table.cc:1557] Chunk 8 status change: CHUNK_STATUS_CONNECTED_HEALTHY --> CHUNK_STATUS_SESSION_EXPIRED
+39500:I0327 07:11:52.741544 104695(access-manager) chunk_table.cc:1557] Chunk 5 status change: CHUNK_STATUS_CONNECTED_HEALTHY --> CHUNK_STATUS_SESSION_EXPIRED
+461:I0327 08:03:03.243613 78777(access-manager) chunk_table.cc:1557] Chunk 2 status change: CHUNK_STATUS_INITIALIZING --> CHUNK_STATUS_CONNECTED_HEALTHY
+462:I0327 08:03:03.244123 78777(access-manager) chunk_table.cc:1557] Chunk 10 status change: CHUNK_STATUS_INITIALIZING --> CHUNK_STATUS_CONNECTED_HEALTHY
+463:I0327 08:03:03.248227 78777(access-manager) chunk_table.cc:1557] Chunk 8 status change: CHUNK_STATUS_INITIALIZING --> CHUNK_STATUS_CONNECTED_HEALTHY
+464:I0327 08:03:03.250233 78777(access-manager) chunk_table.cc:1557] Chunk 5 status change: CHUNK_STATUS_INITIALIZING --> CHUNK_STATUS_CONNECTED_HEALTHY
+465:I0327 08:03:03.262684 78777(access-manager) chunk_table.cc:1557] Chunk 4 status change: CHUNK_STATUS_INITIALIZING --> CHUNK_STATUS_CONNECTED_HEALTHY
+466:I0327 08:03:03.264117 78777(access-manager) chunk_table.cc:1557] Chunk 7 status change: CHUNK_STATUS_INITIALIZING --> CHUNK_STATUS_CONNECTED_HEALTHY
+490:I0327 08:03:04.057214 78777(access-manager) meta_server.cc:274] Meta status change to new status: META_RUNNING meta addr: 10.0.128.11 port: 10100. Last status was: META_BOOTING which last for 1932 ms
+1937:I0327 08:03:06.514765 78777(access-manager) chunk_table.cc:1557] Chunk 6 status change: CHUNK_STATUS_INITIALIZING --> CHUNK_STATUS_CONNECTED_HEALTHY
+2534:I0327 08:03:07.846385 78777(access-manager) chunk_table.cc:1557] Chunk 3 status change: CHUNK_STATUS_INITIALIZING --> CHUNK_STATUS_CONNECTED_HEALTHY
+14418:I0327 08:04:19.746840 78777(access-manager) chunk_table.cc:1557] Chunk 9 status change: CHUNK_STATUS_INITIALIZING --> CHUNK_STATUS_CONNECTED_HEALTHY
+14441:I0327 08:04:21.747023 78777(access-manager) chunk_table.cc:1557] Chunk 1 status change: CHUNK_STATUS_INITIALIZING --> CHUNK_STATUS_CONNECTED_HEALTHY
+29988:I0327 08:14:40.613011 78777(access-manager) chunk_table.cc:1557] Chunk 9 status change: CHUNK_STATUS_CONNECTED_HEALTHY --> CHUNK_STATUS_INITIALIZING
+29989:I0327 08:14:40.623579 78777(access-manager) chunk_table.cc:1557] Chunk 1 status change: CHUNK_STATUS_CONNECTED_HEALTHY --> CHUNK_STATUS_INITIALIZING
+31009:I0327 08:14:44.268606 78777(access-manager) chunk_table.cc:1557] Chunk 5 status change: CHUNK_STATUS_CONNECTED_HEALTHY --> CHUNK_STATUS_SESSION_EXPIRED
+31012:I0327 08:14:44.268872 78777(access-manager) chunk_table.cc:1557] Chunk 8 status change: CHUNK_STATUS_CONNECTED_HEALTHY --> CHUNK_STATUS_SESSION_EXPIRED
+31304:I0327 08:14:45.113755 78777(access-manager) chunk_table.cc:1557] Chunk 9 status change: CHUNK_STATUS_INITIALIZING --> CHUNK_STATUS_CONNECTED_HEALTHY
+31305:I0327 08:14:45.124171 78777(access-manager) chunk_table.cc:1557] Chunk 1 status change: CHUNK_STATUS_INITIALIZING --> CHUNK_STATUS_CONNECTED_HEALTHY
+
+// 释放 lease
+42187:I0327 07:11:57.465605  6514(meta-rpc-server) access_manager.cc:2906] [RELEASE LEASE] session_id: add37e23-53dc-4b3f-b194-9cf831f01bfd, extents lid(lepoch):perf(pepoch):cap(pepoch), 280045(776692):1640788(1640788):1640789(1640789)
+
+// 这中间都没被 sync 过，下发 recover cmd
+1281:I0327 08:03:06.422837 78775(recover-manager) recover_manager.cc:589] [REPOSITION] distribute normal recover cmd for pid: 1640789 lid: 280045 src: 4 dst: 2 replace: 0 owner: 2 prefer local: 5 pt: PT_CAP is_thick: 0 rt: RT_EC ever exist: 0 current loc: [ 0:1 1:3 2:4 3:5 ] alive loc: [ 0:1 1:3 2:4 3:5 ] dst_shard_idx: 0 expected segment num: 4
+3292:I0327 08:03:09.748927 186339(meta-rpc-server) meta_rpc_server.cc:4240] [REPLACE REPLICA]: [REQUEST]: session: "7271023d-a970-474f-976e-c45e7c53c127" pid: 1640789 src_chunk: 0 dst_chunk: 2 epoch: 1640789 reset_location_to_dst: false reset_generation: 18446744073709551615 segment_idx: 0, [RESPONSE]: ST:OK, pid: 1640789 expected_replica_num: 4 ever_exist: false origin_pid: 0 epoch: 1640789 origin_epoch: 0 generation: 0 preferred_cid: 5 thin_provision: true allocated_space: 0 resiliency_type: RT_EC ec_param { name: "ISAL" k: 2 m: 2 rs_arg { w: 8 coding_tech: REED_SOL_VAN } block_size: 4096 ec_type: REED_SOLOMON } type: PT_CAP ec_location { field1: 84148994 field2: 0 field3: 0 field4: 0 } ec_alive_location { field1: 84148994 field2: 0 field3: 0 field4: 0 } shared_space: 0, [TIME]: 2636 us.
+23934:I0327 08:11:47.167295 78775(recover-manager) recover_manager.cc:589] [REPOSITION] distribute migrate cmd for pid: 1640789 lid: 280045 src: 2 dst: 1 replace: 2 owner: 2 prefer local: 5 pt: PT_CAP is_thick: 0 rt: RT_EC ever exist: 0 current loc: [ 0:2 1:3 2:4 3:5 ] alive loc: [ 0:2 1:3 2:4 3:5 ] dst_shard_idx: 0
+
+// 这中间，cid3 没有汇报
+F0327 08:15:31.526929 78775(recover-manager) recover_manager.cc:1403] Check failed: false recover to same node, exist cid: 3, loc: [ 0:1 1:3 2:4 3:5 ], alive loc: [ 0:1 1:0 2:4 3:5 ], recover cmd:pid: 1640789 dst_chunk: 6 src_chunk: 1 epoch: 1640789 agile_recover_only: false dst_shard_idx: 3 pextent_type: PT_CAP thin_provision: true, healthy cids: [1, 2, 3, 4, 6, 7, 9, 10, ], last report ms: [16412455, 15884015, 16631472, 16573761, ], now: 16633246
+
+// 初次分配，此时都是健康的
+33514:I0327 07:11:35.371253  6514(meta-rpc-server) meta_rpc_server.cc:2410] [ALLOC PT_CAP PEXTENT FOR SINK]  lid: 280045 lentry: {epoch: 776692, perf_pid: 1640788, perf_epoch: 1640788, cap_pid: 1640789, cap_epoch: 1640789, prioritized: 0, garbage: 0, valid: 1, staging: 1, encrypt_metadata_id: 60, vextent_no: 304 }, perf_pentry: {loc: "[ 0:5 1:1 2:4 ]", alive loc: "[ 0:5 1:1 2:4 ]", epoch: 1640788, generation: 1, origin_pid: 1639933, origin_epoch: 1639933, ever_exist: 1, garbage: 0, valid: 1, expected_replica_num: 3, staging: 0, thin_provision: 1, preferred_cid: 5, even: 0, pt: "PT_PERF", rt: "RT_REPLICA", ec_param: "None", sinkable: 1, allocated_space: 166723584, thin_uniq_size: 166723584, thin_shared_size: 0, cow_from_snapshot: 1 }, cap_pentry: {loc: "[ 0:1 1:4 2:3 3:5 ]", alive loc: "[ 0:1 1:4 2:3 3:5 ]", epoch: 1640789, generation: 0, origin_pid: 0, origin_epoch: 0, ever_exist: 0, garbage: 0, valid: 1, expected_replica_num: 4, staging: 0, thin_provision: 1, preferred_cid: 5, even: 0, pt: "PT_CAP", rt: "RT_EC", ec_param: "name: "ISAL" k: 2 m: 2 rs_arg { w: 8 coding_tech: REED_SOL_VAN } block_size: 4096 ec_type: REED_SOLOMON", sinkable: 0, allocated_space: 0, thin_uniq_size: 0, thin_shared_size: 0, cow_from_snapshot: 0 }
+
+// cid3 上的日志，在 07:44:43 到 08:16:17 中间，这个 extent 都不在 cid3 上真实存在
+/var/log/zbs/zbs-chunkd.log.20250327-074433.14163.gz:20532:I0327 07:44:43.881450 14294(c1-lsm) lsm.cc:6272] [FREE EXTENT] status: EXTENT_STATUS_ALLOCATED pid: 1640789 epoch: 1640789 generation: 0 bucket_id: 2389 einode_id: 2 sick_flag: 4 provision: thin root_id: 2
+/var/log/zbs/zbs-chunkd.log.20250327-080300.46259.gz:126672:I0327 08:16:17.637343 46296(c1-lsm) lsm.cc:5962] [ALLOC PLAIN EXTENT SUCCESS] status: EXTENT_STATUS_ALLOCATED pid: 1640789 epoch: 1640789 generation: 0 bucket_id: 2389 einode_id: 1 sick_flag: 0 provision: thin root_id: 1
+
+// 出现 cid 一直是 healthy 的，一个 ever exist = false && parent id = 0 的 ec 数据块，之前上报过，但是再也没有上报了。
+// 节点轮流注入故障，recover 到这个 dst cid 时，如果没有 sync 过，且 dst_shard_idx < k，那么会直接跳过 sync 和 reposition，
+// 通知 meta 这个 ec reposition 成功，之后如果 10 min 内如果还没 sync 过，那么 dst cid 不会上报，这个 cid 从 alive loc 消失。
+
+
+// 这一次想为 cid3 复制的
+// 这一次直接跳过了 sync，所以 cid3 没机会创建，这里的 dst_shard_idx = 1
+/var/log/zbs/zbs-metad.log.20250327-065905.133841:21264:I0327 07:52:54.601719 86328(recover-manager) recover_manager.cc:589] [REPOSITION] distribute migrate cmd for pid: 1640789 lid: 280045 src: 2 dst: 3 replace: 2 owner: 4 prefer local: 5 pt: PT_CAP is_thick: 0 rt: RT_EC ever exist: 0 current loc: [ 0:1 1:2 2:4 3:5 ] alive loc: [ 0:1 1:2 2:4 3:5 ] dst_shard_idx: 1
+/var/log/zbs/zbs-metad.log.20250327-065905.133841:22142:I0327 07:53:05.960912 133847(meta-rpc-server) meta_rpc_server.cc:4240] [REPLACE REPLICA]: [REQUEST]: session: "cb795235-e6f8-479f-ba3b-e81f21bede42" pid: 1640789 src_chunk: 2 dst_chunk: 3 epoch: 1640789 reset_location_to_dst: false reset_generation: 18446744073709551615 segment_idx: 1, [RESPONSE]: ST:OK, pid: 1640789 expected_replica_num: 4 ever_exist: false origin_pid: 0 epoch: 1640789 origin_epoch: 0 generation: 0 preferred_cid: 5 thin_provision: true allocated_space: 0 resiliency_type: RT_EC ec_param { name: "ISAL" k: 2 m: 2 rs_arg { w: 8 coding_tech: REED_SOL_VAN } block_size: 4096 ec_type: REED_SOLOMON } type: PT_CAP ec_location { field1: 84148993 field2: 0 field3: 0 field4: 0 } ec_alive_location { field1: 84148993 field2: 0 field3: 0 field4: 0 } shared_space: 0, [TIME]: 469 us.
+
+// 这一次直接跳过了 sync，所以 cid3 也没机会创建，cid2 作为 dst 实际也不存在，这里的 dst_shard_idx = 0，理论上在 10 min 之后会过期，但是下一条 migrate cmd 的 dst_shard_idx = 0，让这个位置从 cid 2 变成 cid1，相当于又续命了，而 cid 4 和 cid5 一直都是有真实副本的，
+1281:I0327 08:03:06.422837 78775(recover-manager) recover_manager.cc:589] [REPOSITION] distribute normal recover cmd for pid: 1640789 lid: 280045 src: 4 dst: 2 replace: 0 owner: 2 prefer local: 5 pt: PT_CAP is_thick: 0 rt: RT_EC ever exist: 0 current loc: [ 0:1 1:3 2:4 3:5 ] alive loc: [ 0:1 1:3 2:4 3:5 ] dst_shard_idx: 0 expected segment num: 4
+3292:I0327 08:03:09.748927 186339(meta-rpc-server) meta_rpc_server.cc:4240] [REPLACE REPLICA]: [REQUEST]: session: "7271023d-a970-474f-976e-c45e7c53c127" pid: 1640789 src_chunk: 0 dst_chunk: 2 epoch: 1640789 reset_location_to_dst: false reset_generation: 18446744073709551615 segment_idx: 0, [RESPONSE]: ST:OK, pid: 1640789 expected_replica_num: 4 ever_exist: false origin_pid: 0 epoch: 1640789 origin_epoch: 0 generation: 0 preferred_cid: 5 thin_provision: true allocated_space: 0 resiliency_type: RT_EC ec_param { name: "ISAL" k: 2 m: 2 rs_arg { w: 8 coding_tech: REED_SOL_VAN } block_size: 4096 ec_type: REED_SOLOMON } type: PT_CAP ec_location { field1: 84148994 field2: 0 field3: 0 field4: 0 } ec_alive_location { field1: 84148994 field2: 0 field3: 0 field4: 0 } shared_space: 0, [TIME]: 2636 us.
+// 这一次直接跳过了 sync，所以 cid3 也没机会创建，cid1 作为 dst 实际也不存在
+23934:I0327 08:11:47.167295 78775(recover-manager) recover_manager.cc:589] [REPOSITION] distribute migrate cmd for pid: 1640789 lid: 280045 src: 2 dst: 1 replace: 2 owner: 2 prefer local: 5 pt: PT_CAP is_thick: 0 rt: RT_EC ever exist: 0 current loc: [ 0:2 1:3 2:4 3:5 ] alive loc: [ 0:2 1:3 2:4 3:5 ] dst_shard_idx: 0
+24096:I0327 08:11:50.733807 186339(meta-rpc-server) meta_rpc_server.cc:4240] [REPLACE REPLICA]: [REQUEST]: session: "7271023d-a970-474f-976e-c45e7c53c127" pid: 1640789 src_chunk: 2 dst_chunk: 1 epoch: 1640789 reset_location_to_dst: false reset_generation: 18446744073709551615 segment_idx: 0, [RESPONSE]: ST:OK, pid: 1640789 expected_replica_num: 4 ever_exist: false origin_pid: 0 epoch: 1640789 origin_epoch: 0 generation: 0 preferred_cid: 5 thin_provision: true allocated_space: 0 resiliency_type: RT_EC ec_param { name: "ISAL" k: 2 m: 2 rs_arg { w: 8 coding_tech: REED_SOL_VAN } block_size: 4096 ec_type: REED_SOLOMON } type: PT_CAP ec_location { field1: 84148993 field2: 0 field3: 0 field4: 0 } ec_alive_location { field1: 84148993 field2: 0 field3: 0 field4: 0 } shared_space: 0, [TIME]: 1114 us.
+// 这一次时发现，cid3 超过
+41420:F0327 08:15:31.526929 78775(recover-manager) recover_manager.cc:1403] Check failed: false recover to same node, exist cid: 3, loc: [ 0:1 1:3 2:4 3:5 ], alive loc: [ 0:1 1:0 2:4 3:5 ], recover cmd:pid: 1640789 dst_chunk: 6 src_chunk: 1 epoch: 1640789 agile_recover_only: false dst_shard_idx: 3 pextent_type: PT_CAP thin_provision: true, healthy cids: [1, 2, 3, 4, 6, 7, 9, 10, ], last report ms: [16412455, 15884015, 16631472, 16573761, ], now: 16633246
+
+
+// cid3 上的日志
+
+/var/log/zbs/zbs-chunkd.log.20250327-072543.88373.gz:25742:I0327 07:30:40.005421 88379(c1-chunk-main) recover_handler.cc:90] [REPOSITION] get notification, put cmd into pending queue: pid: 1640789 lease { owner { uuid: "7271023d-a970-474f-976e-c45e7c53c127" ip: "10.0.128.11" num_ip: 192937994 port: 10201 cid: 2 secondary_data_ip: "20.0.128.11" zone: "default" scvm_mode_host_data_ip: "" alive_sec: 1087 machine_uuid: "75fa5b40-0606-11f0-8204-e769ecb1e23d" } pid: 280045 location: 0 epoch: 776692 expected_replica_num: 4 } dst_chunk: 2 src_chunk: 1 epoch: 1640789 agile_recover_only: false dst_shard_idx: 1 ec_active_location { field1: 84083713 field2: 0 field3: 0 field4: 0 } pextent_type: PT_CAP thin_provision: true start_ms: 13941727
+/var/log/zbs/zbs-chunkd.log.20250327-072543.88373.gz:25843:I0327 07:30:40.005846 88379(c1-chunk-main) reposition_concurrency_controller.cc:256] pid: 1640789, cmd has paused, pt: PT_CAP, reposition concurrency: { src cid: 1, current: 7, limit: 7, dst cid: 2, current: 5, limit: 14 }
+/var/log/zbs/zbs-chunkd.log.20250327-072543.88373.gz:32635:I0327 07:31:13.784302 88379(c1-chunk-main) reposition_concurrency_controller.cc:265] pid: 1640789, cmd has resumed, pt: PT_CAP, reposition concurrency: { src cid: 1, current: 9, limit: 9, dst cid: 2, current: 12, limit: 14 }
+/var/log/zbs/zbs-chunkd.log.20250327-072543.88373.gz:32636:W0327 07:31:13.784406 88379(c1-chunk-main) ec_recover_handler.cc:434] [EC RECOVER] recovering a non-exist extent, cmd: pid: 1640789 state: START cur_block: 4294967295 src_cid: 1 dst_cid: 2 is_migrate: false silence_ms: 0 epoch: 1640789 dst_shard_idx: 1 pextent_type: PT_CAP thin_provision: true start_ms: 13941727 pending_ms: 0 pausing_ms: 33780
+
+[root@node1-128-25 19:22:32 ~]$ zgrep -ni "pid: 1640789" /var/log/zbs/zbs-chunkd.log.20250327*
+/var/log/zbs/zbs-chunkd.log.20250327-071309.42170.gz:34351:I0327 07:15:25.023536 42189(c1-lsm) lsm.cc:5962] [ALLOC PLAIN EXTENT SUCCESS] status: EXTENT_STATUS_ALLOCATED pid: 1640789 epoch: 1640789 generation: 0 bucket_id: 2389 einode_id: 1 sick_flag: 0 provision: thin root_id: 1
+/var/log/zbs/zbs-chunkd.log.20250327-071309.42170.gz:36329:I0327 07:15:49.646991 42189(c1-lsm) lsm.cc:6272] [FREE EXTENT] status: EXTENT_STATUS_ALLOCATED pid: 1640789 epoch: 1640789 generation: 0 bucket_id: 2389 einode_id: 1 sick_flag: 4 provision: thin root_id: 1
+/var/log/zbs/zbs-chunkd.log.20250327-071309.42170.gz:123592:I0327 07:25:39.637202 42189(c1-lsm) lsm.cc:2926] [NORMAL RECOVER EXTENT START] pid: 1640789, epoch: 1640789, generation: 0, flags: 1
+/var/log/zbs/zbs-chunkd.log.20250327-071309.42170.gz:123601:I0327 07:25:39.637236 42189(c1-lsm) lsm.cc:5962] [ALLOC PLAIN EXTENT SUCCESS] status: EXTENT_STATUS_RECOVERING pid: 1640789 epoch: 1640789 generation: 0 bucket_id: 2389 einode_id: 2 sick_flag: 0 provision: thin root_id: 2
+/var/log/zbs/zbs-chunkd.log.20250327-071309.42170.gz:123633:I0327 07:25:39.689792 42189(c1-lsm) lsm.cc:3018] [NORMAL RECOVER EXTENT END] pid: 1640789, generation: 0, flags: 1  extent: status: EXTENT_STATUS_RECOVERING pid: 1640789 epoch: 1640789 generation: 0 bucket_id: 2389 einode_id: 2 sick_flag: 0 provision: thin root_id: 2
+/var/log/zbs/zbs-chunkd.log.20250327-071309.42170.gz:123638:I0327 07:25:39.689836 42189(c1-lsm) extent_inode.cc:619] [EXTENT SET STATUS] pid: 1640789 from: EXTENT_STATUS_RECOVERING to: EXTENT_STATUS_ALLOCATED
+// 此时在 cid3 上没有这个 pid
+/var/log/zbs/zbs-chunkd.log.20250327-074433.14163.gz:20532:I0327 07:44:43.881450 14294(c1-lsm) lsm.cc:6272] [FREE EXTENT] status: EXTENT_STATUS_ALLOCATED pid: 1640789 epoch: 1640789 generation: 0 bucket_id: 2389 einode_id: 2 sick_flag: 4 provision: thin root_id: 2
+/var/log/zbs/zbs-chunkd.log.20250327-080300.46259.gz:126672:I0327 08:16:17.637343 46296(c1-lsm) lsm.cc:5962] [ALLOC PLAIN EXTENT SUCCESS] status: EXTENT_STATUS_ALLOCATED pid: 1640789 epoch: 1640789 generation: 0 bucket_id: 2389 einode_id: 1 sick_flag: 0 provision: thin root_id: 1
+/var/log/zbs/zbs-chunkd.log.20250327-080300.46259.gz:262943:I0327 08:30:40.431561 46296(c1-lsm) lsm.cc:6272] [FREE EXTENT] status: EXTENT_STATUS_ALLOCATED pid: 1640789 epoch: 1640789 generation: 0 bucket_id: 2389 einode_id: 1 sick_flag: 4 provision: thin root_id: 1
+
+
+/var/log/zbs/zbs-metad.log.20250327-065905.133841:21264:I0327 07:52:54.601719 86328(recover-manager) recover_manager.cc:589] [REPOSITION] distribute migrate cmd for pid: 1640789 lid: 280045 src: 2 dst: 3 replace: 2 owner: 4 prefer local: 5 pt: PT_CAP is_thick: 0 rt: RT_EC ever exist: 0 current loc: [ 0:1 1:2 2:4 3:5 ] alive loc: [ 0:1 1:2 2:4 3:5 ] dst_shard_idx: 1
+
+// 因为 dst_shard_idx = 1 < 2，且这次 reposition 用的 lease 没 sync 过的话，对于 ever exist = false && origin pid = 0 的 ec 来说，会直接跳过在 cid3 的分配，因为认为在下一次 sync 的时候会分配
+/var/log/zbs/zbs-metad.log.20250327-065905.133841:22142:I0327 07:53:05.960912 133847(meta-rpc-server) meta_rpc_server.cc:4240] [REPLACE REPLICA]: [REQUEST]: session: "cb795235-e6f8-479f-ba3b-e81f21bede42" pid: 1640789 src_chunk: 2 dst_chunk: 3 epoch: 1640789 reset_location_to_dst: false reset_generation: 18446744073709551615 segment_idx: 1, [RESPONSE]: ST:OK, pid: 1640789 expected_replica_num: 4 ever_exist: false origin_pid: 0 epoch: 1640789 origin_epoch: 0 generation: 0 preferred_cid: 5 thin_provision: true allocated_space: 0 resiliency_type: RT_EC ec_param { name: "ISAL" k: 2 m: 2 rs_arg { w: 8 coding_tech: REED_SOL_VAN } block_size: 4096 ec_type: REED_SOLOMON } type: PT_CAP ec_location { field1: 84148993 field2: 0 field3: 0 field4: 0 } ec_alive_location { field1: 84148993 field2: 0 field3: 0 field4: 0 } shared_space: 0, [TIME]: 469 us.
+
+// 这里 cid3 上并没有真实分配
+50385:I0327 07:52:56.973423  5691(c1-chunk-main) recover_handler.cc:90] [REPOSITION] get notification, put cmd into pending queue: pid: 1640789 lease { owner { uuid: "cb795235-e6f8-479f-ba3b-e81f21bede42" ip: "10.0.128.26" num_ip: 444596234 port: 10201 cid: 4 secondary_data_ip: "20.0.128.26" zone: "default" scvm_mode_host_data_ip: "" alive_sec: 591 machine_uuid: "b8eb56b0-0607-11f0-9c15-525400a0dc63" } pid: 280045 location: 0 epoch: 776692 expected_replica_num: 4 } dst_chunk: 3 replace_chunk: 2 src_chunk: 2 is_migrate: true epoch: 1640789 dst_shard_idx: 1 ec_active_location { field1: 84148737 field2: 0 field3: 0 field4: 0 } pextent_type: PT_CAP thin_provision: true start_ms: 1222897
+50518:I0327 07:52:56.973999  5691(c1-chunk-main) reposition_concurrency_controller.cc:256] pid: 1640789, cmd has paused, pt: PT_CAP, reposition concurrency: { src cid: 2, current: 0, limit: 8, dst cid: 3, current: 8, limit: 8 }
+51947:I0327 07:53:05.960294  5691(c1-chunk-main) reposition_concurrency_controller.cc:265] pid: 1640789, cmd has resumed, pt: PT_CAP, reposition concurrency: { src cid: 2, current: 4, limit: 8, dst cid: 3, current: 8, limit: 8 }
+51950:W0327 07:53:05.960419  5691(c1-chunk-main) ec_recover_handler.cc:434] [EC RECOVER] recovering a non-exist extent, cmd: pid: 1640789 state: START cur_block: 4294967295 src_cid: 2 dst_cid: 3 is_migrate: true silence_ms: 0 replace_cid: 2 epoch: 1640789 dst_shard_idx: 1 pextent_type: PT_CAP thin_provision: true start_ms: 1222897 pending_ms: 0 pausing_ms: 8986
 ```
-
-内核认为他是 thin，之后下发 unmap 不报错。
-
-
-
-win 不一样，初次扫描的时候如果是 thick，后面即使转 thin，多次 trim 都会失败，zbs 侧不会收到 unmap 指令。需要断开跟 target 的连接后再连接。
 
 
 
@@ -91,14 +153,7 @@ win 不一样，初次扫描的时候如果是 thick，后面即使转 thin，�
 1. 把 AI 用起来
 2. 把 zhihu 用起来，关注存储 + AI 相关工作
 3. 看技术书要及时做笔记，不然之后也忘了
-
-
-
-1. 把已有的工作写简历
-    1. 限流
-    2. 临时副本和敏捷恢复
-    3. io reroute
-2. 了解 raft 协议，zbs 中 dbcluster 的使用
+3. 了解 raft 协议，zbs 中 dbcluster 的使用
 3. 熟悉分布式系统的一些笼统概念
 
 
@@ -109,37 +164,7 @@ win iso 在 arm 下要用 uefi 格式的，x86 可以用 bios
 
 通过 auto smartx.com 创建 windows 之后，要添加 E1000 模式的网卡，这样 win 才能联网，iscsi 测试 https://docs.google.com/document/d/136oMy5L3amyi69s_F_iFL_d_RcPR2afsWWA3Y7eZs1Y/edit?tab=t.0
 
-
-
-http://docs.fev.smartx.com/smtxzbs/5.6.1/zbs_configuration/zbs_configuration_16 win 客户端配置 iscsi
-
-需要补充一开始创建了 thick volume 的测试
-
-
-
-
-
-在客户期望同一个集群里有全闪池和混闪池时，我们会使用 Pin 的功能起到全闪池的效果。此时卷的状态是相对稳定的，占用 Cap 空间不是必要的。
-
-- 在 Meta 中增加一个 Flag，默认为 False，当设置为 True 时候，Pin 卷的 Cap 空间占用保持 Thick 的状态；
-
-- Volume 的 Thick 属性需要单独指定，不会因为指定为 Pin 就默认变成 Thick；
-
-- 如果 Thin 的卷提升为 Pin，Cap 部分保持 Thin，同时在 Relloc Cap 时，也会分配为 Thin， 此时相当于不占 Cap 空间；
-
-- Thin Pin 卷取消 Pin 时，要做 Cap 的空间容量检查，如果剩余空间不足，则返回失败（这应该是检查 perf thin remain space）；
-
-  考虑到会下沉，这里需要检查 perf thin 超过的负载会不会有足够的 cap 空间给他下沉。
-
-  在 data report 中已经做了限制。
-
-- 提供 RPC，命令行，不论卷是否 Pin 的，都支持卷从 Thick 转化为 Thin。 Extent 在 GC 过程里自动转化，不在 RPC 过程里处理。
-
-  还需要考虑到 chunk 处 iscsi server 的命令
-
-
-
-创建/更新/克隆/回滚
+ win 客户端配置 iscsi http://docs.fev.smartx.com/smtxzbs/5.6.1/zbs_configuration/zbs_configuration_16
 
 
 
@@ -173,7 +198,7 @@ http://docs.fev.smartx.com/smtxzbs/5.6.1/zbs_configuration/zbs_configuration_16 
 
    嗯，如果是 vm 的话，是先创建一个普通 nfs file，然后编辑对应文件，开启 pin
 
-6. snapshot  一定是 prior = false && priovision = thin 吗？
+6. snapshot  一定是 prior = false && priovision = thin 吗？好像是的
 
 7. chunk mgr 中 topo / 维护模式相关的，是先更新 db 再更新内存。meta rpc server 中貌似不遵循这个机制，比如 SetPExtentExistence，把他们改写下。
 
@@ -182,10 +207,6 @@ http://docs.fev.smartx.com/smtxzbs/5.6.1/zbs_configuration/zbs_configuration_16 
 8. 总结一下为啥 local io handler 里要同步，pextent io handler 里可以异步 intercept
 
 9. 手动触发迁移的命令行 zbs-client-py 提交上去，还需要给文档组提个 pr
-
-10. 允许 thick 转 thin 的命令行修改
-
-
 
 
 
