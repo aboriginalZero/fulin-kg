@@ -1,40 +1,10 @@
-172.20.134.154 上的 yiwu 目录
-
-```
-// cid2
-p (('zbs::meta::MetaServer')*0x5615f4b42000)->context_->chunk_table->chunk_table_
-p ('::zbs::meta::ChunkTableEntry')(*0x5615f545fb00)
-p ('::zbs::ChunkSpaceInfo')(*0x5615f550ef00)
-```
-
-
-
-一定是被 insert 到 cap_thick_reserved_pids，但是没有被 erase，都是 ec 相关的
-
-```
-(gdb) p ('::zbs::ChunkSpaceInfo')(*0x5615f550ef00)
-$26 = {<google::protobuf::Message> = {<google::protobuf::MessageLite> = {_vptr.MessageLite = 0x5615f2dc07e0 <vtable for zbs::ChunkSpaceInfo+16>, _internal_metadata_ = {ptr_ = 0, static kUnknownFieldsTagMask = 1, static kMessageOwnedArenaTagMask = 2,
-        static kPtrTagMask = 3, static kPtrValueMask = -4}}, <No data fields>}, static kIndexInFileMessages = 48, static _class_data_ = {
-    copy_to_from = 0x5615f2a0ccc0 <google::protobuf::Message::CopyWithSourceCheck(google::protobuf::Message&, google::protobuf::Message const&)>,
-    merge_to_from = 0x5615f2641530 <zbs::ChunkSpaceInfo::MergeImpl(google::protobuf::Message&, google::protobuf::Message const&)>}, {_impl_ = {_has_bits_ = {has_bits_ = {4261412863, 127}}, _cached_size_ = {size_ = {<std::__atomic_base<int>> = {static _S_alignment = 4,
-            _M_i = 0}, static is_always_lock_free = true}}, valid_data_space_ = 322116255744, used_data_space_ = 7247757312, provisioned_data_space_ = 301056131072, valid_cache_space_ = 187902722048, used_cache_space_ = 0, id_ = 2, temporary_replica_num_ = 0,
-      dirty_cache_space_ = 1879027220, total_data_capacity_ = 322116255744, failure_data_space_ = 0, failure_cache_space_ = 0, total_cache_capacity_ = 187902722048, temporary_replica_space_ = 0, num_rx_pids_ = 0, num_tx_pids_ = 0, allocated_data_space_ = 301056131072,
-      num_reserved_pids_ = 3871, num_recover_src_pids_ = 0, thin_used_data_space_ = 0, perf_valid_data_space_ = 187902722048, perf_used_data_space_ = 0, perf_total_data_capacity_ = 187902722048, perf_failure_data_space_ = 0, planned_prioritized_space_ = 1879027220,
-      allocated_prioritized_space_ = 1610612736, downgraded_prioritized_space_ = 0, perf_allocated_data_space_ = 1879027220, perf_thin_used_data_space_ = 0, perf_num_rx_pids_ = 0, perf_num_tx_pids_ = 0, perf_num_reserved_pids_ = 0, perf_num_recover_src_pids_ = 0,
-      perf_planned_space_ = 187902722048, valid_free_cache_space_ = 187902722048, perf_thick_reserved_space_ = 1878786048, perf_thick_used_data_space_ = 0, perf_thin_inherited_space_ = 0, thin_inherited_space_ = 0, prioritized_num_rx_pids_ = 0}}}
-```
-
-
-
-
-
-日志可以统一改成 ShortDebugInfo
+1. 保留 generate migrate cmds，但是也在 distribute 的时候把哪种类型 migrate cmd 打印出来 
+2. reposition get token times 和 list pid 的 zbs cli 适配
+3. migrate cmd 下发前可以检查下 dst 是否 isolated， replace 是否在 loc 里，loc 是否变化，dst cid 是否健康，src 是否在 loc 里，src 是否健康（在 [ZBS-29189](http://jira.smartx.com/browse/ZBS-29189) 中一起解决）
 
 
 
 如果被 sync 过，lsm 会给 ever exist = false 的分配元数据，那么之后也会 data report，这样就会在 alive loc 里
-
-
 
 chunk
 
