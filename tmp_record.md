@@ -1,5 +1,8 @@
+我理解 meta2 里期望业务流尽可能保持 volume mgr -> extent mgr -> chunk mgr 的顺序。
+
+
+
 1. 保留 generate migrate cmds，但是也在 distribute 的时候把哪种类型 migrate cmd 打印出来 
-2. reposition get token times 和 list pid 的 zbs cli 适配
 3. migrate cmd 下发前可以检查下 dst 是否 isolated， replace 是否在 loc 里，loc 是否变化，dst cid 是否健康，src 是否在 loc 里，src 是否健康（在 [ZBS-29189](http://jira.smartx.com/browse/ZBS-29189) 中一起解决）
 
 
