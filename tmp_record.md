@@ -1,9 +1,64 @@
+1. 把 reserve pids 修好；
+2. 写个 io reroute 的 kb；
+3. 把 create / elevate pin volume 的文档写一下。
+
+
+
+
+
+可以整理下 meta1 中 session create / expired 的流程，有助于未来排查问题。
+
+
+
+chunk status 在 meta1 中只在 2 个地方被更新：
+
+1. AccessHandler::ComposeChunkRequest 中根据 lsm init / lsm healthy / 临时副本 / nvmf init 设置 status，并通过心跳上传；
+2. AccessManager::SessionExpiredCb，session 过期时，将 status 设为 expired，主要是在 SessionMaster::OnSessionExpired 中被调用 --> 在 MasterSession::HandleExpire 中被调用 --> 在超过 7s 没有被 extend lease 时，即 session timeout，在 leader 上运行的 MasterSession 在每次 SendKeepAlive 时都会执行 ExtendLease。
+
+在 meta2 中，chunk status 的语义可能是三种其一：
+
+1. 任一 mgr 跟 chunk 的 session timeout 就把 chunk status 设为 expired；
+2. 都有 mgr 跟 chunk 的 session timeout 才把 chunk status 设为 expired；
+3. chunk mgr 跟 chunk 的 session timeout 才把 chunk status 设为 expired； 
+
+从兼容 meta1 的角度来说，可能是情况 1？
+
+某个 chunk status expired 只意味着 chunk 跟 chunk mgr 的 session timeout 了，会影响新数据块分片分配，已有分片的恢复和迁移等，但此时 chunk 跟 volume / extent mgr 不一定也 session timeout，接入点/ lease 可能还在这个 chunk 上，直到他们自己也 session timeout。
+
+
+
+
+
+
+
+与 chunk status 受 chunk 状态影响不同，chunk use_state 只是在元数据层面设置，主要是为了移除节点引入的状态管理。
+
+
+
+meta1 已有的 SessionItem
+
+1. scvm_mode_host_data_ip 只用与 scvm 模式下 iscsi 的接入点更新（iscsi server 能够感知 scvm 所在 host），UpdateScvmModeHostDataIP rpc 会被哪里调用？
+
+    这个字段的含义应该是 esxi 的 data ip，应该也只有在 scvm 模式下才会填充这个字段
+
+    iscsi initiator ip 可能是这个 data ip，那么就要优先把 iscsi 接入点分配到这。
+
+    所以应该是 volume mgr 跟 chunk 协商这个信息就好？
+
+2. machine_uuid 是读取 /etc/zbs/uuid 中的值（不过是什么时候生成的呢？），vhost 鉴权用到这个信息，只让请求里携带的 machine_uuid 符合要求的 vhost io 鉴权通过，每个 machine uuid 有他允许访问的 vm uuid（即 zbs volume），一个 zbs client 会有一个 machine uuid
+
+3. secondary data channel ip valid or not，由 access 通过定期 ping mgr ip 的方式检查是否与其他 mgt ip 联通，跟所有其他节点上的 mgt ip 失联时，才会标记自己不可用，进而影响到 iscsi 接入点的选择；
+
+
+
+
+
+1. ListAccessSession 的结果里不包含被 nfs isolated 的 session，会不会影响到 chunk 联通性
+2. 保留 generate migrate cmds，但是也在 distribute 的时候把哪种类型 migrate cmd 打印出来 
+
+
+
 我理解 meta2 里期望业务流尽可能保持 volume mgr -> extent mgr -> chunk mgr 的顺序。
-
-
-
-1. 保留 generate migrate cmds，但是也在 distribute 的时候把哪种类型 migrate cmd 打印出来 
-3. migrate cmd 下发前可以检查下 dst 是否 isolated， replace 是否在 loc 里，loc 是否变化，dst cid 是否健康，src 是否在 loc 里，src 是否健康（在 [ZBS-29189](http://jira.smartx.com/browse/ZBS-29189) 中一起解决）
 
 
 
