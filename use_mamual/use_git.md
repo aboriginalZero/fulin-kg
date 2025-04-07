@@ -283,6 +283,18 @@ git commit -m “refactor: update .gitignore”
 
 #### 常见场景
 
+* code review 时，在 gerrit 网页上 review 时因为不具备代码跳转功能且仅展示被修改的代码，没有完整的逻辑。所以通常建议下载到本地进行 review 方便检查修改代码所影响的未在网页上直接体现的逻辑
+
+    ```
+    git review -d http://gerrit.smartx.com/c/zbs/+/79261/5
+    ```
+
+    执行后会在本地生成一个 review branch ，此时在这 branch 内，使用以下命令来保留 commit 代码，但是将 commit 状态取消，便于 review
+
+    ```
+    git reset <review patch 上一个 patch 的 commit id>
+    ```
+
 * code reiew 期间开发其他 feature 时，先 checkout 到 master 并 git pull 远程最近的改动，在master 的基础上 checkout 出一个新分支。如果直接在上一个 dev branch 上 checkout 就会产生不必要的依赖关系，尽可能保证每一个 Change 的完整性以及独立性，且越小越好。
 
 * git stash 用以在当前 branch 修改了部分代码，没到 commit 的地步，这时要去看其他 branch 的代码情况，可以先 git stash 再 git checkout master，要回到 dev 时，git checkout dev、git stash pop。git stash 还有一个常见用法。如果发现在 1st dev branch 上修改的代码应该放在另一个 branch 上时，可以先 git stash，然后切换到 2nd dev branch 上 git stash pop，这时可能存在冲突，需要手动修改（有冲突的时候，stash里面还会暂存着改动）。并回到 1st dev branch 中通过 git checkout . 把还未 git add . 的代码删掉

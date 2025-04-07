@@ -1,11 +1,3 @@
-1. 把 reserve pids 修好；
-2. 写个 io reroute 的 kb；
-3. 把 create / elevate pin volume 的文档写一下。
-
-
-
-
-
 可以整理下 meta1 中 session create / expired 的流程，有助于未来排查问题。
 
 
