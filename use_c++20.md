@@ -1,3 +1,54 @@
+* class FollowerManager
+
+* class SessionFollower
+
+  跟 SessionMaster 之间做 keepalive 
+
+
+
+需要搞懂在 meta1 中他们的作用是什么
+
+
+
+他两职能分别是啥？
+
+
+
+
+
+std::lock_guard 为什么禁用拷贝？
+
+* 如果允许拷贝，可能会导致多个 lock_guard 对象管理同一个互斥锁，析构时重复解锁，引发未定义行为；
+* 删除拷贝构造函数和赋值运算符，确保锁的独占性。
+
+```c++
+namespace std {
+    template <class Mutex>
+    class lock_guard {
+    private:
+        Mutex& mutex_; // 引用传入的互斥锁
+    public:
+        explicit lock_guard(Mutex& m) : mutex_(m) {
+            mutex_.lock(); // 构造时加锁
+        }
+
+        ~lock_guard() {
+            mutex_.unlock(); // 析构时解锁
+        }
+
+        // 禁止拷贝和赋值
+        lock_guard(const lock_guard&) = delete;
+        lock_guard& operator=(const lock_guard&) = delete;
+    };
+}
+```
+
+
+
+
+
+
+
 https://github.com/xiaoweiChen/CXX20-The-Complete-Guide/releases
 
 c++20 使用相关书籍
@@ -32,10 +83,6 @@ timeout_source.request_stop();
 user_cancel_source.request_stop();
 
 ```
-
-
-
-
 
 
 
