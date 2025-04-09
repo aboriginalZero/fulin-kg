@@ -2,7 +2,39 @@
 
 * class SessionFollower
 
-  跟 SessionMaster 之间做 keepalive 
+  把 nfs 接入点和 set/remove/list session item 的逻辑借助 session client 转发到 SessionMaster 上s
+
+  跟 SessionMaster 之间做 keepalive，把 
+
+
+
+Session Master
+
+
+
+access mgr 传入的回调，也就是 access mgr 定义了 session master 在 Session init / create / check leader /  expired 时的具体行为。
+
+
+
+meta1 中 create session 流程
+
+1. access handler 执行 CreateSession
+2. session follower 执行 CreateSession，实际上转发给 session client
+3. session client 执行 CreateSession，简单把 session item 填充了，通过 socket 转发给 session master
+4. session master 执行 CreateSession，包含 session_initialize_cb_ 和 session_created_cb_，而这对应 access mgr 的 SessionInitializeCb 和 SessionCreatedCb
+5. session follower 拿到 session master 的结果后，会执行 session_created_cb，这对应 access handler 的 session handler 的 SessionCreatedCb，在这里会做能力协商以及 data report 的 start pid 和 report size
+6. access handler 的 SessionCreatedCb 中还有一个 node server 注册的 RegisterSessionCreateCb，他的作用是让 iscsi session 进入 alive 状态
+
+补充说明下：
+
+1. zbs chunk main() --> RunChunkServerMain() --> StartChunkServer() --> ChunkServer::Start() --> AccessHandler::Start() --> AccessHandler::CreateSession()，所以可以认为 chunk 进程一起来，就会尝试去创建 access session；
+2. session follower 有自己独立的线程，创建完 session，就在 KeepAliveLoop 的 while 循环里了
+
+
+
+meta1 中
+
+
 
 
 
