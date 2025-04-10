@@ -1,4 +1,8 @@
-
+1. session follower 里的旧代码可以删掉
+2. migrate 的调整
+   1. replica 非双活，让 lease owner 在超高负载前不允许迁出；
+   2. replica 双活，让 lease owner 在超高负载前可以被迁出，但优先级低；
+   3. ec 非双活，让 lease owner 在什么负载都可以被迁出，且不管优先级。
 
 
 
