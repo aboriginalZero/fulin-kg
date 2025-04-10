@@ -1,4 +1,8 @@
 1. session follower 里的旧代码可以删掉
+    1. GetLocalHyperIPs 和 ListSessions 去掉
+    2. num_pending_requests_ 的使用
+    3. reconected = true 以及打印日志里要带上 session uuid
+
 2. migrate 的调整
    1. replica 非双活，让 lease owner 在超高负载前不允许迁出；
    2. replica 双活，让 lease owner 在超高负载前可以被迁出，但优先级低；
