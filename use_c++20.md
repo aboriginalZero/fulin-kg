@@ -12,6 +12,42 @@ Session Master
 
 
 
+可以整理下 meta1 中 session init / create / keepalive / jeopardy / expired 的流程，有助于未来排查问题。
+
+
+
+meta2 中的 mgr 之间的 session 机制里：
+
+1. 不需要有 jeopardy
+1. 可以有高低两种频率的心跳
+
+
+
+也搞一个 SessionFollowerBase，可以继承出 AccessSessionFollower 和 meta2SessionFollower
+
+
+
+
+
+只是因为历史原因才搞了 SessionService 和 DataReportService 两个 pb service，对应 2 个 SessionMaster 和 DataReportMaster
+
+
+
+要考虑旧 chunk 给新 meta 发送 KeepAlive 或者 CreateSession，此时还会走旧的 rpc 接口，所以还是得继承
+
+
+
+access data report 和 chunk data report 的区别是啥？
+
+1. access data report 指的是 access 汇报 reposition perf（之后汇聚到 status server），iscsi/nvmf conns（之后更新到 meta 视角的 session active iscsi / nvmf conn）
+2. chunk data report 指的是 lsm 分批汇报 pextent info，之后更新 pextent table entry
+
+
+
+
+
+
+
 access mgr 传入的回调，也就是 access mgr 定义了 session master 在 Session init / create / check leader /  expired 时的具体行为。
 
 
