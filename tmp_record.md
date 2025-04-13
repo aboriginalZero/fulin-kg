@@ -1,16 +1,56 @@
+meta2 里将 meta1 的 SessionMaster 改成了 SessionMasterBase
+
+* 继承出 AccessSessionMaster，当 meta 已经升级到 meta2 时，老版本的 chunk 还不知道有各个 meta2 mgr，所以 meta2 要用 AccessSessionMaster 来跟 chunk mgr 通信；
+* 跟新版本的 chunk 通信
+
+
+
+需要预留跟 meta1 的交互的 Meta1SessionManager，包括其中的 SessionManager 和 SessionFollower
+
+
+
+搞出一个 SessionFollowerBase
+
+chunk 作为 session follower 访问 meta1 / meta2
+
+继承出一个 Meta1AccessSessionFollower，他的功能包括 jeopardy 状态维护，接受 Meta1SessionManager 管理（跟 meta1 中的尽量保持一致）
+
+继承出一组 Meta2AccessSessionFollower，这一组是对 Meta1SessionFollower 功能的拆分
+
+* VolumeMgrAccessSessionFollower、只有每个 node 的 main chunk 与 meta2 volume mgr 之间交互接入协议信息，注册 meta1 中 accesss mgr 里各个关于 session 的回调，
+* ExtentMgrAccessSessionFollower，用于跟 meta2 extent mgr 之间交互 lease 信息
+* ChunkMgrAccessSessionFollower，用于跟 meta2 chunk mgr 之间交互 chunk space 和 chunk 联通性、isolated 信息
+
+
+
+meta2 的一个 mgr 作为 session follower 访问另一个 mgr
+
+不继承，直接使用 SessionFollowerBase 创建一组 meta2MgrSessionFollower，这些应该不需要 SetSessionItem 的
+
+* volume mgr 作为 session follower 访问 extent mgr，SessionType = VolumeMgrToExtentMgr
+* extent mgr 作为 session follower 访问 chunk mgr，SessionType = ExtentMgrToChunkMgr
+* ......
+
+
+
+
+
+meta2 中 mgr 之间的交互也需要作为 session follower，这些之间不需要 SessionItem 和 
+
+
+
+SessionItem 目前除了一些基础的，就 nfs server 和 iscsi server 会往里填信息
+
+
+
+现有的 session item 中，
+
+
+
 1. session follower 里的旧代码可以删掉
-    1. GetLocalHyperIPs 和 ListSessions 去掉
-    2. num_pending_requests_ 的使用
-    3. reconected = true 以及打印日志里要带上 session uuid
+    1. reconected = true 以及打印日志里要带上 session uuid
 
-2. migrate 的调整
-   1. replica 非双活，让 lease owner 在超高负载前不允许迁出；
-   2. replica 双活，让 lease owner 在超高负载前可以被迁出，但优先级低；
-   3. ec 非双活，让 lease owner 在什么负载都可以被迁出，且不管优先级。
-   
-3. inspector 的调整
 
-   http://jira.smartx.com/browse/ZBS-29237
 
 
 
