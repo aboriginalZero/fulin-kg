@@ -705,7 +705,7 @@ cat bigfile.txt | parallel --pipe sed s/old/new/g
 
 
 
-查看盘类型是 hdd 还是 ssd
+查看盘类型是 hdd 还是 ssd，等于 1 说明是 HDD
 
 ```
 cat /sys/block/sdb/queue/rotational
