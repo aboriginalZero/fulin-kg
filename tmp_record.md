@@ -1,3 +1,20 @@
+1. 关于拔盘的两个 kb 描述
+2. session follower 里的 reconected = true 以及打印日志里要带上 session uuid
+
+
+
+```
+89669:I0415 17:59:01.460330 123191(c1-chunk-main) recover_handler.cc:90] [REPOSITION] get notification, put cmd into pending queue: pid: 281367 lease { owner { uuid: "e5e156b1-6787-4351-8fbb-75347cdcfe97" ip: "10.0.134.154" num_ip: 2592473098 port: 10201 cid: 1 secondary_data_ip: "20.0.134.154" zone: "default" scvm_mode_host_data_ip: "" alive_sec: 6440 machine_uuid: "bdae6ad6-150f-11f0-b804-525400cccd54" } pid: 161 location: 0 epoch: 109361 expected_replica_num: 4 } dst_chunk: 3 src_chunk: 1 epoch: 281367 agile_recover_only: false dst_shard_idx: 0 ec_active_location { field1: 67502336 field2: 0 field3: 0 field4: 0 } pextent_type: PT_CAP thin_provision: true location { field1: 67502336 field2: 0 field3: 0 field4: 0 } start_ms: 88842495
+
+// src 和 dst 分别是 1 和 3
+89683:I0415 17:59:01.460575 123191(c1-chunk-main) reposition_concurrency_controller.cc:256] pid: 281367, cmd has paused, pt: PT_CAP, reposition concurrency: { src cid: 1, current: 4, limit: 8, dst cid: 3, current: 8, limit: 8 }
+129198:I0415 18:01:46.161351 123191(c1-chunk-main) reposition_concurrency_controller.cc:265] pid: 281367, cmd has resumed, pt: PT_CAP, reposition concurrency: { src cid: 1, current: 3, limit: 3, dst cid: 3, current: 6, limit: 8 }
+147098:[ECancelled]: sink io canceledsink_io: 0x563cd2134000 lease: lease_id: 161, lease_epoch: 109361, proxy_lid: 0, proxy_epoch: 0, owner: 1, cow: 0, expired: 0, version: "LV_LAYERED"  perf_pextent_info: pid: 281499, epoch: 281499, origin_pid: 0, origin_epoch: 0, ever_exist: 1, meta_generation: 1, expect_replica_num: 2, loc: "[1 6 ]", cow_from_snapshot: 0  capacity_pextent_info: pid: 281367, epoch: 281367, origin_pid: 0, origin_epoch: 0, ever_exist: 1, meta_generation: 1, expect_replica_num: 4, loc: "[ 0:0 1:1 2:6 3:4 ]", cow_from_snapshot: 0 , ec_param: name: "ISAL" k: 3 m: 1 rs_arg { w: 8 coding_tech: REED_SOL_VAN } block_size: 4096 ec_type: REED_SOLOMON extent_offset: 232783872 data_len: 36864 block_bitmap: 0000000000000000000000000000000000000000000000000000000000000000 canceled: 1 finished: 0 status: OK is_unmap: 0
+147099:[ECancelled]: sink io canceledsink_io: 0x563cd4593550 lease: lease_id: 161, lease_epoch: 109361, proxy_lid: 0, proxy_epoch: 0, owner: 1, cow: 0, expired: 0, version: "LV_LAYERED"  perf_pextent_info: pid: 281499, epoch: 281499, origin_pid: 0, origin_epoch: 0, ever_exist: 1, meta_generation: 1, expect_replica_num: 2, loc: "[1 6 ]", cow_from_snapshot: 0  capacity_pextent_info: pid: 281367, epoch: 281367, origin_pid: 0, origin_epoch: 0, ever_exist: 1, meta_generation: 1, expect_replica_num: 4, loc: "[ 0:0 1:1 2:6 3:4 ]", cow_from_snapshot: 0 , ec_param: name: "ISAL" k: 3 m: 1 rs_arg { w: 8 coding_tech: REED_SOL_VAN } block_size: 4096 ec_type: REED_SOLOMON extent_offset: 232833024 data_len: 73728 block_bitmap: 0000000000000000000000000000000000000000000000000000000000000000 canceled: 1 finished: 0 status: OK is_unmap: 0
+```
+
+
+
 最坏情况下，ifm 只会给一个 ifc 分配不少于 64 个 token，但是其他 ifc 拿到的还是少于 64 个
 
 
@@ -6,11 +23,7 @@ sink 只是按照每个 lease owner 最多运行 32 个 sink task 来限制，�
 
 
 
-还是得搞个 internal io 超时下发机制
-
-如果已经 sync 过，再对 cid5 上拔掉所有 partition 盘
-
-拔盘之后，ifm 的可用 token 会不会在命令行上没有清零
+还是得搞个 internal io 超时下发机制，超过 sink / reposition 在 access 侧的最长超时时间后，ifc 对其放行，刚出来的这个 internal io 会立马被超时处理。
 
 
 
@@ -58,13 +71,6 @@ meta2 中 mgr 之间的交互也需要作为 session follower，这些之间不�
 
 
 SessionItem 目前除了一些基础的，就 nfs server 和 iscsi server 会往里填信息
-
-
-
-1. session follower 里的旧代码可以删掉
-    1. reconected = true 以及打印日志里要带上 session uuid
-
-
 
 
 
