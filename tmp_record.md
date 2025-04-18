@@ -1,17 +1,3 @@
-两个 coredump，其中一个 perf speed limit = 250 MB/s，ifm 算的可用 token 是 219810569，大概是经过 63min 算到的可用 token 数量。因为 float 溢出，超分了 7 个，变成 219810576。
-
-另一个 perf speed limit = 225 MiB/s，ifm 算的可用 token 是 212050157，大概是经过 67 min 算到的可用 token 数量。因为 float 溢出，超分了 3 个，变成 212050160。
-
-但是预期 internal token 是每 100ms 算一次，这里怀疑是时钟有问题？
-
-
-
-整数转换为浮点数时，浮点数的尾数位数决定了是否能精确表示该整数。如果整数的绝对值太大，超过浮点数尾数的表示能力，可能会导致精度损失。C++ 中的浮点数通常遵循 IEEE 754 标准，float32，约 7 位十进制精度，尾数（mantissa）有 23 位，外加 1 位隐式前导位（共 24 位有效位），因此可以精确表示绝对值不超过 2 的 24 次方（即 16,777,216）的整数。
-
-
-
-
-
 1. ut CreateSessionAfterExpiredCbFinished 修复
 2. 关于拔盘的两个 kb 描述
 3. 修复 [ZBS-29264](https://sctrack.sendcloud.net/track/click2/eNpFj8FOxCAURf-F6I6-wuNBeTv1F9xpDKFAM9WZ1hSa0Rj_3YyzmO09Z3HuK5Jhi1IIKfRA5B2SU3rAoIkRXWBDTMFYz1BTp1XgQCpoR928jOu-ZHX3PZ93SHF-qKe4tS9I60lIJcWhtc9789j37_MW4Qb7cVvPtfQvT88dMjr6t6d4rOVSoRwMFhAsitt6ARktGnYRUelx4Gmy48TRF29jLomuVk1ti-kDallyOq57hqU0IX9-5fWQNP7tD1EHRP8=.html)
