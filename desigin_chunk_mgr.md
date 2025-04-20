@@ -521,3 +521,44 @@ Extent Manager 会定期扫描所有 PExtent，检查其是否缺少 Segment，�
 
 
 chunk mgr 需要把 chunk 间连通性信息给到 extent mgr，分配 lease 的时候会用到
+
+
+
+
+
+运行 tokcpp
+
+```shell
+docker exec -it registry.smtx.io/zbs/zbs-buildtime:el7-x86_64 bash 
+
+# 在容器中启用 gcc 14
+scl enable gcc-ztoolset-14 bash 
+
+# cmake 3.20 的二进制预编译包
+wget https://github.com/Kitware/CMake/releases/download/v3.20.0/cmake-3.20.0-linux-x86_64.tar.gz
+tar -xzvf cmake-3.20.0-linux-*.tar.gz
+mv cmake-3.20.0-linux-* /opt/cmake-3.20.0
+
+# 创建符号链接（全局可用）
+ln -sf /opt/cmake-3.20.0/bin/* /usr/bin/
+
+# 应输出 "cmake version 3.20.0"
+cmake --version  
+
+git clone https://github.com/google/googletest.git
+cd googletest
+git checkout release-1.12.0
+
+mkdir build && cd build
+cmake .. -DCMAKE_CXX_STANDARD=11  # 显式指定C++11标准
+make -j$(nproc)  # 并行编译加速
+
+# 默认安装到/usr/local
+make install  
+
+# 若未自动安装，手动配置，这样编译 tokcpp 时才能找到这个头文件
+cp lib/*.a /usr/lib64/
+mkdir -p /usr/include/gtest
+cp -r ../googletest/include/* /usr/include/gtest/
+```
+

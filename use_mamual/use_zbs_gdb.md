@@ -401,6 +401,12 @@ thread apply all bt
 8. 若要打印 flat_hash_map，需要加载两个文件
 
    http://192.168.91.19/core/gdb/absl-printers.py / immer-printers.py
+   
+   若要打印 std::array，要用 arr._M_elems[i]
+   
+   ```
+   p ((zbs::chunk::ChunkServer)*0x5637cffca000).access_handler_.internal_flow_mgr_.layer_throttle_->throttles_._M_elems[1]
+   ```
 
 
 
