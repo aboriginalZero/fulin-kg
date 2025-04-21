@@ -1,8 +1,18 @@
-1. ut CreateSessionAfterExpiredCbFinished 修复
-2. 修复 [ZBS-29264](https://sctrack.sendcloud.net/track/click2/eNpFj8FOxCAURf-F6I6-wuNBeTv1F9xpDKFAM9WZ1hSa0Rj_3YyzmO09Z3HuK5Jhi1IIKfRA5B2SU3rAoIkRXWBDTMFYz1BTp1XgQCpoR928jOu-ZHX3PZ93SHF-qKe4tS9I60lIJcWhtc9789j37_MW4Qb7cVvPtfQvT88dMjr6t6d4rOVSoRwMFhAsitt6ARktGnYRUelx4Gmy48TRF29jLomuVk1ti-kDallyOq57hqU0IX9-5fWQNP7tD1EHRP8=.html)
+分层之前，lsm 下刷的条件是：
+
+1. 当 cache 使用不超过 20%，不会 writeback，正在写入的用户数据就只在 cache 上，不会在 partition 上；
+2. 当 cache 使用不超过 50%，但 external io busy 的话，也不会 writeback，busy 的判断条件是 iops 超过 500 或 bps 超过 50 MiB/s，这个在 POC 时很容易满足；
+3. 当 cache 使用超过 50%，会 writeback，此时正在写入的用户数据才有可能被 writeback 到 partition 上。
+
+所以这里的临时方案建议调低限速还是很有用的？除非专门测一个大卷时做拔盘测试，否则 cache 使用应该不会超过 50%
+
+
+
+
+
+1. existing loc 的使用
+2.  [ZBS-29284](http://jira.smartx.com/browse/ZBS-29284)，允许在分层模式部署没有 Parition 的节点
 3. session follower 里的 reconected = true 以及打印日志里要带上 session uuid（这个可以先不操作）
-
-
 
 
 
@@ -15,10 +25,6 @@
 147098:[ECancelled]: sink io canceledsink_io: 0x563cd2134000 lease: lease_id: 161, lease_epoch: 109361, proxy_lid: 0, proxy_epoch: 0, owner: 1, cow: 0, expired: 0, version: "LV_LAYERED"  perf_pextent_info: pid: 281499, epoch: 281499, origin_pid: 0, origin_epoch: 0, ever_exist: 1, meta_generation: 1, expect_replica_num: 2, loc: "[1 6 ]", cow_from_snapshot: 0  capacity_pextent_info: pid: 281367, epoch: 281367, origin_pid: 0, origin_epoch: 0, ever_exist: 1, meta_generation: 1, expect_replica_num: 4, loc: "[ 0:0 1:1 2:6 3:4 ]", cow_from_snapshot: 0 , ec_param: name: "ISAL" k: 3 m: 1 rs_arg { w: 8 coding_tech: REED_SOL_VAN } block_size: 4096 ec_type: REED_SOLOMON extent_offset: 232783872 data_len: 36864 block_bitmap: 0000000000000000000000000000000000000000000000000000000000000000 canceled: 1 finished: 0 status: OK is_unmap: 0
 147099:[ECancelled]: sink io canceledsink_io: 0x563cd4593550 lease: lease_id: 161, lease_epoch: 109361, proxy_lid: 0, proxy_epoch: 0, owner: 1, cow: 0, expired: 0, version: "LV_LAYERED"  perf_pextent_info: pid: 281499, epoch: 281499, origin_pid: 0, origin_epoch: 0, ever_exist: 1, meta_generation: 1, expect_replica_num: 2, loc: "[1 6 ]", cow_from_snapshot: 0  capacity_pextent_info: pid: 281367, epoch: 281367, origin_pid: 0, origin_epoch: 0, ever_exist: 1, meta_generation: 1, expect_replica_num: 4, loc: "[ 0:0 1:1 2:6 3:4 ]", cow_from_snapshot: 0 , ec_param: name: "ISAL" k: 3 m: 1 rs_arg { w: 8 coding_tech: REED_SOL_VAN } block_size: 4096 ec_type: REED_SOLOMON extent_offset: 232833024 data_len: 73728 block_bitmap: 0000000000000000000000000000000000000000000000000000000000000000 canceled: 1 finished: 0 status: OK is_unmap: 0
 ```
-
-
-
-最坏情况下，ifm 只会给一个 ifc 分配不少于 64 个 token，但是其他 ifc 拿到的还是少于 64 个
 
 
 
@@ -87,8 +93,6 @@ chunk status 在 meta1 中只在 2 个地方被更新：
 从兼容 meta1 的角度来说，可能是情况 1？
 
 某个 chunk status expired 只意味着 chunk 跟 chunk mgr 的 session timeout 了，会影响新数据块分片分配，已有分片的恢复和迁移等，但此时 chunk 跟 volume / extent mgr 不一定也 session timeout，接入点/ lease 可能还在这个 chunk 上，直到他们自己也 session timeout。
-
-
 
 
 
