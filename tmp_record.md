@@ -10,8 +10,8 @@
 
 
 
+1. time handler 设置成 true，是怎么等 co 结束的？
 1. existing loc 的使用
-2.  [ZBS-29284](http://jira.smartx.com/browse/ZBS-29284)，允许在分层模式部署没有 Parition 的节点
 3. session follower 里的 reconected = true 以及打印日志里要带上 session uuid（这个可以先不操作）
 
 
