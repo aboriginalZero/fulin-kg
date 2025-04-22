@@ -8,9 +8,49 @@
 
 
 
+ever exist = false 在 recover 之后还是 false，ReplaceReplica rpc 没有去动 ever exist 属性，但在 recover dst 上有真实数据，会 data report
+
+一般情况下，ever exist = false 的数据块上没有真实数据，但如果是COW 后没写过的分片被 migrate 出去，此时虽然 ever exist = false，但是在 migrate dst 上有真实数据，会 data report
 
 
-1. time handler 设置成 true，是怎么等 co 结束的？
+
+一个普通的 ever exist = false 的 pextent 刚分配出来 10 min 内 alive loc = loc，超过 10 min 后，alive loc = 0，但如果节点没有失联（分片所在 chunk 的 status 都是 healthy），不需要 recover。
+
+如果有过 sync，即使后续没有写（比如只是读触发的 sync，或者写触发的 sync 但是在 sync 成功后发生异常，跳过了写） lsm 会分配该 pextent 的元数据，之后就会被 data report，又体现在 alive loc 上。
+
+
+
+meta 侧只能考虑去降低恢复到 dead 的概率。
+
+pentry.GetDeadReplica(now_ms, healthy_cids_, &dead_segments); 这个时刻认为的 healthy cids 不一定准确。
+
+
+
+dead 恢复成 normal 的情况：
+
+1. ever exist = false 的，如果 chunk 先进入非 healthy 状态，再回到 healthy，比如先把盘都拔掉再插回去；
+1. ever exist = true 的，如果 chunk 超过 10min 没有 data report，再在 recover 结束前 data report 了。
+
+
+
+recover dst 尽量不会选 dead cid 所在 node 上的所有 cid。
+
+如果选到，dead cid 上的副本后续又恢复正常了，那么可能出现一个 zone / node 上有重叠。
+
+如果期望 2 副本的 pextent ，出现了 3 副本，会怎么样？那也就是有 chunk 上报了 meta 认为他不应该持有的数据块分片（cid 不在 loc 里），后续会发 gc cmd 给他。
+
+agile recover dst 没有考虑 dead 的情况。
+
+
+
+如果 ReplaceReplica 的时候发现 existing loc 和 dead segment 发生变化，那么忽略这次 recover（直接检查此时的 loc 跟 dst cid 是否在一个 node/ zone 上）
+
+如果一个 reposition 在 ReplaceReplica 的时候才失败，reposition dst 已经有了这个数据，但是 pextent 的 loc 没被刷新，所以后续 meta 会往这个节点发 gc cmd
+
+
+
+
+
 1. existing loc 的使用
 3. session follower 里的 reconected = true 以及打印日志里要带上 session uuid（这个可以先不操作）
 
