@@ -12,11 +12,11 @@ ever exist = false 在 recover 之后还是 false，ReplaceReplica rpc 没有去
 
 一般情况下，ever exist = false 的数据块上没有真实数据，但如果是COW 后没写过的分片被 migrate 出去，此时虽然 ever exist = false，但是在 migrate dst 上有真实数据，会 data report
 
-
-
 一个普通的 ever exist = false 的 pextent 刚分配出来 10 min 内 alive loc = loc，超过 10 min 后，alive loc = 0，但如果节点没有失联（分片所在 chunk 的 status 都是 healthy），不需要 recover。
 
 如果有过 sync，即使后续没有写（比如只是读触发的 sync，或者写触发的 sync 但是在 sync 成功后发生异常，跳过了写） lsm 会分配该 pextent 的元数据，之后就会被 data report，又体现在 alive loc 上。
+
+如果 dst_shard_idx = 1 < 2（ec 的 k），且这次 reposition 用的 lease 没 sync 过的话，对于 ever exist = false && origin pid = 0 的 ec 来说，会直接跳过在 cid3 的分配，因为认为在下一次 sync 的时候会分配。
 
 
 
@@ -28,7 +28,7 @@ pentry.GetDeadReplica(now_ms, healthy_cids_, &dead_segments); 这个时刻认为
 
 dead 恢复成 normal 的情况：
 
-1. ever exist = false 的，如果 chunk 先进入非 healthy 状态，再回到 healthy，比如先把盘都拔掉再插回去；
+1. ever exist = false 的，如果 chunk 先进入非 healthy 状态，再回到 healthy，比如先把盘都拔掉再插回去，或者在 session 发生重连，发起 reposition 的时候 status 还是 session expired；
 1. ever exist = true 的，如果 chunk 超过 10min 没有 data report，再在 recover 结束前 data report 了。
 
 
@@ -39,7 +39,9 @@ recover dst 尽量不会选 dead cid 所在 node 上的所有 cid。
 
 如果期望 2 副本的 pextent ，出现了 3 副本，会怎么样？那也就是有 chunk 上报了 meta 认为他不应该持有的数据块分片（cid 不在 loc 里），后续会发 gc cmd 给他。
 
-agile recover dst 没有考虑 dead 的情况。
+AllocRecoverForAgile 没有考虑 dead 的情况，agile recover dst
+
+AllocRecoverECShardSrcAndDst 没有传入 dead segments。
 
 
 
@@ -166,12 +168,6 @@ meta1 已有的 SessionItem
 
 
 我理解 meta2 里期望业务流尽可能保持 volume mgr -> extent mgr -> chunk mgr 的顺序。
-
-
-
-如果被 sync 过，lsm 会给 ever exist = false 的分配元数据，那么之后也会 data report，这样就会在 alive loc 里
-
-如果 dst_shard_idx = 1 < 2（ec 的 k），且这次 reposition 用的 lease 没 sync 过的话，对于 ever exist = false && origin pid = 0 的 ec 来说，会直接跳过在 cid3 的分配，因为认为在下一次 sync 的时候会分配。
 
 
 
@@ -353,10 +349,9 @@ recover write 也有可能 unmap 写，这部分不需要统计进来。
 
 
 
-1. 一个 ever exist = false 的副本，在 lsm 上真的存在吗？如果是快照/克隆后被迁移到其他节点的 PExtent，此时虽然还是 non ever exist，但在目的节点上真实存在，其健康状态会被定期上报。
-2. vextent no 对 FLAGS_meta_max_pextents 取余就是 lid。
-5. recover src 也有可能总是选到同一个，此时若 lease owner 与 recover src 网络失联，但 recover src 与 meta leader 是可以正常通信的，会导致 recover 一直无法完成。
-6. 后续测试轮转调度是否有效，可用的方式是代码里指定给到 volume  A 的 io 一定带上 recover flag，B 的是 sink flag，然后用 fio 打到这两个 volume 上来模拟多种内部 IO 同时进行的场景，看此时的轮转调度是否有效。 
+1. vextent no 对 FLAGS_meta_max_pextents 取余就是 lid。
+2. recover src 也有可能总是选到同一个，此时若 lease owner 与 recover src 网络失联，但 recover src 与 meta leader 是可以正常通信的，会导致 recover 一直无法完成。
+3. 后续测试轮转调度是否有效，可用的方式是代码里指定给到 volume  A 的 io 一定带上 recover flag，B 的是 sink flag，然后用 fio 打到这两个 volume 上来模拟多种内部 IO 同时进行的场景，看此时的轮转调度是否有效。 
 
 
 
@@ -509,9 +504,9 @@ special recover 不需要 sync 吗？
 
 
 
-recover handler 中的执行队列，可否做成 ever exist = false 且 origin_pid = 0 的 pid 优先执行，其他 pid 按 FIFO 的顺序执行。
+recover handler 中的执行队列，可否做成 ever exist = false 且 origin_pid = 0 的 pid 优先执行，其他 pid 按 FIFO 的顺序执行。目前 recover manager 对于没有实际分配的数据会跳过命令下发配额的限制，快速下发给 access，如果这部分数据是从本地读，这个 recover 很快就会完成，但 recover handler 的 pending_recover_cmds_ 是按 FIFO 的顺序进 running_recover_pids_ 执行的，所以后发的符合上述特点的 pid 也没法快速执行，可能被前面执行慢的 pid 拖慢。
 
-recover manager 对于没有实际分配的数据会跳过命令下发配额的限制，快速下发给 access，如果这部分数据是从本地读，这个 recover 很快就会完成，但 recover handler 的 pending_recover_cmds_ 是按 FIFO 的顺序进 running_recover_pids_ 执行的，所以后发的符合上述特点的 pid 也没法快速执行，可能被前面执行慢的 pid 拖慢。
+这里还好，因为这种 pid 还是会有一次 sync gen 以及读 src cid 去拿到 ELSMNotAllocData，还是有点小小的开销。
 
 
 
