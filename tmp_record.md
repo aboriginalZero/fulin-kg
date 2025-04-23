@@ -1,3 +1,5 @@
+
+
 分层之前，lsm 下刷的条件是：
 
 1. 当 cache 使用不超过 20%，不会 writeback，正在写入的用户数据就只在 cache 上，不会在 partition 上；
@@ -8,21 +10,7 @@
 
 
 
-ever exist = false 在 recover 之后还是 false，ReplaceReplica rpc 没有去动 ever exist 属性，但在 recover dst 上有真实数据，会 data report
-
-一般情况下，ever exist = false 的数据块上没有真实数据，但如果是COW 后没写过的分片被 migrate 出去，此时虽然 ever exist = false，但是在 migrate dst 上有真实数据，会 data report
-
-一个普通的 ever exist = false 的 pextent 刚分配出来 10 min 内 alive loc = loc，超过 10 min 后，alive loc = 0，但如果节点没有失联（分片所在 chunk 的 status 都是 healthy），不需要 recover。
-
-如果有过 sync，即使后续没有写（比如只是读触发的 sync，或者写触发的 sync 但是在 sync 成功后发生异常，跳过了写） lsm 会分配该 pextent 的元数据，之后就会被 data report，又体现在 alive loc 上。
-
-如果 dst_shard_idx = 1 < 2（ec 的 k），且这次 reposition 用的 lease 没 sync 过的话，对于 ever exist = false && origin pid = 0 的 ec 来说，会直接跳过在 cid3 的分配，因为认为在下一次 sync 的时候会分配。
-
-
-
-meta 侧只能考虑去降低恢复到 dead 的概率。
-
-pentry.GetDeadReplica(now_ms, healthy_cids_, &dead_segments); 这个时刻认为的 healthy cids 不一定准确。
+meta 侧只能考虑去降低恢复到 dead 的概率。因此 pentry.GetDeadReplica(now_ms, healthy_cids_, &dead_segments); 这个时刻认为的 healthy cids 不一定准确。
 
 
 
@@ -33,30 +21,19 @@ dead 恢复成 normal 的情况：
 
 
 
-recover dst 尽量不会选 dead cid 所在 node 上的所有 cid。
-
-如果选到，dead cid 上的副本后续又恢复正常了，那么可能出现一个 zone / node 上有重叠。
-
 如果期望 2 副本的 pextent ，出现了 3 副本，会怎么样？那也就是有 chunk 上报了 meta 认为他不应该持有的数据块分片（cid 不在 loc 里），后续会发 gc cmd 给他。
-
-AllocRecoverForAgile 没有考虑 dead 的情况，agile recover dst
-
-AllocRecoverECShardSrcAndDst 没有传入 dead segments。
-
-
-
-如果 ReplaceReplica 的时候发现 existing loc 和 dead segment 发生变化，那么忽略这次 recover（直接检查此时的 loc 跟 dst cid 是否在一个 node/ zone 上）
 
 如果一个 reposition 在 ReplaceReplica 的时候才失败，reposition dst 已经有了这个数据，但是 pextent 的 loc 没被刷新，所以后续 meta 会往这个节点发 gc cmd
 
+AllocRecoverForAgile 没有考虑 dead 的情况，agile recover dst。AllocRecoverECShardSrcAndDst 没有传入 dead segments。
 
 
 
-
-1. existing loc 的使用
-3. session follower 里的 reconected = true 以及打印日志里要带上 session uuid（这个可以先不操作）
+session follower 里的 reconected = true 以及打印日志里要带上 session uuid（这个可以先不操作）
 
 
+
+ifc 还有一个问题，出现了 2 次，日志是这样：
 
 ```
 89669:I0415 17:59:01.460330 123191(c1-chunk-main) recover_handler.cc:90] [REPOSITION] get notification, put cmd into pending queue: pid: 281367 lease { owner { uuid: "e5e156b1-6787-4351-8fbb-75347cdcfe97" ip: "10.0.134.154" num_ip: 2592473098 port: 10201 cid: 1 secondary_data_ip: "20.0.134.154" zone: "default" scvm_mode_host_data_ip: "" alive_sec: 6440 machine_uuid: "bdae6ad6-150f-11f0-b804-525400cccd54" } pid: 161 location: 0 epoch: 109361 expected_replica_num: 4 } dst_chunk: 3 src_chunk: 1 epoch: 281367 agile_recover_only: false dst_shard_idx: 0 ec_active_location { field1: 67502336 field2: 0 field3: 0 field4: 0 } pextent_type: PT_CAP thin_provision: true location { field1: 67502336 field2: 0 field3: 0 field4: 0 } start_ms: 88842495
@@ -135,8 +112,6 @@ chunk status 在 meta1 中只在 2 个地方被更新：
 从兼容 meta1 的角度来说，可能是情况 1？
 
 某个 chunk status expired 只意味着 chunk 跟 chunk mgr 的 session timeout 了，会影响新数据块分片分配，已有分片的恢复和迁移等，但此时 chunk 跟 volume / extent mgr 不一定也 session timeout，接入点/ lease 可能还在这个 chunk 上，直到他们自己也 session timeout。
-
-
 
 
 
@@ -235,15 +210,11 @@ win iso 在 arm 下要用 uefi 格式的，x86 可以用 bios
 
 
 
-
-
 看一下 zk journal
 
 1. https://docs.google.com/document/d/1Xro2919inu3brs03wP1pu5gtbTmOf_Tig7H8pfdYPls/edit?tab=t.0#heading=h.uni8fzt28mtx
 2. zk journal version check，http://gerrit.smartx.com/c/zbs/+/38871
 2. 记下笔记，涉及到 db cluster
-
-
 
 
 
@@ -262,7 +233,7 @@ From Remote Speed: 0.00 B/s(0.00 B/s)
 
 zbs-chunk recover list 中展示是否 agile recover，展示 reposition read / write 的次数
 
-由 recover_stage 以及 agile_recover 来决定，这样命令行就可以支持只看 agile recover，后续来测试 agile recover 的恢复情况
+由 recover_stage 以及 agile_recover 来决定，这样命令行就可以支持只看 agile recover，后续来测试 agile recover 的恢复情况。agile recover 短期内应该难以改进，可以先不管。
 
 meta 侧的 normal recover，在 chunk 侧可能是 agile recover
 
@@ -389,12 +360,6 @@ Flow Controller 运行在 Access Lease Owner 上，控制下发 NeedAlloc IO 的
 
 
 
-Access 在 Sync perf extent 时，从 LSM 获取 perf extent valid bitmap，并以 256k 为粒度组织成一个个 BlockInfo。BlockInfo 也会加入到 BlockLRU。 IO 过程中， BlockLRU 感知 BlockInfo 的冷热。Access 在适当时机下沉冷的 BlockInfo 至 capacity extent。
-
-
-
-
-
 1. flat_hash_map to btree_map，从内存访问的角度更好。红黑树的节点分配在内存中具有逻辑上的连续性，这意味着，虽然节点的内存地址可能不是完全连续的，但在遍历树的过程中，访问的节点在内存中的位置通常是相对靠近的，这有助于提高缓存命中率。相比之下，哈希表的节点分布更加随机，取决于哈希函数的值。即使键值相近的元素，在内存中的位置也可能相距很远，这使得缓存预取难以发挥作用。
 3. cid map 改成 std::vector，这样从内存上更有顺序性
 
@@ -412,10 +377,6 @@ vtable_id 就是 volume_id，vtable_size 就是这个 volume 持有的 lextent �
 
 
 
-MLAG 集群中不同节点能力有差，有时候升级慢是在重启某个 chunk 后的恢复慢，这种情况下 meta 侧智能调节下发窗口就显得很有必要了。
-
-
-
 1. 节点移除迁移中对 migrate src 的选择策略有问题，COW 后没写过的 pexent 迁移过的场景
 
     这种情况下，一定会造成空间放大的
@@ -425,7 +386,7 @@ MLAG 集群中不同节点能力有差，有时候升级慢是在重启某个 ch
 
 
 
-1. recover dst 没有优选 topo safety，可能造成 recover 后要立马 migrate。
+1. recover dst 没有优选 topo safety，可能造成 recover 后要立马 migrate。这个很难做到在各种情况下，只用一次 recover 就能让数据处于最佳分布，还是需要 migrate 的介入。
 
 2. access reposition 的 Counter 改成 metric，否则影响前端展示、metric 使用，检查 recover/migrate speed 在前端界面和 prometheus 中的数值是否准确，meta 侧跟 chunk 侧的 total speed 和 local speed 和 remote speed；
 
@@ -448,53 +409,7 @@ cd /var/log/zbs && ll -rth zbs-chunkd.log* 按照日期排序找文件
 
 
 
-副本读失败并不会触发 remove replica，但在副本读之前会有一次 sync，sync 失败的副本会被 remove replica
-
-对于在被拔盘上的 extent，会读失败，但副本读失败并不会触发 remove replica，由于被拔盘了，所以他也不在 data report 里，meta 不会主动下发 gc cmd，直到 last report ms 超过 10 min 没更新，recover manager 扫描到它 not alive 了，才会下发 recover cmd。
-
-对于在被拔盘上的 extent，会写失败，触发 remove replica，紧接放入待生成 recover cmd 队列中。
-
-
-
-什么时候会 verifyread 而不是普通的 read
-
-普通读的时候是否会 sync，会的，在 AccessIOHandler::DoReadVExtent() 中调用，像写一样，也会剔除 gen 不符预期的副本、在 sync 失败时清理本地 lease， 读 COW 出来的 pentry 但 parent 不在本地的情况调用一次 RefreshChildExtentLocation rpc
-
-普通读一个 pentry 会避免读正在 recover 的 dst 副本，因为 app read 没有加锁，如果去读，可能读到一个中间态的值。
-
-replica sync gen 的时候，如果发现他有 temporary replica，也会一起 sync gen
-
-
-
 remove replica 和 replace replica 这两个 rpc 很重要，理解形参各个字段的含义、副本被剔除/替换的时机、access 什么时候会调用
-
-remove replica rpc 时会把那个 cid 从 pentry 中 clear 掉，这样在 PhysicalExtentTableEntry::UpdateReplicaInfo 的返回值就是 False，HandlePExtentInfo 也是 False，等到对应的临时副本先回收，她才被回收。
-
-meta 认为的要回收的临时副本，会将这个 pentry garbage 设成 true，valid = 0；
-
-等 chunk data report 的时候，对于每个副本，都通过 ReplicaIsValid 检查是否可以删除
-
-失败副本不会被 found
-
-这两部分经过 ReplicaIsValid 判定后，meta 为其生成对应 gc cmd 下发给 lsm 执行，此时数据真正被丢弃。
-
-
-
-pentry 的 gc 标志，是 pentry 粒度的是否回收，只在 PhysicalExtentTable::AppendGarbagePids 里被用到，gc manager 会调用他。
-
-segment 粒度的是否回收，关注的是 pentry 中这个 cid 的 PExtentReplica 是否有值。
-
-pentry 的 rim_cid 只会在 remove replica 的时候被设置。
-
-
-
-corrupt 状态的 pxtent，读它的时候是在 sync 阶段就返回 ECAllReplicaFail 还是等到 read 的时候？
-
-读的时候会去 sync 吗？初次读后，会的。
-
-sync 过一次什么时候会再次 sync？看起来只有在 ENotFoundOrigin 时会 RefreshChildExtentLocation，并主动触发一次重新 sync。
-
-special recover 不需要 sync 吗？
 
 
 
@@ -537,13 +452,15 @@ recover handler 中的执行队列，可否做成 ever exist = false 且 origin_
                 1. ReplicaIOHandler::DoUpdateAndTemporaryReplica
                 2. ReplicaIOHandler::UpdateInternal()
 
-6. 编译换回 docker，弄回 67.4
+6. 编译换回 docker，弄回 67.4，这样可以兼容不同 gcc / cmake 版本，x64 / arm 平台
 
 7. 若已有 lease owner，他可能跟 src/dst cid 不同，如果是由于 src/dst 单点 IO 性能差造成的 auto mode 下缩小 lease owner 命令下发窗口，看起来是误判，实际上这种情况，下一次关于这个 pid 的 cmd 大概率还是会选到这个 lease owner，所以也不算误判。
 
     若没有 lease owner，新分配的 lease owner 副本模式下大概率是 src cid（除了 lease owner 本身分配优先选 src cid 之外，在下发前也有根据 lease owner 调整 cmd  src cid 的逻辑），较大概率是 dst cid，然后才是其他节点。
 
     另外，命令下发窗口可能被自动调节的前提是要打满一个窗口，也就是要有满一个窗口大小的命令数大部分都失败才有可能引发窗口收缩，比如 lease owner = 1, src_cid = 2, dst_cid = 3，若集群中只是 cid 2 IO 性能性能差，基本上需要给到 1 的 cmd src 基本都是 2 才满足整个窗口命令基本超时的条件，而此时把 1 的窗口跳调小也算正常，因为后续这些超时 cmd 的 pextent 再生成 cmd 时，lease owner 大概率还是 1。
+
+    MLAG 集群中不同节点能力有差，有时候升级慢是在重启某个 chunk 后的恢复慢，这种情况下 meta 侧智能调节下发窗口就显得很有必要了。
 
 8. meta 侧智能调节可以依赖 access 侧的并发度，比如某个 access 对其他所有 chunk 的并发度中取个最大值，比如 3 节点，access 1 认为自己作为 lease owner 跟 2 的 reposition 并发度是 32，跟 3 的 reposition 并发度是 64，那么可以让 meta 侧给到 access 1 的命令下发窗口是 64。
 
@@ -662,21 +579,6 @@ chunk recover 执行的慢可能原因：慢盘、缓存击穿、normal instead 
 考虑到如果是稀疏的 Extent，恢复命令执行的会比较快。所需要的恢复命令会相对较多。如果是 Extent 数据相对饱和。则恢复没有那么快。所需要的命令会较少。
 
 过去一段时间的恢复速率过慢、recover cmd 完成数量过少、还是 timeout 标记、lsm 侧缓存剩余比例（clean + free 的比例，如果太高的话，说明缓存基本没用上，recover handler 目前已经用了这个值来避免缓存击穿，zbs-chunk cache list 可以看到）、路径很多，先列举出来。PartitionList 有感知 SlowIO 的数量。
-
-
-
-作用于 meta 侧的 recover IO 超时相关的 FLAGS
-
-* recover_timeout_ms = 18 min；
-
-作用于 chunk 侧 IO 超时相关的 FLAGS
-
-* local_chunk_io_timeout_ms = 8s，local chunk io timeout ms，返回的是 ELSMCanceled
-* chunk_recover_io_timeout_ms = 9s，chunk recover io timeout ms，recover 远程 IO，这个远程指的是 access (pextent io handler) 给到非本地的 lsm (local io handler)。
-* remote_chunk_io_timeout_ms = 9s，remote chunk io timeout ms，非 recover 远程 IO （ZBS 对网络有限制，如果 ping 大包来回超过 1s，认为网络严重故障，系统不工作）。
-* chunk_lsm_recover_timeout_sec = 10 min，在 lsm 侧每 60s 检查一次 recover pextent，如果 recover 时间超过 10 min 都没有结束，会将 extent 标记为 EXTENT_STATUS_INVALID，dst cid 上的这个 pextent inode 会被 lsm gc，之后接着 recover 会抛出 ENotFound（这个 pid 后续跟随 data report  给到 meta，不过 meta 没有对 EXTENT_STATUS_INVALID 特别处理）
-
-
 
 
 
@@ -825,15 +727,40 @@ linux主分区、扩展分区、逻辑分区的区别、磁盘分区、挂载，
 
 git submodule ，https://git-scm.com/book/zh/v2/Git-%E5%B7%A5%E5%85%B7-%E5%AD%90%E6%A8%A1%E5%9D%97，https://zhuanlan.zhihu.com/p/87053283
 
-
-
 vscode 中用 vim 插件，这样可以按区域替换代码
 
-一个遗留问题是，单测里面想要触发两次 recover cmd，怎么让 entry 的 GetLocation() 得到及时更新，试了 sleep(9) 不行，可能不止需要一个心跳周期，还有其他条件没触发。
 
 
+### IO 超时参数
+
+作用于 meta 侧的 recover IO 超时相关的 FLAGS
+
+* recover_timeout_ms = 18 min；
+
+作用于 chunk 侧 IO 超时相关的 FLAGS
+
+* local_chunk_io_timeout_ms = 8s，local chunk io timeout ms，返回的是 ELSMCanceled
+* chunk_recover_io_timeout_ms = 9s，chunk recover io timeout ms，recover 远程 IO，这个远程指的是 access (pextent io handler) 给到非本地的 lsm (local io handler)。
+* remote_chunk_io_timeout_ms = 9s，remote chunk io timeout ms，非 recover 远程 IO （ZBS 对网络有限制，如果 ping 大包来回超过 1s，认为网络严重故障，系统不工作）。
+* chunk_lsm_recover_timeout_sec = 10 min，在 lsm 侧每 60s 检查一次 recover pextent，如果 recover 时间超过 10 min 都没有结束，会将 extent 标记为 EXTENT_STATUS_INVALID，dst cid 上的这个 pextent inode 会被 lsm gc，之后接着 recover 会抛出 ENotFound（这个 pid 后续跟随 data report  给到 meta，不过 meta 没有对 EXTENT_STATUS_INVALID 特别处理）
 
 ### 垃圾回收 gc
+
+remove replica rpc 时会把那个 cid 从 pentry 中 clear 掉，这样在 PhysicalExtentTableEntry::UpdateReplicaInfo 的返回值就是 False，HandlePExtentInfo 也是 False，等到对应的临时副本先回收，它才被回收。
+
+meta 认为的要回收的临时副本，会将这个 pentry garbage 设成 true，valid = 0，
+
+等 chunk data report 的时候，对于每个副本，都通过 ReplicaIsValid 检查是否可以删除，失败副本不会被 found，这两部分经过 ReplicaIsValid 判定后，meta 为其生成对应 gc cmd 下发给 lsm 执行，此时数据真正被丢弃。
+
+pentry 的 rim_cid 只会在 remove replica 的时候被设置。
+
+
+
+pentry 粒度的是否回收（pentry 的 gc 标志），只在 PhysicalExtentTable::AppendGarbagePids 里被用到，gc manager 会调用他。
+
+segment 粒度的是否回收，关注的是 pentry 中这个 cid 的 PExtentReplica 是否有值。
+
+
 
 lextent / pextent 被 gc 的一般流程
 
@@ -841,8 +768,6 @@ lextent / pextent 被 gc 的一般流程
 2. garbage 属性被置为 1。同时这个 pextent 也进入 valid = 0 的状态，后续一定不会被 stage，也就不会执行一些涉及到 pextent 内存变动的 rpc；
 3. 在 meta 层面被 gc，即这个 lextent / pextent 在 meta db 和 pextent table 中被删除了，lextent 到这个阶段就结束了
 4. 在 lsm 层面被 gc，即 chunk 上报了 meta 认为它不该持有的 pextent，meta 给他发送一个 gc cmd
-
-
 
 #### 标记 lextent garbage
 
@@ -1166,6 +1091,20 @@ prometheus 里可以从 2 个角度来观察值
 3. zbs_chunk_local_io_from_remote 开头的，比如 zbs_chunk_local_io_from_remote_cap_replica_reposition_write_speed_bps 表示这个节点的 local io handler 接受到的从远端 access 来的 cap replica write 的带宽
 
 prometheus 中支持多种 IO 类型的 metric 相加，比如二者相加可以观察这个 chunk 收到的所有 cap replica reposition write 的带宽，zbs_chunk_local_io_from_remote_cap_replica_reposition_write_speed_bps + zbs_chunk_local_io_from_local_cap_replica_reposition_write_speed_bps 
+
+
+
+### ever exist 区别
+
+ever exist = false 在 recover 之后还是 false，ReplaceReplica rpc 没有去动 ever exist 属性，但在 recover dst 上有真实数据，会 data report
+
+一般情况下，ever exist = false 的数据块上没有真实数据，但如果是COW 后没写过的分片被 migrate 出去，此时虽然 ever exist = false，但是在 migrate dst 上有真实数据，会 data report
+
+一个普通的 ever exist = false 的 pextent 刚分配出来 10 min 内 alive loc = loc，超过 10 min 后，alive loc = 0，但如果节点没有失联（分片所在 chunk 的 status 都是 healthy），不需要 recover。
+
+如果有过 sync，即使后续没有写（比如只是读触发的 sync，或者写触发的 sync 但是在 sync 成功后发生异常，跳过了写） lsm 会分配该 pextent 的元数据，之后就会被 data report，又体现在 alive loc 上。
+
+如果 dst_shard_idx = 1 < 2（ec 的 k），且这次 reposition 用的 lease 没 sync 过的话，对于 ever exist = false && origin pid = 0 的 ec 来说，会直接跳过在 cid3 的分配，因为认为在下一次 sync 的时候会分配。
 
 ### prefer local 变更
 
@@ -1512,7 +1451,7 @@ cgexec -g cpuset:. taskset -c 11 fio -ioengine=libaio -invalidate=1 -iodepth=128
 | 2_write_64_256k                     | 834          | 209MiB/s             |
 | 2_write_128_256k                    | 836          | 209MiB/s             |
 
-### recover 性能统计流程
+### reposition 性能统计流程
 
 recover 性能统计
 
@@ -1544,6 +1483,14 @@ AccessHandler::ComposeAccessPerf(AccessDataReportRequest* request, bool only_sum
 4. 按 batch 批量分配，最后一个 batch 内逐个分配，最终容忍一个 batch size 内的不精准。
 
 ### 副本剔除
+
+对于在被拔盘上的 extent 的 IO：
+
+* 读写之前的 sync 会失败，sync 失败的副本会被 remove replica，紧接放入待生成 recover cmd 队列中。
+* sync 成功但读失败，但副本读失败并不会触发 remove replica。这些 extent 会被 data report 成 PEXTENT_STATUS_OFFLINE，这样在下一轮 recover scan 时就会发现他了，另外，meta 不会给他发 gc cmd，而是在 recover cmd 中将其设为 replace cid，在 recover 结束时，将他从 loc 中删除；
+* sync 成功但写失败，触发 remove replica，紧接放入待生成 recover cmd 队列中。
+
+
 
 引发数据恢复一般是副本失联或副本剔除，副本失联可能是 Chunk 服务中断、节点异常（关机/网络隔离）、Chunk 上包含 Extent 的磁盘故障。剔副本的 4 种情况：
 
@@ -1781,9 +1728,33 @@ access 从 meta 拿到的 lease 中的 location 是 loc 而不是 alive loc，�
 
 
 
-cap replica recover 的 sync 不需要 sync perf，ec recover 需要。
+* cap replica recover 的 sync 不需要 sync perf，ec recover 需要；
+* replica sync gen 的时候，如果发现他有 temporary replica，也会一起 sync gen；
+* sync 过一次什么时候会再次 sync？看起来只有在 ENotFoundOrigin 时会先 RefreshChildExtentLocation 再触发一次 sync。
+
+
+
+Access 在 Sync perf extent 时，从 LSM 获取 perf extent valid bitmap，并以 256k 为粒度组织成一个个 BlockInfo。BlockInfo 也会加入到 BlockLRU。 IO 过程中， BlockLRU 感知 BlockInfo 的冷热。Access 在适当时机下沉冷的 BlockInfo 至 capacity extent。
+
+普通读（不同于 verifyread）时会 sync，在 AccessIOHandler::DoReadVExtent() 中调用，像写一样，也会剔除 gen 不符预期的副本、在 sync 失败时清理本地 lease， 读 COW 出来的 pentry 但 parent 不在本地的情况调用一次 RefreshChildExtentLocation rpc
+
+普通读一个 pentry 会避免读正在 recover 的 dst 副本，因为 app read 没有加锁，如果去读，可能读到一个中间态的值。
+
+corrupt 状态的 pxtent，读它的时候是在 sync 阶段就返回 ECAllReplicaFail 还是等到 read 的时候？
+
+special recover 不需要 sync 吗？
 
 ### remove disk
+
+
+
+对于在被拔盘上的 extent 的 IO：
+
+* 读写之前的 sync 会失败，sync 失败的副本会被 remove replica，紧接放入待生成 recover cmd 队列中。
+* sync 成功但读失败，但副本读失败并不会触发 remove replica。这些 extent 会被 data report 成 PEXTENT_STATUS_OFFLINE，这样在下一轮 recover scan 时就会发现他了，另外，meta 不会给他发 gc cmd，而是在 recover cmd 中将其设为 replace cid，在 recover 结束时，将他从 loc 中删除；
+* sync 成功但写失败，触发 remove replica，紧接放入待生成 recover cmd 队列中。
+
+
 
 卸载盘调的是 chunk rpc server 的 UmountCache/UmountPartition rpc，没做空间校验，meta 侧没参与，tuna 那边也是放行的，所以变成 tower 在做。
 
