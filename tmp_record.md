@@ -1,3 +1,45 @@
+EC volume 支持从 4 +1  调整为 4 +2 这种提升校验分片的数量的操作，提升完正常，通过 recover 来实现数据提升；
+
+记得 meta iscsi / nvmf / nfs server 都调整 
+
+
+
+
+
+不同于 replica volume 的 cap / perf 要么都是 2，要么都是 3。ec volume 的 cap num = k + m，当 m = 1 时，perf num = 2，当 m >= 2 时，perf num = 3，当 k 从 1 调整成 2 后，perf replica 会从 2 调到 3。
+
+想要调大 m，但如果 k + m + 1 超过集群节点数量，那么拒绝调大 m。m 只会是 1 2 3 4
+
+
+
+目前只支持 replica 提升副本数，但没有 ec 提升 k + m 的。只允许提升 ec 的校验分片数，不允许提升数据分片数（可以明天问下 sijie）？
+
+
+
+对于共享的 Extent，我们的提升策略是，只要有一个 Volume/Snapshot 使用较高的副本数/校验分片数，就使用较高的数量。
+
+遍历 volume 的每个 vextent，如果出现某个 vextent 的 cap pextent 被其他
+
+
+
+一个卷支持从 replica 转 ec 吗？
+
+
+
+支持降低数据块期望分片数，副本允许从 3 到 2（双活不允许），ec 支持从 k + m 最低降到 2 + 1；
+
+要剔除的分片要从保证局部化 / topo 安全的角度出发，尽量减少后续还要再走一次 migrate。
+
+可以对需要修改的 pextent 先 revoke lease，然后下发一条命令让他 sync gen 的时候剔除
+
+
+
+降低的策略只影响 Volume 独占的 Extent，不影响任何以 COW 方式持有的 Extent。
+
+COW 产生的 Extent 期望副本数/EC 组合根据发生 COW 的 volume 的参数来确定。
+
+
+
 
 
 分层之前，lsm 下刷的条件是：
