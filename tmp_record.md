@@ -2049,9 +2049,49 @@ transaction 中，判断 thin/thick 的依据，cap 用 thin_provision_ ，perf 
 
 
 
-
-
 ### Clone, Snapshot, COW
+
+在分层之前，pextent 在 COW 后，parent 进入只读状态，app io 不会去写 parent。
+
+在分层之后，有了 perf 和 cap parent，parent perf 的只读假设不会被破坏，这是因为 perf 只会被 app io 修改，而发生过 COW 之后，app io 不会写 parent perf 了，这与分层前行为一致。
+
+parent cap 就不一样了，虽然在 COW 之后，app io 也不会写 parent cap，但是分层之后有了下沉，sink io 会写 parent cap，为了避免破坏 parent cap 的只读假设，需要控制 parent / child sink io 的发起时机。
+
+如果在 parent cap 仍然有效时，允许 child perf 下沉到 child cap，那么 child cap 在 lsm 侧有独立于 parent cap 的一份数据，lsm 之后会认为 parent cap 进入只读状态，不会被修改，但是未来 parent perf 下沉到 parent cap 时会修改 parent cap 的数据，那么就破坏了 parent cap 只读假设（lsm 可能会崩溃？）。
+
+如果在 parent cap 仍然有效时，不允许 child perf 下沉到 child cap，那么 child cap 跟 parent cap 在 lsm 上会共用一份数据，即使 parent cap 被 sink io 写也没关系，因为只要不允许 child pextent 下沉，对 child pextent 的读写都只会读写 child perf，child cap 是什么状态不重要（他的数据内容跟 parent cap 保持一致）
+
+
+
+假设一个 Extent 初始状态在 Perf 层有 100 MiB 的数据。在假设在 100 MiB 的范围内写入 1 MiB 数据发生 COW 之后，Perf 层的 Child Perf Extent 也会有 100 MiB 数据其中 1 MiB 为新数据，99 MiB 继承至 Parent Perf Exennt。此时 Parent Perf Extent 下沉到 Parent Cap Extent 上占用空间为 100 MiB。下沉完毕后释放自身。此时 Child Perf Extent 还是有 100 MiB 数据才能保证自身数据是完整的。如果集群负载相对较低的话，Child Perf Extent 会在性能层维持住这 100 MiB 数据，后续下沉时，也会再将这 100 MiB 数据写入 Child Cap Extent。这样对于 Parent Cap Extent 和 Child Cap Extent 即便有 99 MiB 的数据是完全一致可以共享的，也无法通过 Cap Extent 之间的亲缘关系进行共享。快照空间缩减的效果就不明显。并且如果 Child Perf Extent 后续再有快照，COW 事件发生，新产生的后代 Perf Extent 也都会继承这些本可以共享的数据，重复下沉，带来更多的空间占用。
+
+因此在 ZBS 5.6.2/OS 6.2.0 之后，我们调整了下沉机制：
+
+* 发生克隆/Snapshot 之后的只读 LExtent 在没有发生 COW 的情况下也会积极下沉，避免 COW 之后的 Child Perf Extent 继承过多的只读数据；
+* 发生 COW 之后，即便集群处于低负载状态，Child Perf Extent 和 Parent Perf Extent 共享的数据部分，在 Parent Perf Extent 下沉释放后，也会积极主动的下沉。这样，虽然 Child Perf Extent 自己占用的空间也许还是相对较大的，但是后续再产生的后代 Perf Extent 也不再需要继承来自远古祖先的只读数据，避免空间的持续放大；
+
+在为了避免保证相对热的数据下沉性能稳定，数据在读缓存可用的情况下其中一份副本都会优先进入读缓存（对于 EC 来说则是所有的数据分片）。
+
+
+
+> 为了保证 [Parent Capacity 只读语义](https://docs.google.com/document/d/1gEf-x_XXh1ZG24YLwE1qBH-kxZCBGr7HAvujwy-jCWM/edit#heading=h.r3fxtwesa0bk)，Logical Extent COW 后，不会立即为 Child Capacity Extent 分配 Segment，而是延迟到 Parent Performance Extent 下沉后。
+
+除非是在 cap only 场景（不开分层的全闪集群，集群中没有下沉 IO），否则在 COW 时，即使 parent cap 有 segment，也不会直接复制给 child，cap child 的 segment 至少等到 parent perf 下沉后，才有机会被分配。
+
+
+
+卷被克隆/快照后，申请 vextent lease 时，会 COW 会 child perf 和 child cap，但是只会分配 child perf 的 segment（即执行 CowPExtent），child cap 的 segment 分配延迟到申请 lease for sink 时。
+
+这么处理是为了避免破坏 parent cap 只读假设。假设在卷被克隆/快照后的 app io 时就分配了 cap segment，那么之后读 child cap 时不会走代理读，对 child cap 的读前 sync 会导致 lsm 分配出 child cap，后续 parent perf 下沉到 parent cap 时就破坏 parent cap 只读假设了。
+
+
+
+
+
+* pentry 的 origin_pid 即 SetOriginPid 方法只在 SetPExtentExistence 时被调用，且此时必须要 gen = 0 && origin_pid != 0 && lsm_record_origin_pid != meta_record_origin_pid 时（比如 lsm 上 origin pid 丢失了），将 meta 上的 origin pid 置为 0，看目前的路径，基本不会触发。
+* pextent 的 origin_pid 即 set_origin_pid 方法只在快照/克隆后申请 vextent lease，即执行 CowLExtentTransaction 时被调用
+
+
 
 如果一个 vextent 被打了 cow flag：vtable 上面会变成 cow=1 .... lid = 1[perf_pid = 1, cap_pid = 2]。
 
@@ -2061,26 +2101,27 @@ transaction 中，判断 thin/thick 的依据，cap 用 thin_provision_ ，perf 
 
 
 
-这方面的内容应该通过在 tiering_test.cc 中写单测来感受？直接看代码理不顺。
+volume / snapshot 的 parent_id 属性含义：
+
+1. volume 的 parent_id 是 pool id；
+2. snapshot 的 parent_id 是 volume id（snapshot.snapshot_pool_id 是 snapshot 所在的 pool id）。
 
 
 
-CreateSnapshot 只是将
+volume / snapshot 级别的 origin_id 是怎么发挥作用的？一个 volume 的数据来自自身的数据覆盖 origin_id 指向的 volume，最初设计的时候应该是希望在 Volume 层上做 COW 时候可以利用这个属性，但目前的实现里其实没有利用这个字段产生任何效果。假设 volume / snapshot A 的 origin id = B，发生快照/克隆后得到 C，A / B / C 的 origin id 属性变更方式：
+
+1. 从 A 克隆出 C，当 A 是快照，那么 C 的 origin id = A，A 的 origin id = B；
+2. 从 A 克隆出 C，当 A 是卷，那么 C 的 origin id = 0，A 的 origin id = B；
+3. 从 A 快照出 C，不区分 A 是快照/卷，C 一定是个快照，C 的 origin id = B，A 的 origin id = C；
+4. 从 A 回滚到 C，不区分 A 是快照/卷，C 一定是个快照，C 的 origin id 不变，A 的 origin id = C；
+
+
 
 快照一定是个非 prior volume，且它的所有 vextent COW flag 一定都是 true，这样可以保证快照只读的假设。因为对这个快照的写，要申请 is_cow = true 的 GetLeaseForWrite，那么一定会 COW 出一份新的 vtable 和分配新的 pid，在新的上面写。
 
 
 
-假设 A 的 origin id = B，发生快照/克隆后 origin id 的变更情况（MetaRpcServer::CreateSnapshot / CloneVolumeTransaction）：
-
-1. 从 A 克隆出 C，当 A 是快照，那么 C 的 origin id = A，A 的 origin id = B；
-2. 从 A 克隆出 C，当 A 是卷，那么 C 的 origin id = 0，A 的 origin id = B；
-3. 从 A 快照出 C，不区分 A 是快照/卷，C 的 origin id = B，A 的 origin id = C；
-4. 从 A 回滚到 C，不区分 A 是快照/卷，C 的 origin id 不变，A 的 origin id = C；
-
-
-
-明确以下分层之后，转换/克隆出一个普通卷的流程，包括 lextent, pextent 分配等。 
+明确一下分层之后，转换/克隆出一个普通卷的流程，包括 lextent, pextent 分配等。 
 
 追踪克隆一个普通卷的流程
 
@@ -2107,7 +2148,7 @@ CreateSnapshot 只是将
        3. revoke src volume 的 vtable lease；
        4. 将 src vtable 上各个 vextent cow flag 设置为 true，
        5. 解锁
-       6. 清空目的卷的 origin id（因此源卷是普通卷，很快就有新的写数据，那就跟 dst volume 不一样了）
+       6. 清空目的卷的 origin id（因为源卷是普通卷，很快就有新的写数据，那就跟 dst volume 不一样了）
 
     二者共同操作包含：
 
@@ -2129,7 +2170,7 @@ CreateSnapshot 只是将
 
 
 
-快照会将 VTable 复制一份，Vtable 的内容就是若干个 VExtent，里面只有 3 个字段，vextent_id，location，alive_location，第一个字段是 volume 的 offset 与 pextent 的对应关系，后两个字段就是对应 cap pextent 的 location 和 alive_location，不同于 pextent table 常驻内存，vextent table 常驻 meta db，需要时从 meta db 中读。
+快照会将 VTable 复制一份，Vtable 的内容就是若干个 VExtent，里面只有 3 个字段，vextent_id，location，alive_location，第一个字段是 volume 的 offset 与 pextent 的对应关系，后两个字段就是对应 cap pextent 的 location 和 alive_location，不同于 pextent table 常驻内存，vextent table 常驻 meta db，需要时从 meta db 中读（v5.7.x 开始借助 volume table 常驻内存了）。
 
 COW PEXTENT 的触发时机是 GetVExtentLease rpc，如果 access/chunk 那里 lease 没有 expire，也就不会调用 GetVExtentLease，所以需要通过 revoke 主动让他 expire。COW 是先 revoke，然后打快照，保证了快照后，extent 无法写入的语意，如果不 revoke lease，快照只读假设将被打破。
 
