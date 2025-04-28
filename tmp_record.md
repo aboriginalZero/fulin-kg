@@ -4,25 +4,23 @@ EC volume 支持从 4 +1  调整为 4 +2 这种提升校验分片的数量的操
 
 
 
-
-
 不同于 replica volume 的 cap / perf 要么都是 2，要么都是 3。ec volume 的 cap num = k + m，当 m = 1 时，perf num = 2，当 m >= 2 时，perf num = 3，当 k 从 1 调整成 2 后，perf replica 会从 2 调到 3。
 
 想要调大 m，但如果 k + m + 1 超过集群节点数量，那么拒绝调大 m。m 只会是 1 2 3 4
 
 
 
-目前只支持 replica 提升副本数，但没有 ec 提升 k + m 的。只允许提升 ec 的校验分片数，不允许提升数据分片数（可以明天问下 sijie）？
+目前只支持 replica 提升副本数，但没有 ec 提升 k + m 的。只允许提升 ec 的校验分片数，不允许提升数据分片数（后者需要重写一遍数据）
 
 
 
 对于共享的 Extent，我们的提升策略是，只要有一个 Volume/Snapshot 使用较高的副本数/校验分片数，就使用较高的数量。
 
-遍历 volume 的每个 vextent，如果出现某个 vextent 的 cap pextent 被其他
+遍历 volume 的每个 vextent，如果出现某个 vextent 的 cap pextent 被其他 volume 引用，那么不做调整。
 
 
 
-一个卷支持从 replica 转 ec 吗？
+一个卷支持从 replica 转 ec 吗？不支持，数据需要重写，最好是克隆一个出来。
 
 
 
@@ -39,16 +37,6 @@ EC volume 支持从 4 +1  调整为 4 +2 这种提升校验分片的数量的操
 COW 产生的 Extent 期望副本数/EC 组合根据发生 COW 的 volume 的参数来确定。
 
 
-
-
-
-分层之前，lsm 下刷的条件是：
-
-1. 当 cache 使用不超过 20%，不会 writeback，正在写入的用户数据就只在 cache 上，不会在 partition 上；
-2. 当 cache 使用不超过 50%，但 external io busy 的话，也不会 writeback，busy 的判断条件是 iops 超过 500 或 bps 超过 50 MiB/s，这个在 POC 时很容易满足；
-3. 当 cache 使用超过 50%，会 writeback，此时正在写入的用户数据才有可能被 writeback 到 partition 上。
-
-所以这里的临时方案建议调低限速还是很有用的？除非专门测一个大卷时做拔盘测试，否则 cache 使用应该不会超过 50%
 
 
 
@@ -2023,6 +2011,14 @@ lsm 中单个 Extent 内部对于并发 IO 存在一定的限制：
 
 假设条带数为 4，每一个 extent 中包含 8 个 block，在进行条带化处理后，顺序 IO（V1-B1，V1-B2，V1-B3，V1-B4，V1-B5，V1-B6，V1-B7，V1-B8），则转换为（V1-B1，V2-B1，V3-B1，V4-B1，V1-B2，V2-B2，V3-B2，V4-B2）。这样，就可以利用到 V1，V2，V3，V4，4 个 Extent 的并发性。
 
+
+
+分层之前，lsm 下刷的条件是：
+
+1. 当 cache 使用不超过 20%，不会 writeback，正在写入的用户数据就只在 cache 上，不会在 partition 上；
+2. 当 cache 使用不超过 50%，但 external io busy 的话，也不会 writeback，busy 的判断条件是 iops 超过 500 或 bps 超过 50 MiB/s，这个在 POC 时很容易满足；
+3. 当 cache 使用超过 50%，会 writeback，此时正在写入的用户数据才有可能被 writeback 到 partition 上。
+
 ### elf 行为
 
 用户操作虚拟机行为
@@ -2135,6 +2131,25 @@ parent cap 就不一样了，虽然在 COW 之后，app io 也不会写 parent c
 
 
 
+给定 volume id 和 vextent no 找到对应的 perf / cap pid 过程，这个映射关系即 vtable，需要占用空间。可以看 MetaRpcServer::RefreshChildVExtentLocation 的实现。
+
+```c++
+// vtable_id 就是 zbs_uuid_t volume_id 的 string 形式
+meta_db_.GetVExtentTable(vtable_id, &value);
+
+// 在 metadb 中找到这个 volume 的 vextent table
+const vextent_t* vtable = reinterpret_cast<const vextent_t*>(value.data());
+
+// 取出 vtable 上的第 vextent no 个 vextent，上面有是否 COW / InSnapshotChain 的标记
+vextent = vtable[vextent_no];
+lid = to_pextent_id(vtable[vextent_no]);
+
+// 得到对应的 perf pid
+context_->lextent_table->GetLogicalExtentTableEntry(lid).GetPerfExtentPid();
+```
+
+
+
 如果一个 vextent 被打了 cow flag：vtable 上面会变成 cow=1 .... lid = 1[perf_pid = 1, cap_pid = 2]。
 
 - 如果对这个 vextent 发起写，会把这个 vtable[vno] 改成 cow = 0 ... lid = 2[perf_pid = 3, perf_origin_pid = 1, cap_pid = 4, cap_origin_pid = 2]，获取到的 lease 是 lid = 2 的。
@@ -2147,6 +2162,8 @@ volume / snapshot 的 parent_id 属性含义：
 
 1. volume 的 parent_id 是 pool id；
 2. snapshot 的 parent_id 是 volume id（snapshot.snapshot_pool_id 是 snapshot 所在的 pool id）。
+
+有回收站的功能后，parent_id 变得更重要了些。
 
 
 
