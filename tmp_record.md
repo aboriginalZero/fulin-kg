@@ -1,3 +1,28 @@
+```
+        auto gf_func = gf_fec_gen_vandermonde_matrix;
+        if (tech == Reed_Sol_Van) {
+            int n = k + m;
+            if (k <= 3 || (k == 4 && n <= 25) || (k == 5 && n <= 10) || (k <= 21 && n - k == 4) || (n - k <= 3)) {
+                gf_func = gf_gen_rs_matrix;
+            } else {
+                gf_func = gf_fec_gen_vandermonde_matrix;
+            }
+        } else if (tech == Cauchy_Good) {
+            gf_func = gf_gen_cauchy1_matrix;
+        } else {
+            return ECStatus(EInvalidArgument, "invalid coding tech, ony support Reed_Sol_Van or Cauchy_Good");
+        }
+
+        if (m == 3) {
+            // for special decode
+            gf_func = gf_fec_gen_vandermonde_matrix;
+        }
+```
+
+
+
+
+
 EC volume 支持从 4 +1  调整为 4 +2 这种提升校验分片的数量的操作，提升完正常，通过 recover 来实现数据提升；
 
 记得 meta iscsi / nvmf / nfs server 都调整 

@@ -1,3 +1,31 @@
+### RDMA 信息
+
+开启 RDMA 之后 33.2 和对应的存储 IP 预期都是要指向接入 IP
+
+```
+[root@87-21:~] esxcfg-route -l
+VMkernel Routes:
+Network          Netmask          Gateway          Interface
+10.0.85.21       255.255.255.255  10.0.85.121      vmk1
+192.168.33.2     255.255.255.255  10.0.85.121      vmk1
+10.0.85.0        255.255.255.0    Local Subnet     vmk1
+192.168.1.0      255.255.255.0    Local Subnet     vmk3
+192.168.33.0     255.255.255.0    Local Subnet     vmk2
+192.168.80.0     255.255.240.0    Local Subnet     vmk0
+default          0.0.0.0          192.168.80.1     vmk0
+[root@87-21:~] cat /vmfs/volumes/5fd798a7-2fdf1814-fbc6-b8cb299f10d1/vmware_scvm_failure/scvm_ip
+local_scvm_data_ip=10.0.85.21
+active_scvm_data_ip=10.0.85.23,10.0.85.22,10.0.85.21
+local_scvm_manage_ip=192.168.85.21
+active_scvm_manage_ip=192.168.85.23,192.168.85.22,192.168.85.21
+local_scvm_vmware_access_ip=10.0.85.121
+local_scvm_nfs_ip=192.168.33.2
+active_remote_zone_scvm_data_ip=
+active_remote_zone_scvm_manage_ip=
+```
+
+要手动切换时，只需要填存储 IP，代码里转了到接入 IP 的转换。
+
 ### 测试替换 reroute 脚本
 
 执行以下操作前，需要保证所有 ESXi 上的 192.168.33.2 的下一跳指向本地 SCVM 存储 IP：
@@ -35,7 +63,7 @@ esxcli network ip interface list
 
 ```
 esxcfg-route -d 192.168.33.2/32 10.0.0.22;
- esxcfg-route -a 192.168.33.2/32 10.0.0.21;
+esxcfg-route -a 192.168.33.2/32 10.0.0.21;
 ```
 
 删除进程
