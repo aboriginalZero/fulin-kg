@@ -1,3 +1,11 @@
+改 new_thin_pids 影响范围太广了，所有调用到 SetPextents 的地方，比如 RefreshChildLExtentLocationInternal，比如从非双活转到双活的副本提升 ，比如 COW 一个数据块，克隆出比源卷大的目标卷时补的空间，刚升级到分层的场景，更新 volume 之类的。
+
+这里或许可以有一个折中的办法是不改成 16 MiB，比如 64 MiB 之类的，降低 meta 超分的概率。
+
+
+
+
+
 ```
         auto gf_func = gf_fec_gen_vandermonde_matrix;
         if (tech == Reed_Sol_Van) {
@@ -17,7 +25,10 @@
             // for special decode
             gf_func = gf_fec_gen_vandermonde_matrix;
         }
+        
 ```
+
+
 
 
 
