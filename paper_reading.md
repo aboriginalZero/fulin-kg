@@ -202,6 +202,16 @@ ZBS 可能会怎么使用
 
 meta 也优化了他们的 MIP，将同类的 object 算到一起，将不会被改动的 bin 提前排除掉，这样大 O 虽然不变，但是系数变了。
 
+https://www.zhihu.com/question/25560707
+
+使用 MindOpt 解混合整数线性规划  https://opt.aliyun.com/doc/1.0.1/cn/html/model/index.html
+
+
+
+https://docs.google.com/presentation/d/1SIjfipamWTSzqBA_VYzREbvkUeI1HsfwfWnkY4qtWjg/edit?slide=id.g354cdc775c5_0_603#slide=id.g354cdc775c5_0_603
+
+参考格式：https://docs.google.com/presentation/d/1uBEqs2V9Sme-yDb6gTxpQaHahc3xl69t4m3qFeZpgFg/edit?slide=id.g33789ec6c07_1_1#slide=id.g33789ec6c07_1_1
+
 
 
 资源分配问题可以抽象成将物品 object 放入箱子 bin 的问题

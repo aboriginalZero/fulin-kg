@@ -1,62 +1,3 @@
-
-
-
-
-
-
-1. 先把论文搞个文档出来 
-2. 把简历更新完
-3. 把 pin 相关代码弄完
-4. 把灵活调整分片数弄完
-5. session follower 要推迟 2 周再开始搞
-6. 
-
-
-
-
-
-
-
-减少恢复迁移时的跨 rack 流量（找 topo 距离最近的）
-
-
-
-quorum 机制 
-
-副本下的 quorum 机制，它一般用于无主复制。对于 n 副本的数据，一般写需要 w 个节点确认，读取必须至少查询 r 个节点，当 w + r > n 时，即**读和写只要重合一个**，就能够保证读取的节点中一定包含最新值。写失败的副本一般通过读来发现低版本的数据并进行修复。
-
-而对于 EC(n, m)，则**要求读和写需要重合 m 个 block（注意：这里 m 实际对应 EC k+m 的 k）**，读才能够根据写成功的这 m 个 block 还原得到所有 block。要满足 m-quorum，最多允许 f = ⌊(n−m)/2⌋ 个节点故障（注意，比 EC 编码容忍的故障数少一半）。例如 RS 4+2，有一个节点故障了，写只成功了 5 个；之后节点恢复，再做读操作，读返回了 5 个结果，其中一个来自之前故障的节点包含了旧版本数据，读可以利用剩下的 4 个还原得到丢失的数据。
-
-
-
-HDFS 仅支持在线 EC。HDFS 支持 RS、XOR 和 HitchHiker EC 算法，采用 ISA-L 加速。从性能测试结果上看，EC 的写入性能和读取性能都好于三副本。
-
-
-
-volume 条带化对 ec 条带的影响，https://docs.google.com/document/d/1iNIuCHCRFspJDmj9wE5RlftUqzfgv00w8HslvOIjg4g/edit?tab=t.0#heading=h.8x2du3g98a91
-
-为了避免 k * 编码块大小（4k）无法被 volume 条带大小 （256k）整除从而导致需要补 0（lsm 分配的基本单元是 256k），存储空间利用率下降，允许 ec 条带跨 volume 条带。
-
-
-
-目前一个 ec 编码块的粒度是 4 KiB，那么一个 4 + 2 的  ec volume 的一个 ec 条带上的有效数据是 4 * 4 KiB = 16 KiB，1 GiB 的 volume 会有 1GiB / 16 KiB = 65536 个 ec 条带，在所有节点上实际占据的空间之和是 65536 * (4 + 2) * 4KiB = 1.5 GiB。
-
-由于 Access Perf 脏块粒度是 4k，如果 EC 编码块粒度是 8k，下沉时需要 Promote 读整个 8k 编码块到 Perf 与脏块合并。但由于有快照后 Parent Perf 只读的限制，Parent Perf 下沉不允许 EC Promote。故调整 EC 编码块粒度为 4k，避免 EC Promote。
-
-最初选择 8k EC 编码块主要是为了避免 LSM 的读后写问题。当编码块为 8k 时，所有的下沉写入都可以避免 LSM 的读后写。若选择 4k 编码块，只有凑满两个 EC 条带后，发到 LSM 的 IO 才可以是 8k 大小，这意味着 EC 的 K 越大，越难凑齐 8k 写。
-
-但是 4k 编码块可以避免 Promote 造成的写 Perf 层多副本，一定程度也会减少下沉时的写放大。总之，选择 4k 编码块在下沉 4k 随机写和满条带下沉的场景下会更优，但在下沉 8k 随机写场景下会更劣。
-
-
-
-ec 下沉允许一个 extent 上的多个 ec 条带并发下沉，因此 ec shard 的 gen 可能都不一样，因此不能像多副本那样直接剔除 Generation 不一致的 EC Shard，而是需要继续未完成的下沉操作，将各个 EC Shard 恢复到一致状态。Lease Owner 需要知道不一致的 gen 是由于哪些条带下沉导致的以及条带内的哪些块已经完成更新。
-
-
-
-
-
-
-
 改 new_thin_pids 影响范围太广了，所有调用到 SetPextents 的地方，比如 RefreshChildLExtentLocationInternal，比如从非双活转到双活的副本提升 ，比如 COW 一个数据块，克隆出比源卷大的目标卷时补的空间，刚升级到分层的场景，更新 volume 之类的。
 
 这里或许可以有一个折中的办法是不改成 16 MiB，比如 64 MiB 之类的，降低 meta 超分的概率。
@@ -86,10 +27,6 @@ ec 下沉允许一个 extent 上的多个 ec 条带并发下沉，因此 ec shar
         }
         
 ```
-
-
-
-
 
 
 
@@ -855,6 +792,38 @@ git submodule ，https://git-scm.com/book/zh/v2/Git-%E5%B7%A5%E5%85%B7-%E5%AD%90
 vscode 中用 vim 插件，这样可以按区域替换代码
 
 
+
+### EC 相关
+
+quorum 机制 
+
+副本下的 quorum 机制，它一般用于无主复制。对于 n 副本的数据，一般写需要 w 个节点确认，读取必须至少查询 r 个节点，当 w + r > n 时，即**读和写只要重合一个**，就能够保证读取的节点中一定包含最新值。写失败的副本一般通过读来发现低版本的数据并进行修复。
+
+而对于 EC(n, m)，则**要求读和写需要重合 m 个 block（注意：这里 m 实际对应 EC k+m 的 k）**，读才能够根据写成功的这 m 个 block 还原得到所有 block。要满足 m-quorum，最多允许 f = ⌊(n−m)/2⌋ 个节点故障（注意，比 EC 编码容忍的故障数少一半）。例如 RS 4+2，有一个节点故障了，写只成功了 5 个；之后节点恢复，再做读操作，读返回了 5 个结果，其中一个来自之前故障的节点包含了旧版本数据，读可以利用剩下的 4 个还原得到丢失的数据。
+
+
+
+HDFS 仅支持在线 EC。HDFS 支持 RS、XOR 和 HitchHiker EC 算法，采用 ISA-L 加速。从性能测试结果上看，EC 的写入性能和读取性能都好于三副本。
+
+
+
+volume 条带化对 ec 条带的影响，https://docs.google.com/document/d/1iNIuCHCRFspJDmj9wE5RlftUqzfgv00w8HslvOIjg4g/edit?tab=t.0#heading=h.8x2du3g98a91
+
+为了避免 k * 编码块大小（4k）无法被 volume 条带大小 （256k）整除从而导致需要补 0（lsm 分配的基本单元是 256k），存储空间利用率下降，允许 ec 条带跨 volume 条带。
+
+
+
+目前一个 ec 编码块的粒度是 4 KiB，那么一个 4 + 2 的  ec volume 的一个 ec 条带上的有效数据是 4 * 4 KiB = 16 KiB，1 GiB 的 volume 会有 1GiB / 16 KiB = 65536 个 ec 条带，在所有节点上实际占据的空间之和是 65536 * (4 + 2) * 4KiB = 1.5 GiB。
+
+由于 Access Perf 脏块粒度是 4k，如果 EC 编码块粒度是 8k，下沉时需要 Promote 读整个 8k 编码块到 Perf 与脏块合并。但由于有快照后 Parent Perf 只读的限制，Parent Perf 下沉不允许 EC Promote。故调整 EC 编码块粒度为 4k，避免 EC Promote。
+
+最初选择 8k EC 编码块主要是为了避免 LSM 的读后写问题。当编码块为 8k 时，所有的下沉写入都可以避免 LSM 的读后写。若选择 4k 编码块，只有凑满两个 EC 条带后，发到 LSM 的 IO 才可以是 8k 大小，这意味着 EC 的 K 越大，越难凑齐 8k 写。
+
+但是 4k 编码块可以避免 Promote 造成的写 Perf 层多副本，一定程度也会减少下沉时的写放大。总之，选择 4k 编码块在下沉 4k 随机写和满条带下沉的场景下会更优，但在下沉 8k 随机写场景下会更劣。
+
+
+
+ec 下沉允许一个 extent 上的多个 ec 条带并发下沉，因此 ec shard 的 gen 可能都不一样，因此不能像多副本那样直接剔除 Generation 不一致的 EC Shard，而是需要继续未完成的下沉操作，将各个 EC Shard 恢复到一致状态。Lease Owner 需要知道不一致的 gen 是由于哪些条带下沉导致的以及条带内的哪些块已经完成更新。
 
 ### IO 超时参数
 
