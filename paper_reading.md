@@ -206,9 +206,9 @@ $$
 
 图上的节点是表达式，每个优化目标和限制是一个子图
 
-Lookup 一定是叶子节点吗？
+Lookup 一定是叶子节点吗？目前来看，论文里的描述基本是的。但叶子节点不一定都是 Lookup 节点，只不过论文里只以 Lookup 为例。
 
-以 lookup 为关键词搜索
+
 
 
 
@@ -245,6 +245,8 @@ Lookup 一定是叶子节点吗？
   用贪心的方式找出对优化目标贡献最大的叶子节点（这个共享最大的意思是越靠近根节点越好？），比如 Lookup，有了 leaf node 的排序后，就可以得到 bin set 的排序，这样就能找到 hot bin。
 
   往 bin 中增删 object 会影响 bin 所在 Lookup 的值，进而影响到对优化目标的贡献
+
+  从 hottest bin 增减 object 会让优化目标的
 
 * move strategies
 
