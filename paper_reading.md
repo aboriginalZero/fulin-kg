@@ -178,9 +178,129 @@ k8s 的服务编排跟这个调度的区别是啥？基本上能实现 k8s 的�
 
 #### model representation
 
+Rebalancer的表达式API支持聚合操作符Max和Sum，以及转换操作符Step、Ceil、Log和Power。例如，如果x为正数，Step(x)的计算结果为1，否则为0。
+
+一旦使用规范指定了优化问题，Rebalancer 会将规范转换为表达式的递归组合，重用常见表达式以获得紧凑的表达式图。比如用来保证多样性的 GroupDiversitySpec，转换成表达式是这样，含义是如果 b_j 包含来自 G_i 的 object 就加 1，要求值大于等于 k。
+$$
+GroupDiversitySpec = \sum_i{Step(util(b_j, G_i, count)) >= k}
+$$
+搞了几个 efficient custom expression 来把时间复杂度从  Θ（|O| * |B|）降低到  Θ（|O| + |B|）。
+
+论文只介绍了其中一个 expression 叫 Lookup，用以高效实现 utilization。
+
+可以用 Lookup 加速的原因是：在大多数情况下，object 的维度值不受它被分配到的 bin 的影响。例如，一个任务消耗的内存大小与它运行在哪个服务器无关，都是一样的值。这允许不同 bin 和 scope item 来共享和重用这些维度值。
+
+具体来说，对于每个静态维度 D，建立一个对象向量 object vector，记为 VD，记录了从 object 到 dimension value 的映射关系。给定一个 object vector VD 和一个 scope item Si，一个 Lookup 表示对 Si 中的 bin 的 object-bin pair 进行的高效聚合操作。例如，util(Si, D) = Lookup(Si, VD) 只是通过查找汇总了 Si 中所有 bin 在给定维度 D 上的利用率。
+
+请注意，查找本身的内存使用是固定大小的，因为它只保存了对 Si 和 VD 的引用，而 Si 和 VD 的表示大小分别为 O(|B|) 和 O(|O|)，在所有表达式中共享和重用。这导致整体问题规模是 Θ(|O| + |B|)。
+
+还是没看懂为啥 Lookup 可以减少时间复杂度？只有涉及到成批 object 计算时才有用？
+
+rebalancer 中的限制都可以用 fun(x) <= 0 来表示，那就可以转换成 Max 表达式
+
+每个 bin 都可以有一个 CapacitySpec，比如 bin 1 限制 CPU 使用率不超过 10%，bin 2 限制不超过 20%，可以用一个统一的形式写成：
+$$
+Max_i(Lookup(b_i, V_D) - L_i) <= 0
+$$
+每个优化目标和限制都可以写成这种表达式的递归形式。那么可以把优化目标和限制在一个 DAG 上表示。
+
+图上的节点是表达式，每个优化目标和限制是一个子图
+
+Lookup 一定是叶子节点吗？
+
+以 lookup 为关键词搜索
+
+
+
+
+
+一个分配问题就是要在多个 x 满足多个限制的前提下，找到使优化目标最大的各个 x 取值
+
+
+
+
+
+只看 figure 2，也不像是个 DAG
+
 
 
 #### model solving
+
+因为 bin 比 object 的整体数量要少，所以先固定每个 bin 去找合适的 object，那么先找 hot bin。
+
+
+
+生成 candidate move 包含 2 部分
+
+* hot bin selection
+
+  如果在 bin1 和 bin2 上有从一条从 node v 到 Lookup 的有向路径，那么将 object 移入/移出这些 bin 将提高 node v 的值。
+
+  所以可以将 leaf node 对 object 的共享按 greedy order  排序来选出 hot bin
+
+  当给定一个目标和当前任务时，移动物体到或离开这个箱子会最大程度地降低目标值，则认为这个箱子是最热的。从高层次上说，在每次迭代中，我们都会找到最热（也就是最坏）的箱子，并尝试通过根据移动类型进行局部更改来修复它，然后继续搜索，直到没有进展为止
+
+  表达式图已经指明了优化目标被哪些 bins 和多少数量影响
+
+  用贪心的方式找出对优化目标贡献最大的叶子节点（这个共享最大的意思是越靠近根节点越好？），比如 Lookup，有了 leaf node 的排序后，就可以得到 bin set 的排序，这样就能找到 hot bin。
+
+  往 bin 中增删 object 会影响 bin 所在 Lookup 的值，进而影响到对优化目标的贡献
+
+* move strategies
+
+  在选定 hot bin 之后，可以用 SINGLE, RAMDOM, GREEDY, SWAP 移动策略将 object 移入/移出到 hot bin
+
+  SINGLE 策略是穷举每个 object 到 hot bin  然后再接受最好的 move
+
+  一般推荐是先 RANDOM 几次，当改进机会变的稀缺时，再用 GREEDY
+
+move evaluation 的 3 种加速手段
+
+* Bottom-up change propagation
+
+  维护一个从 object 到 leaf node 的 map，一个从 bin 到他涉及到的 leaf node 的 map，对于给定的 candidate move，通过这两个 map 找到受影响的叶子和根节点，这条路径上的所有节点都需要被重新计算
+
+* Minimal computation during a node update
+
+  假设要计算类型为 max 的 node，要区分 changed / unchanged child nodes，对 child nodes 维护一个有序列表，这样可以快速计算 unchanged child nodes 中的最大值，并且有序列表的更新只在应用这个 move 的时候，并且也只是 O(unchanged child nodes len * log(all child nodes))
+
+* Parallelizing Move Evaluations 
+
+  在 apply 之前，找 candidate move 是可以并行找的，因为 move evaluation 并不改变当前状态
+
+
+
+潜在值 = 当前值 - 下界值。
+
+对于每个节点，用 child 的潜在值作为排序依据，得到一个有序列表。
+
+如果一个节点的潜在值是 0，说明以该节点为根节点的子图是有优化空间的。
+
+叶子节点，比如 ObjectLookup 被一组 bin 参数化，改变 bin 的内容就会影响这个叶子节点的值。
+
+识别出等价对象，比如属于的同一个 job 的每个 task 对住资源的占用是一样的，只要算其中一个 task 在移动前后的对比。事实上，这样的功能可以非常强大地进一步减少搜索空间，因为它允许我们放弃在探索时等效的移动（如果两个移动都将等效的对象从源箱移动到目标箱，则两个移动是等效的）。
+
+对于给定的限制和 object 表达式（也就是只关心本次问题中的 spec，不需要 cover 每一种 spec），如果 A 和 B 算出相同的值，那么他们是等价对象。
+
+在表达式图中的每个节点，哪些 object 集合等价于这个节点，这些 object 集合之间是等价的。
+
+
+
+根据 algorithm 3，怎么体现出时间复杂度是 O(O + B) ？
+
+搞了几个 efficient custom expression 来降时间复杂度，论文只接受了一个 expression 叫 Lookup，用以高效实现 utilization。
+
+
+
+
+
+最耗时的 3 个操作
+
+* 找 hot bin
+* 对于给定的 bin 和 move type，找到能让优化目标效果最好的 best local change
+* 在表达式图上应用 best local change，并且更新赋值情况
+
+
 
 
 
@@ -188,7 +308,9 @@ k8s 的服务编排跟这个调度的区别是啥？基本上能实现 k8s 的�
 
 
 
-ZBS 可能会怎么使用
+ZBS 可能会怎么使用？
+
+了解下 MIP 的一般解法，这样有个直观概念。
 
 
 
