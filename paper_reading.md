@@ -1,18 +1,14 @@
 ### Optimizing Resource Allocation in Hyperscale Datacenters: Scalability, Usability, and Experiences
 
-现有问题
 
 
+问题引入
 
 资源分配问题
 
 * Hardware placement
 
     决定何时何地在数据中心中添加或删除服务器机架，同时平衡相互竞争的目标，如员工工作计划、电力预算、跨故障域的分布和邻近的托管，例如需要高带宽网络的ML训练服务器。
-
-* Service placement 
-
-    由于不同的服务在不同的服务器上表现出不同的性能，在将每个服务分散到不同故障域的同时，确定服务器对服务的分配，并优化服务和服务器代之间的匹配。
 
 * Service sharding
 
@@ -24,7 +20,7 @@
 
 最常见的解法是混合整数规划（Mixed-Integer Programming ，MIP） ，解法有分支界定法和割平面法
 
-时间复杂度是 O (|O| * |B|) 但问题规模变大，时间复杂度就变大了
+时间复杂度是 O (|O| * |B|) ，当问题规模变大，时间复杂度就变大了
 
 meta 遇到的问题规模是 100w 的 objects 和 10w 的 bins。
 
@@ -36,11 +32,13 @@ Rebalancer 包含 3 方面：
 
 * model specification
 
-    对外提供了一些 xxxSpec 供开发者使用
+    对外提供了一些 xxxSpec 供开发者使用（面向的用户是开发者）
 
 * model representation
 
     开发者通过 spec 定义一个分配问题后，rebalancer 将其转成表达式图，图上的每个节点表示由其子表达式构造的表达式。
+
+    根节点值表示优化目标
 
 * model solving
 
@@ -54,9 +52,11 @@ Rebalancer 包含 3 方面：
 
 #### model specification
 
+基本概念是物品和箱子，把特定物品放进特定箱子里，使得在满足给定限制下，整体收益最大 
+
 对外提供了几个概念，比如 object 和 bin 之间的 dimension、bin scope
 
-对外提供了一些 xxxSpec，比如 CapacitySpec
+对外提供了一些 xxxSpec，比如 CapacitySpec 
 
 支持自定义一个新的 xxxSpec，已有的单个 Spec 最复杂也是在几百行代码里完成
 
@@ -70,17 +70,17 @@ Rebalancer 包含 3 方面：
 
     Rebalancer uses *scopes* to represent the hierarchical structure of bins
 
-    scop 将所有 bins 划分成若干个 scope items。比如在 rack scope 下，scope item 比如 rack1和 rack2 表示这些特定机架中的服务器集合。
+    scope 将所有 bins 划分成若干个 scope items。比如在 rack scope 下，scope item 比如 rack1和 rack2 表示这些特定机架中的服务器集合。
 
 * object
 
-    类似于 bin scope 的概念，对于 object 有个 object partition 的概念，但可能不是正交的。
+    类似于 bin scope 的概念，对于 object 有个 object partition 的概念，但 object partition 之间可能不是正交的。
 
-    object partition 中的每个集合计为 group，
+    object partition 中的每个集合计为 group
 
     For example, in the context of cluster management, all tasks are partitioned into jobs and a job is a group of tasks that run the same executable.
 
-    一个 job 中有多个 tasks
+    一个 job 中有多个 tasks，一个 job 是一个 group
 
 * utilization
 
@@ -104,13 +104,13 @@ Rebalancer 包含 3 方面：
 
     这样可以定义新概念：
 
-    NEW_util = AFTER_util - STAYED_util，刚被移到 bin_j 的 object 的利用率
+    NEW_util = AFTER_util - STAYED_util，刚被移入 bin_j 的 object 的利用率
 
     OLD_util = INITIAL_util - STAYED_util，刚被移出 bin_j 的 object 的利用率
 
     ANY_util = INITIAL_util + AFTER_util - STAYED_util，不论分配前后，只要在 bin_j 中的 object 的利用率
 
-    NEW_util 和 OLD_util 可以度量系统稳定性，另外可以得出 util(b_j, D, STAYED)  =util(b_j, D_init, AFTER) 。
+    NEW_util 和 OLD_util 可以度量系统稳定性，另外可以得出 util(b_j, D, STAYED)  = util(b_j, D_init, AFTER) 
 
 定义作为 object 的 tasks 和作为 bin 的 servers 之间的关系
 
@@ -121,11 +121,19 @@ addConstraint(CapacitySpec(scope="server", dimension="storage"))
 // 限制一个机架上每个 job 最多运行一个 task
 addConstraint(GroupCountSpec(scope="rack", dimension="ObjectCount", partition="job", limit=1))
 
-// 平衡服务器间的存储用量
+// 优化目标是平衡服务器间的存储用量
 addObjective(BalanceSpec(scope="server", dimension="storage"))
 ```
 
 Rebalancer 会将这些 util 变量翻译成数学形式，INITIAL_util 可以被提前计算，AFTER_util 表示按维度 D 分配后的结果。比如用 UtilIncreaseCostSpec 来优先移动 CPU 利用率小于指定阈值 T 的 server，那么对每个 object 加一个惩罚表达式 Power(excessUtil_i, 2)，其中 excessUtil_i = Max(0, util(server_i, CPU, AFTER) - T)。
+
+
+
+支持一次资源分配里有多个优化目标吗？
+
+
+
+Local Search 的结果稳定吗？他们的 qe 怎么做测试？
 
 
 
@@ -137,20 +145,24 @@ datacenter region -> datacenter -> suite -> main switch board(MSB) -> server row
 
 时不时会有整个机架的上电和下电。资源分配时需要考虑到员工的上班时间、故障域的冗余、网络、电力的资源限制。
 
-rack 作为 object，(week, position) 作为 bin（前者是哪一周上电，后者是机架所在的物理位置）。
+rack 作为 object，(week, position) 作为 bin（前者是哪一周上电，后者是机架所在的物理位置，比如在哪个 MSB 之类的）。
 
 在同一个 MSB 和同一周的 bin 集合是一个 scope item。同一类型的 rack 组成一个个 rack partition。
 
 * 待添加的机架一开始认为在 unassgied bin，并对这个 bin 添加 ToFreeSpec，也就是必须都分配出去。
 * 对 bin scope 如 MSB/suite 添加 CapacitySpec，来限制电力和网络流量。
 * AI server rack 必须放在 AI zone 以使用高带宽的网络。为此引入一个 AiRack dimension，将使用 AiRack dimension 的 CapacitySpec 作用在 position scope 上。
-* 在同一周要处理的  rack 通过把 rack 放在一个 group 并且应用 ColocateGroupSpec 到这个 group 在 week scope。
+* 在同一周要处理的 rack 通过把 rack 放在一个 group 并且应用 ColocateGroupSpec 到这个 group 在 week scope。
 
 总的来说，由于机架的变化是渐进的，而且我们是分别为每个数据中心区域计算解决方案的，因此硬件布局问题的规模相对较小，涉及数百个 object 和数千个 bin。对于这些小问题，Rebalancer将表达式图转换为MIP问题公式，并采用MIP求解器，而不是局部搜索求解器，以确保高质量的结果。
 
 
 
-有了这些 Spec 后，怎么解决 Service placement
+
+
+有了这些 Spec 后，怎么解决 Service Placement
+
+资源池，
 
 service placement 考虑的是每个 region 内的资源预留。
 
@@ -159,6 +171,66 @@ server 作为 obejct，reservations 作为 bin。
 70w 个 servers 还能理解，不过 reservations 作为 bin，为啥会有 6k 个的量级？
 
 为啥是 reservations 作为 bin，这个 reservation 像是资源池化后的使用？论文里说是作为一个动态的虚拟集群，用于承载业务团队的 job
+
+
+
+有了这些 Spec 后，怎么解决 Service Sharding
+
+什么时候使用分片？
+
+* 应用程序数据量增长到超过单个数据库节点的存储容量
+* 对数据库的读写量，超过单个节点或其只读副本可以处理的量，从而导致响应时间增加或超时
+* 应用程序所需的网络带宽，超过单个数据库节点和任何只读副本可用的带宽，从而导致响应时间增加或超时。
+
+
+
+一个  linux 进程上有 100 个 shard，每个 shard 有多个副本，
+
+* Capacity limit
+
+  在分片移动过程中，避免内部 IO 流量多大
+
+  用 CapacitySpec 来保证 server 不过载，鉴于跨服务器分片移动不是即时的，使用 ANY_util
+
+* Limit churns
+
+  减少不必要的内部 IO 流量
+
+  用 CapacitySpec，ObjectCount 作为 dimension，NEW_util 和  OLD_util 作为 util 来限制每个服务器或每个分片的移动次数
+
+* Region preference 
+
+  比如各个地区的使用者就近使用他所在的 region 上的 shard
+
+  用 AssignmentAffinitiesSpec 来让某些 shard 分配到指定的 datacenter region
+
+* Load banlancing
+
+  用 BalanceSpec，分别以 bin / region 作为 bin scope 来做到 regional / global 级别的负载均衡
+
+* Fault Tolerance
+
+  属于同一个 shard 的多个副本要放在不同故障域上
+
+  用 GroupCountSpec，以 replica 作为 partition，rack / MSB 作为 scope
+
+最大的 sharding 问题涉及到 1.8M 个 object 和 27K 个 bin，并要求在 5 min 内给出分配结果。此时 MIP 无法应对，转为使用 local search
+
+
+
+举例来说，假设您有一个数据库，其中有两个单独的分片，一个用于姓氏以字母A到M开头的客户，另一个用于名字以字母N到Z开头的客户。但是，您的应用程序为姓氏以字母G开头的人提供了过多的服务。因此，A-M分片逐渐累积的数据比N-Z分片要多，这会导致应用程序速度变慢，并对很大一部分用户造成影响。A-M分片已成为所谓的数据热点，在这种情况下，数据库分片的任何好处都被慢速和崩溃抵消了。数据库可能需要修复和重新分片，才能实现更均匀的数据分布。
+
+
+
+
+
+* 分片用于处理大型数据库的数据划分和扩展，以提高性能和可扩展性，通常在不同的服务器上存储不同的数据
+
+* 副本用于提高数据库的可用性、容错性和读取性能，通常在多个数据库服务器之间创建数据的副本。主数据库用于写入，从数据库用于读取。
+
+  Replica 会带来写性能和吞吐的下降，一个分片可能会有 0 个或多个副本，这些副本中的数据保证强一致或最终一致。
+
+
 
 
 
@@ -174,13 +246,15 @@ k8s 的服务编排跟这个调度的区别是啥？基本上能实现 k8s 的�
 
 还是没有搞得很清楚，有了这些 spec 后，怎么定义我们想要的效果。这些 spec 貌似也不太易用
 
+把分配问题转成 spec 的使用
+
 
 
 #### model representation
 
 Rebalancer的表达式API支持聚合操作符Max和Sum，以及转换操作符Step、Ceil、Log和Power。例如，如果x为正数，Step(x)的计算结果为1，否则为0。
 
-一旦使用规范指定了优化问题，Rebalancer 会将规范转换为表达式的递归组合，重用常见表达式以获得紧凑的表达式图。比如用来保证多样性的 GroupDiversitySpec，转换成表达式是这样，含义是如果 b_j 包含来自 G_i 的 object 就加 1，要求值大于等于 k。
+一旦使用 spec 指定了优化问题，Rebalancer 会将规范转换为表达式的递归组合，重用常见表达式以获得紧凑的表达式图。比如用来保证多样性的 GroupDiversitySpec，转换成表达式是这样，含义是如果 b_j 包含来自 G_i 的 object 就加 1，要求值大于等于 k。
 $$
 GroupDiversitySpec = \sum_i{Step(util(b_j, G_i, count)) >= k}
 $$
@@ -190,11 +264,17 @@ $$
 
 可以用 Lookup 加速的原因是：在大多数情况下，object 的维度值不受它被分配到的 bin 的影响。例如，一个任务消耗的内存大小与它运行在哪个服务器无关，都是一样的值。这允许不同 bin 和 scope item 来共享和重用这些维度值。
 
+obeject 分配到 bin1 和 bin2 在 dimension D 上的值都是一样的，那么就可以不用算 bin sum 次，每个 object 算一次就好。
+
+
+
 具体来说，对于每个静态维度 D，建立一个对象向量 object vector，记为 VD，记录了从 object 到 dimension value 的映射关系。给定一个 object vector VD 和一个 scope item Si，一个 Lookup 表示对 Si 中的 bin 的 object-bin pair 进行的高效聚合操作。例如，util(Si, D) = Lookup(Si, VD) 只是通过查找汇总了 Si 中所有 bin 在给定维度 D 上的利用率。
 
-请注意，查找本身的内存使用是固定大小的，因为它只保存了对 Si 和 VD 的引用，而 Si 和 VD 的表示大小分别为 O(|B|) 和 O(|O|)，在所有表达式中共享和重用。这导致整体问题规模是 Θ(|O| + |B|)。
+请注意，查找本身的内存使用是固定大小的，因为它只保存了对 Si 和 VD 的引用，而 Si 和 VD 的表示大小分别为 O(|B|) 和 O(|O|)，在所有表达式中共享和重用。这导致整体问题规模是 Θ(|O|+|B|)。
 
 还是没看懂为啥 Lookup 可以减少时间复杂度？只有涉及到成批 object 计算时才有用？
+
+
 
 rebalancer 中的限制都可以用 fun(x) <= 0 来表示，那就可以转换成 Max 表达式
 
@@ -204,13 +284,9 @@ Max_i(Lookup(b_i, V_D) - L_i) <= 0
 $$
 每个优化目标和限制都可以写成这种表达式的递归形式。那么可以把优化目标和限制在一个 DAG 上表示。
 
-图上的节点是表达式，每个优化目标和限制是一个子图
+图上的节点是表达式，每个优化目标和限制是一个子图，
 
 Lookup 一定是叶子节点吗？目前来看，论文里的描述基本是的。但叶子节点不一定都是 Lookup 节点，只不过论文里只以 Lookup 为例。
-
-
-
-
 
 
 
@@ -218,13 +294,11 @@ Lookup 一定是叶子节点吗？目前来看，论文里的描述基本是的�
 
 
 
-
-
-只看 figure 2，也不像是个 DAG
-
-
-
 #### model solving
+
+用 optimized local search 来处理 model solving
+
+
 
 因为 bin 比 object 的整体数量要少，所以先固定每个 bin 去找合适的 object，那么先找 hot bin。
 
@@ -236,17 +310,61 @@ Lookup 一定是叶子节点吗？目前来看，论文里的描述基本是的�
 
   如果在 bin1 和 bin2 上有从一条从 node v 到 Lookup 的有向路径，那么将 object 移入/移出这些 bin 将提高 node v 的值。
 
-  所以可以将 leaf node 对 object 的共享按 greedy order  排序来选出 hot bin
+  所以可以将 leaf node 对 object 的共享按 greedy order 排序来选出 hot bin
 
   当给定一个目标和当前任务时，移动物体到或离开这个箱子会最大程度地降低目标值，则认为这个箱子是最热的。从高层次上说，在每次迭代中，我们都会找到最热（也就是最坏）的箱子，并尝试通过根据移动类型进行局部更改来修复它，然后继续搜索，直到没有进展为止
 
   表达式图已经指明了优化目标被哪些 bins 和多少数量影响
 
-  用贪心的方式找出对优化目标贡献最大的叶子节点（这个共享最大的意思是越靠近根节点越好？），比如 Lookup，有了 leaf node 的排序后，就可以得到 bin set 的排序，这样就能找到 hot bin。
+  用贪心的方式找出对优化目标贡献最大的叶子节点，比如 Lookup，有了 leaf node 的排序后，就可以得到 bin set 的排序，这样就能找到 hot bin。
+
+  对优化目标贡献最大的叶子节点，这里的贡献定义是什么？论文里没有细说，猜测是按叶子节点的入度来算？或者是跟根节点距离最近的叶子节点？
+
+  node 直接相连的 Loopup，
+
+  
+
+  找到入度最大的 Lookup 叶子节点
+
+  
+
+  按 potential 排序每个节点的 child 节点，之后前序遍历（根左右）
+
+  如果一个节点 v 的 potential 是 0，说明以他为根节点的子图已经是 optimal 了。
+
+  每个节点的 potential 等于 current value 和他的 lower bound 的差值。
+
+  节点的 lower bound 怎么计算？
+
+  如果一个 Lookup node 的所有 bin 都已经被 explored 过，那么认为他的 lower bound = 他的当前值。
+
+  一旦所有叶子节点的 lower bound 被更新过，可以递归地计算所有表达式的 bound。
+
+  如果 obejective root node 的值等于他的 lower bound。
+
+  节点的当前值就是节点所在表达式的当前计算结果。
+
+  
+
+  潜在值最高的那个 node 中的 bin
+
+  
+
+  先前的工作里认为，一个 bin 的 potential 是当前的 obejective value 和移出 bin 上所有 object 后的 obejective value 之差，但这只适用于不会被移入 object 的 bin
+
+  
+
+  Lookup 跟 bin 的关系是啥？
+
+  搞这个 DAG 图对性能有帮忙吗？这个图有啥好处。
+
+  
 
   往 bin 中增删 object 会影响 bin 所在 Lookup 的值，进而影响到对优化目标的贡献
 
   从 hottest bin 增减 object 会让优化目标的
+
+  
 
 * move strategies
 
@@ -307,6 +425,8 @@ move evaluation 的 3 种加速手段
 
 
 每个目标都指定了一个权重和优先级。Rebalancer使用加权和将所有目标具有相同的优先级。为竞争目标（例如objA， objB）找到合适的权重是通过首先对它们进行归一化，使它们的值具有可比性，然后根据它们在问题域中的相对重要性选择可乘性权重来完成的。一些用例为目标提供了严格的优先级，而再平衡器确保在解决低优先级目标时不会在高优先级目标上倒退。
+
+在使用MIP时，如果有两个目标值完全相同的解，则再平衡器可能会任意选择其中一个，造成多个解之间的不稳定。
 
 
 
@@ -376,7 +496,7 @@ aliyun 提供的 MindOpt 可以解混合整数线性规划（MILP）问题。
 
 
 
-简单的问题，meta rebalancer 会将其转成  MIP 来处理。
+规模小的问题，meta rebalancer 会将其转成 MIP 来处理。
 
 
 
@@ -412,7 +532,7 @@ MIP 是用形式化验证，DCM 支持 SQL 语句，Rebalancer 支持 object / b
 
 MIP 求解器不仅具有不可预测的执行时间，而且由于数值精度问题偶尔会遇到不可行性。
 
-也试过用并行的方式优化，但在上升一个数量级的问题规模面前，还是比较
+也试过用并行的方式优化，但在上升一个数量级的问题规模面前，时间复杂度还是太高了。
 
 
 
@@ -424,7 +544,7 @@ local search 和模拟退火的区别
 
 7.7 rebalancer 的限制
 
-有些问题可以用 MIP 建模，但不能用 rebalancer 建模，因为它们不适合将 object 分配到 bin 的抽象。一个这样的例子是将网络流量分配给链路，其中 rebalancer 无法对链路拓扑中的依赖序列进行建模。然而，Rebalancer的低级表达式API和表达式图足够通用，可以支持这些问题，同时显著提高可用性。因此，我们扩展了表达式API和表达式图，以创建更灵活的框架，使MIP问题的建模超越了指派问题。
+有些问题可以用 MIP 建模，但不能用 rebalancer 建模，因为它们不适合将 object 分配到 bin 的抽象。一个这样的例子是将网络流量分配给链路，其中 rebalancer 无法对链路拓扑中的依赖序列进行建模。然而，Rebalancer的低级表达式API和表达式图足够通用，可以支持这些问题，同时显著提高可用性。因此，我们扩展了表达式API和表达式图，以创建更灵活的框架，使MIP问题的建模超越了分配问题。
 
 
 
