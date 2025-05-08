@@ -222,15 +222,11 @@ server 作为 obejct，reservations 作为 bin。
 
 
 
-
-
 * 分片用于处理大型数据库的数据划分和扩展，以提高性能和可扩展性，通常在不同的服务器上存储不同的数据
 
 * 副本用于提高数据库的可用性、容错性和读取性能，通常在多个数据库服务器之间创建数据的副本。主数据库用于写入，从数据库用于读取。
 
   Replica 会带来写性能和吞吐的下降，一个分片可能会有 0 个或多个副本，这些副本中的数据保证强一致或最终一致。
-
-
 
 
 
@@ -256,8 +252,16 @@ Rebalancer的表达式API支持聚合操作符Max和Sum，以及转换操作符S
 
 一旦使用 spec 指定了优化问题，Rebalancer 会将规范转换为表达式的递归组合，重用常见表达式以获得紧凑的表达式图。比如用来保证多样性的 GroupDiversitySpec，转换成表达式是这样，含义是如果 b_j 包含来自 G_i 的 object 就加 1，要求值大于等于 k。
 $$
-GroupDiversitySpec = \sum_i{Step(util(b_j, G_i, count)) >= k}
+GroupDiversitySpec = \sum_i{Step(util(b_j, O_i, count)) >= k}
 $$
+$$
+CapacitySpec = {Max(util(b_j, O_i, count)) >= k}
+$$
+
+
+
+
+
 搞了几个 efficient custom expression 来把时间复杂度从  Θ（|O| * |B|）降低到  Θ（|O| + |B|）。
 
 论文只介绍了其中一个 expression 叫 Lookup，用以高效实现 utilization。
@@ -265,8 +269,6 @@ $$
 可以用 Lookup 加速的原因是：在大多数情况下，object 的维度值不受它被分配到的 bin 的影响。例如，一个任务消耗的内存大小与它运行在哪个服务器无关，都是一样的值。这允许不同 bin 和 scope item 来共享和重用这些维度值。
 
 obeject 分配到 bin1 和 bin2 在 dimension D 上的值都是一样的，那么就可以不用算 bin sum 次，每个 object 算一次就好。
-
-
 
 具体来说，对于每个静态维度 D，建立一个对象向量 object vector，记为 VD，记录了从 object 到 dimension value 的映射关系。给定一个 object vector VD 和一个 scope item Si，一个 Lookup 表示对 Si 中的 bin 的 object-bin pair 进行的高效聚合操作。例如，util(Si, D) = Lookup(Si, VD) 只是通过查找汇总了 Si 中所有 bin 在给定维度 D 上的利用率。
 
@@ -320,27 +322,41 @@ Lookup 一定是叶子节点吗？目前来看，论文里的描述基本是的�
 
   对优化目标贡献最大的叶子节点，这里的贡献定义是什么？论文里没有细说，猜测是按叶子节点的入度来算？或者是跟根节点距离最近的叶子节点？
 
-  node 直接相连的 Loopup，
+  图表示是该算法比过去的局部搜索算法更有效的根本原因
 
   
 
-  找到入度最大的 Lookup 叶子节点
+  只找最热的 bin
+
+  哪些 object 移入或者移出这个 bin 能让目标函数最大化
+
+  计算目标函数的收益只算动到的那些 Lookup 节点到 root 节点过程中涉及到的那个节点
+
+  1M 节点可以只计算 tens of them
 
   
 
-  按 potential 排序每个节点的 child 节点，之后前序遍历（根左右）
+  lookup 是 utilization of a bin-group 的简洁表示
+
+  utilization 可以认为是 contribution by objects of a bin
+
+  
+
+  current assignment: b1: o3 o4，b2: o2, o5
+
+  
 
   如果一个节点 v 的 potential 是 0，说明以他为根节点的子图已经是 optimal 了。
 
-  每个节点的 potential 等于 current value 和他的 lower bound 的差值。
+  按 potential 排序每个节点的 child 节点，之后前序遍历（根左右）
 
-  节点的 lower bound 怎么计算？
+  每个节点的 potential 等于 current value 和他的 lower bound 的差值。节点的 lower bound 怎么计算？
 
   如果一个 Lookup node 的所有 bin 都已经被 explored 过，那么认为他的 lower bound = 他的当前值。
 
   一旦所有叶子节点的 lower bound 被更新过，可以递归地计算所有表达式的 bound。
 
-  如果 obejective root node 的值等于他的 lower bound。
+  如果 obejective root node 的值等于他的 lower bound，认为无法继续优化，程序结束。
 
   节点的当前值就是节点所在表达式的当前计算结果。
 
@@ -408,7 +424,7 @@ move evaluation 的 3 种加速手段
 
 根据 algorithm 3，怎么体现出时间复杂度是 O(O + B) ？
 
-搞了几个 efficient custom expression 来降时间复杂度，论文只接受了一个 expression 叫 Lookup，用以高效实现 utilization。
+搞了几个 efficient custom expression 来降时间复杂度，论文只介绍了一个 expression 叫 Lookup，用以高效实现 utilization。
 
 
 
