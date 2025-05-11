@@ -1,3 +1,22 @@
+1. 把 GetThickSpace(PT_PERF) 的另起一个 patch 来做，参考 http://gerrit.smartx.com/c/zbs/+/81103/2
+2. HasSpaceForAlloc 和 HasSpaceForCOW 看看要不要改。
+
+
+
+
+
+检查 allocated_prioritized_space 和 planned_prioritized_space 都不该直接使用，
+
+而是用 GetPerfThickAllocatedSpace 和 GetPerfThickValidSpace
+
+
+
+
+
+thin pextents 的初始空间大小或许应该改成一个倍数关系，比如 1/4 之类的。
+
+
+
 改 new_thin_pids 影响范围太广了，所有调用到 SetPextents 的地方，比如 RefreshChildLExtentLocationInternal，比如从非双活转到双活的副本提升 ，比如 COW 一个数据块，克隆出比源卷大的目标卷时补的空间，刚升级到分层的场景，更新 volume 之类的。
 
 这里或许可以有一个折中的办法是不改成 16 MiB，比如 64 MiB 之类的，降低 meta 超分的概率。
