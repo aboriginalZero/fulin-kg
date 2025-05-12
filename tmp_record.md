@@ -1,5 +1,5 @@
-1. 把 GetThickSpace(PT_PERF) 的另起一个 patch 来做，参考 http://gerrit.smartx.com/c/zbs/+/81103/2
-2. HasSpaceForAlloc 和 HasSpaceForCOW 看看要不要改。
+1. HasSpaceForAlloc 和 HasSpaceForCOW 看看要不要改。
+2. 在 perf thin high 就开启加速下沉，但是只下沉 perf loc 都是开启了加速下沉节点的 block，当 perf thin very  high，那么也会下沉就
 
 
 
@@ -92,6 +92,8 @@ COW 产生的 Extent 期望副本数/EC 组合根据发生 COW 的 volume 的参
 
 
 meta 侧只能考虑去降低恢复到 dead 的概率。因此 pentry.GetDeadReplica(now_ms, healthy_cids_, &dead_segments); 这个时刻认为的 healthy cids 不一定准确。
+
+replica agile recover / ec normal recover  里漏了对 dead replica / dead node 的优先级后置。
 
 
 
