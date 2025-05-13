@@ -1,4 +1,5 @@
 1. 在 perf thin high 就开启加速下沉，但是只下沉 perf loc 都是开启了加速下沉节点的 block，当 perf thin very  high，那么也会下沉就一个 cid 是加速下沉节点的 block
+1. 优先下沉 3 副本且都是加速下沉节点，再下沉 2 副本且都是加速下沉节点
 
 
 
@@ -8,17 +9,42 @@ https://docs.google.com/document/d/1YINrRmp0Omdzz8a8ycobv9lVesBqkemB37_Rrz3yUvo/
 
 
 
+1. sinkable_block_lru 和 potential_sinkable_block_lru 的区别
+
+2. 搞清 PushChildExtent 被调用的地方
+
+    ReplicaGenerationSyncor::HandleGetValidBitmapDone 的时候，如果发现某个 valid block 根据 block 是否被 written 决定
+
+    has_cow_blocks 的设置正确吗？看起来只取决于最后一个 block ？
+
+    MarkNeedToSinkCowBlocks 的 if 条件里，最后一项为啥是 !cow()，期望是已经快照后写过的状态？
+
+    Sync 后，如果发现 lease->need_to_sink_cow_blocks() && lease->sinkable()，会把这个 extent 送入 child_extents_to_sink_
+
+    遍历 meta 通过心跳给过来的 SinkablePairs，如果发现满足 lease->need_to_sink_cow_blocks() && lease->sinkable()，会把这个 extent 送入 child_extents_to_sink_
+
+3. 为啥  no need to dealloc perf extent when sink_cow_block_only is true.
+
+4. 为啥 SINK 高/超高负载的时候不需要 sink cow block
+
+5. 为啥只有 SinkChildExtent / SinkInactiveExtent 会执行 lease->IncreaseSinkCount()
+
+6. sink child extent 的来源
+
+    * 发生克隆/Snapshot 之后的只读 LExtent 在没有发生 COW 的情况下也会积极下沉，避免 COW 之后的 Child Perf Extent 继承过多的只读数据
+    * 发生 COW 之后，即便集群处于低负载状态，Child Perf Extent 和 Parent Perf Extent 共享的数据部分，在 Parent Perf Extent 下沉释放后，也会积极主动的下沉。这样，虽然 Child Perf Extent 自己占用的空间也许还是相对较大的，但是后续再产生的后代 Perf Extent 也不再需要继承来自远古祖先的只读数据，避免空间的持续放大；
+
+    https://docs.google.com/document/d/1oOZ6CENaLFBU_AG6tZ4nnxv1CFUNvv3ND_NWVGVN2PY/edit?tab=t.0#heading=h.n0guzrhz6br
+
+7. 
 
 
-检查 allocated_prioritized_space 和 planned_prioritized_space 都不该直接使用，
-
-而是用 GetPerfThickAllocatedSpace 和 GetPerfThickValidSpace
 
 
 
 
 
-thin pextents 的初始空间大小或许应该改成一个倍数关系，比如 1/4 之类的。
+检查 allocated_prioritized_space 和 planned_prioritized_space 都不该直接使用，而是用 GetPerfThickAllocatedSpace 和 GetPerfThickValidSpace
 
 
 
@@ -31,9 +57,6 @@ thin pextents 的初始空间大小或许应该改成一个倍数关系，比如
 
 
 ```
-uint64_t pextent_reserve_size = is_thick ? pextent_size : std::ceil(pextent_size * FLAGS_thin_reserve_size_ratio);
-
-
 				auto gf_func = gf_fec_gen_vandermonde_matrix;
         if (tech == Reed_Sol_Van) {
             int n = k + m;
