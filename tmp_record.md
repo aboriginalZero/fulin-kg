@@ -1,5 +1,10 @@
-1. HasSpaceForAlloc 和 HasSpaceForCOW 看看要不要改。
-2. 在 perf thin high 就开启加速下沉，但是只下沉 perf loc 都是开启了加速下沉节点的 block，当 perf thin very  high，那么也会下沉就
+1. 在 perf thin high 就开启加速下沉，但是只下沉 perf loc 都是开启了加速下沉节点的 block，当 perf thin very  high，那么也会下沉就一个 cid 是加速下沉节点的 block
+
+
+
+这么要保证 sink 的频率不在 drain handler 上，先看下会怎么处理 accelerate_blocks_ 中的 block
+
+https://docs.google.com/document/d/1YINrRmp0Omdzz8a8ycobv9lVesBqkemB37_Rrz3yUvo/edit?tab=t.0
 
 
 
@@ -26,7 +31,10 @@ thin pextents 的初始空间大小或许应该改成一个倍数关系，比如
 
 
 ```
-        auto gf_func = gf_fec_gen_vandermonde_matrix;
+uint64_t pextent_reserve_size = is_thick ? pextent_size : std::ceil(pextent_size * FLAGS_thin_reserve_size_ratio);
+
+
+				auto gf_func = gf_fec_gen_vandermonde_matrix;
         if (tech == Reed_Sol_Van) {
             int n = k + m;
             if (k <= 3 || (k == 4 && n <= 25) || (k == 5 && n <= 10) || (k <= 21 && n - k == 4) || (n - k <= 3)) {
