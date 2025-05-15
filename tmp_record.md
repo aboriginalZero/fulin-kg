@@ -1,5 +1,6 @@
 1. 在 perf thin high 就开启加速下沉，但是只下沉 perf loc 都是开启了加速下沉节点的 block，当 perf thin very  high，那么也会下沉就一个 cid 是加速下沉节点的 block
 1. 优先下沉 3 副本且都是加速下沉节点，再下沉 2 副本且都是加速下沉节点
+1. update_from_remote_recover_counter 的更新，影响到 From Local Speed
 
 
 
