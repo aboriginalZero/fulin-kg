@@ -16,8 +16,6 @@ https://docs.google.com/document/d/1YINrRmp0Omdzz8a8ycobv9lVesBqkemB37_Rrz3yUvo/
 
     ReplicaGenerationSyncor::HandleGetValidBitmapDone 的时候，如果发现某个 valid block 根据 block 是否被 written 决定
 
-    has_cow_blocks 的设置正确吗？看起来只取决于最后一个 block ？
-
     MarkNeedToSinkCowBlocks 的 if 条件里，最后一项为啥是 !cow()，期望是已经快照后写过的状态？
 
     Sync 后，如果发现 lease->need_to_sink_cow_blocks() && lease->sinkable()，会把这个 extent 送入 child_extents_to_sink_
