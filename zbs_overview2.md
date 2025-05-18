@@ -1,4 +1,4 @@
-数据分配里可以提下 zbs
+
 
 
 
@@ -444,6 +444,16 @@ Cap 直写策略（仅针对冗余类型为 Replica 的 Volume）
 
 
 
+新写入数据会优先在缓存里，什么情况下会下沉到 HDD，比如多长时间不发生读写了。以及冷数据满足什么情况才会被 promote 到 SSD
+
+
+
+
+
+分片回收跟下沉基本是配合的
+
+
+
 ## 分片回收策略
 
 lextent / pextent 被 gc 的一般流程
@@ -591,7 +601,7 @@ zbs 中为了避免 IO 长时间不返回，每个发往本地 LSM 的 IO 若在
 
 Cap IO Throttle 具体实现参考 [Access for Tiering](https://docs.google.com/document/d/12P9oHQXEzRmOJ0RMdbdHoTF1_RkO7Ar_EUYoIAEKx08/edit?tab=t.0#heading=h.16o3ugr2s82p)
 
-
+## ZBS IO 路径
 
 
 

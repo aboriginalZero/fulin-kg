@@ -1,3 +1,15 @@
+先把 OS 搞了，
+
+
+
+怎么看一个集群是嵌套的还是物理集群
+
+
+
+把下沉和 ec 总结出来
+
+
+
 1. 在 perf thin high 就开启加速下沉，但是只下沉 perf loc 都是开启了加速下沉节点的 block，当 perf thin very  high，那么也会下沉就一个 cid 是加速下沉节点的 block
 1. 优先下沉 3 副本且都是加速下沉节点，再下沉 2 副本且都是加速下沉节点
 1. update_from_remote_recover_counter 的更新，影响到 From Local Speed
@@ -41,20 +53,6 @@ https://docs.google.com/document/d/1YINrRmp0Omdzz8a8ycobv9lVesBqkemB37_Rrz3yUvo/
 
 
 
-
-
-检查 allocated_prioritized_space 和 planned_prioritized_space 都不该直接使用，而是用 GetPerfThickAllocatedSpace 和 GetPerfThickValidSpace
-
-
-
-改 new_thin_pids 影响范围太广了，所有调用到 SetPextents 的地方，比如 RefreshChildLExtentLocationInternal，比如从非双活转到双活的副本提升 ，比如 COW 一个数据块，克隆出比源卷大的目标卷时补的空间，刚升级到分层的场景，更新 volume 之类的。
-
-这里或许可以有一个折中的办法是不改成 16 MiB，比如 64 MiB 之类的，降低 meta 超分的概率。
-
-
-
-
-
 ```
 				auto gf_func = gf_fec_gen_vandermonde_matrix;
         if (tech == Reed_Sol_Van) {
@@ -76,6 +74,10 @@ https://docs.google.com/document/d/1YINrRmp0Omdzz8a8ycobv9lVesBqkemB37_Rrz3yUvo/
         }
         
 ```
+
+
+
+做这个可以把 ec 部分的文档追一下，并总结下来。
 
 
 
@@ -326,7 +328,7 @@ win iso 在 arm 下要用 uefi 格式的，x86 可以用 bios
 看一下 zk journal
 
 1. https://docs.google.com/document/d/1Xro2919inu3brs03wP1pu5gtbTmOf_Tig7H8pfdYPls/edit?tab=t.0#heading=h.uni8fzt28mtx
-2. zk journal version check，http://gerrit.smartx.com/c/zbs/+/38871
+2. zk journal version check，http://gerrit.smartx.com/c/zbs/+/38871，对于会存到 metadb 的 pb 比如 message PExtent，如果添加了一个新字段，应该
 2. 记下笔记，涉及到 db cluster
 
 
