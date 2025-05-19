@@ -431,12 +431,103 @@ https://docs.google.com/document/d/1kAbSrD0xOB-3nGU9kdBMSadIuaY06Fvhdw8pxMOleHQ/
 
 
 
-Cap 直写策略（仅针对冗余类型为 Replica 的 Volume）
+|                | ratio       | drain parent perf pextent | drain idle perf pextent | generate drain cmd interval | reserved block num          | inactive lease interval | sink no lease timeout | Replica 的 Cap 直写策略                                      |
+| -------------- | ----------- | ------------------------- | ----------------------- | --------------------------- | --------------------------- | ----------------------- | --------------------- | ------------------------------------------------------------ |
+| sink low       | [0, 0.5]    | T                         | F                       | 30s                         | unlimit                     | 1h                      | 10 min                | 不允许 cap 直写                                              |
+| sink medium    | [0.5, 0.8]  | T                         | T                       | 20s                         | 0.425 * avg_perf_thin_valid | 30 min                  | 10 min                | 前一秒的 256k iops 若超过 500，允许接下来的 5s 做 256k 对齐的 cap 直写 |
+| sink high      | [0.8, 0.95] | T                         | T                       | 10s                         | 0.2 * avg_perf_thin_valid   | 15 min                  | 5 min                 | 允许 256k 对齐的 cap 直写                                    |
+| sink very high | [0.95, 1]   | T                         | T                       | 10s                         | 0.05 * avg_perf_thin_valid  | 3 min                   | 3 min                 | 允许 8k 对齐的 cap 直写                                      |
 
-1. sink low：不允许 cap 直写；
-2. sink medium：前一秒的 256k iops 若超过 500，允许接下来的 5s 做 256k 对齐的 cap 直写；
-3. sink high：允许 256k 对齐的 cap 直写；
-4. sink very high：允许 8k 对齐的 cap 直写。
+其中，avg_perf_thin_valid 的计算方式是，perf valid > 0 的 chunk 超过 5 个的话，去掉 perf thin valid 最大和最小的，剩下的 perf thin valid 取平均
+
+下沉策略可以这么设计的前提是，集群中的节点在超过 50% 之后，总是会可能达成均衡。
+
+
+
+我理解 reserved block num 变小的话，active lru 的长度变短，进入 inactive lru 的 block info 就变多了。
+
+
+
+drain parent / idle extent 是 drain mgr 发起的，drain mgr 主要干的事就是从 sinkable extents 中找出需要被下沉的 parent / idle extents
+
+
+
+no lease timeout 是 drain mgr 判断 idle extents 的依据
+
+
+
+所以允许下沉 child perf 的条件是：
+
+* parent cap 无效；
+* parent cap 有效，但 parent perf 已经无效；
+
+
+
+sinkable 设为 true 的可能情况：
+
+* PhysicalExtentTable::SetPExtentUnlocked 时，设置的是一个 no parent 的 perf thin extents，会把 sinkable 设为 true
+* 调用 PhysicalExtentTable::SetPExtentExistence 时，传入的 gen = 0 时，会清空 entry 的 origin pid 为 0，如果这是个 perf thin extent，会把 sinkable 设为 true
+* drain mgr 在找 sinkable 时，将潜在的可下沉的 perf thin extent 的 sinkable 设置成 true
+
+
+
+拿到 sinkable extents 后，根据是否有 child，判断他是不是个 parent extent，根据是否有 lease，判断他是不是 idle extent
+
+
+
+extent 设置 parent extent 的时机
+
+* PhysicalExtentTable::SetPExtentUnlocked
+
+  大部分是在这里设置的。他的调用方最主要还是在 transaction 中的 UpdateMetaContextWhenSuccess。
+
+  再往上找， 
+
+  * CowLExtentTransaction 中的 AllocPerfPExtentAndLocationWithOrigin，会设置 perf_extent 的 origin_pid，不过这是在 alloc_perf = true 的情况下才会设置；
+  * CowLExtentTransaction 中会设成 cap_extent 的 origin_pid，调用了这个 transaction 就一定会设置；
+  * AllocPExtentTransaction 且 origin_cap_pid != 0 时，会设置 cap_pextent 的 origin_pid。
+
+  申请 vextent write lease 的时候，如果发现 cow flag = true，会调用 CowLExtentTransaction，否则调用 AllocPExtentTransaction
+
+* PhysicalExtentTable::StagePExtent，如果有父子关系，在 stage pextent 阶段就会先设置上
+
+* PhysicalExtentTable::SetPExtentExistence 且传入的 gen = 0 时
+
+
+
+
+
+每 200ms 都会触发一次 TriggerMoreTask
+
+
+
+下沉任务类型：
+
+* ACCELERATE_SINK，权重为 4
+
+* DRAIN_CMD，权重为 2
+
+  除了用户主动下沉的 volume 中的 extent，drain mgr 会从 sink_low 开始下发 parent extent 的 drain cmd，从 sink_mid 开始下发 no lease extent 的 drain  cmd
+
+* SINK_CHILD_EXTENT，权重为 2
+
+  下沉 parent，更多是为了成链，而不是从性能角度考虑
+
+* SINK_INACTIVE_EXTENT，权重为 2
+
+  access 根据 sink mgr 提供的判断 lease inactive 参数（inactive lease interval），在周期性扫描自身持有的 lease 时，
+
+* SINK_INACTIVE_BLOCK，权重为 1
+
+  每轮从 BlockLRU 中最多拿不超过 8k 个 block，先从 CLEAN 里取，然后是 INACTIVE_FULL（block 的 bitmap 是满的情况），最后是 INACTIVE_NOT_FULL（block bitmap 不是全 1）
+
+
+
+
+
+libmeta 每分钟处理一次资源回收，lease 超过 1h 未被使用会被释放。
+
+
 
 
 

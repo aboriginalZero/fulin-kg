@@ -1,3 +1,7 @@
+性能测试，如果是 4k，先看 CPU 是否有异常使用的，如果是 256k，先看内存是否有异常使用的。
+
+
+
 先把 OS 搞了，
 
 
@@ -328,7 +332,7 @@ win iso 在 arm 下要用 uefi 格式的，x86 可以用 bios
 看一下 zk journal
 
 1. https://docs.google.com/document/d/1Xro2919inu3brs03wP1pu5gtbTmOf_Tig7H8pfdYPls/edit?tab=t.0#heading=h.uni8fzt28mtx
-2. zk journal version check，http://gerrit.smartx.com/c/zbs/+/38871，对于会存到 metadb 的 pb 比如 message PExtent，如果添加了一个新字段，应该
+2. zk journal version check，http://gerrit.smartx.com/c/zbs/+/38871，对于会存到 metadb 的 pb 比如 message PExtent，如果添加了一个新字段，应该把 zk journal version ++，这样可以避免低版本的 meta 成为 meta leader
 2. 记下笔记，涉及到 db cluster
 
 
@@ -1160,6 +1164,10 @@ should meet
 
 
 ### Lease 相关
+
+zbs 中的 lease 只允许 Access 主动要求 Meta 释放某一 Lease，而不允许 Meta 先于 Access 清理自身缓存的 Lease 信息，所以 lease 的释放一定是 access 主动发起的。如果是 meta 重启，lease 在 jeopardy / expired 状态就会清掉自身持有的所有 lease。
+
+
 
 meta 会 revoke 整个 volume lease 的 5 种情况
 
@@ -2215,6 +2223,13 @@ parent cap 就不一样了，虽然在 COW 之后，app io 也不会写 parent c
 如果在 parent cap 仍然有效时，允许 child perf 下沉到 child cap，那么 child cap 在 lsm 侧有独立于 parent cap 的一份数据，lsm 之后会认为 parent cap 进入只读状态，不会被修改，但是未来 parent perf 下沉到 parent cap 时会修改 parent cap 的数据，那么就破坏了 parent cap 只读假设（lsm 可能会崩溃？）。
 
 如果在 parent cap 仍然有效时，不允许 child perf 下沉到 child cap，那么 child cap 跟 parent cap 在 lsm 上会共用一份数据，即使 parent cap 被 sink io 写也没关系，因为只要不允许 child pextent 下沉，对 child pextent 的读写都只会读写 child perf，child cap 是什么状态不重要（他的数据内容跟 parent cap 保持一致）
+
+
+
+所以允许下沉 child perf 的条件是：
+
+* parent cap 无效；
+* parent cap 有效，但 parent perf 已经无效；
 
 
 
