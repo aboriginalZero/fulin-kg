@@ -865,11 +865,7 @@ meta 会根据集群平均负载决定使用何种下沉策略（下发给每个
 | sink high      | [0.8, 0.95] | T                         | T                       | 5 min                 | 10s                         | 0.2 * avg_perf_thin_valid   | 15 min                  | 允许 256k 对齐的 cap 直写                                    |
 | sink very high | [0.95, 1]   | T                         | T                       | 3 min                 | 10s                         | 0.05 * avg_perf_thin_valid  | 3 min                   | 允许 8k 对齐的 cap 直写                                      |
 
-在计算 reserved block num 时，其中的 avg_perf_thin_valid 的计算方式是，perf valid > 0 的 chunk 超过 5 个的话，去掉 perf thin valid 最大和最小的，剩下的 perf thin valid 取平均。
-
-reserved block num 变小的话，active lru 的长度变短，进入 inactive lru 的 block info 就变多了。
-
-
+在计算 reserved block num 时，其中的 avg_perf_thin_valid 的计算方式是，perf valid > 0 的 chunk 超过 5 个的话，去掉 perf thin valid 最大和最小的，剩下的 perf thin valid 取平均。对于 access 来说，reserved block num 变小的话，active lru 的长度变短，进入 inactive lru 的 block info 就变多了。
 
 
 
@@ -878,8 +874,6 @@ reserved block num 变小的话，active lru 的长度变短，进入 inactive l
 
 
 drain parent / idle extent 是 drain mgr 发起的，drain mgr 主要干的事就是从 sinkable extents 中找出需要被下沉的 parent / idle extents
-
-
 
 no lease timeout 是 drain mgr 判断 idle extents 的依据
 
@@ -901,8 +895,6 @@ sinkable 设为 true 的可能情况：
 
 
 拿到 sinkable extents 后，根据是否有 child，判断他是不是个 parent extent，根据是否有 lease，判断他是不是 idle extent
-
-
 
 extent 设置 parent extent 的时机
 
@@ -934,7 +926,79 @@ extent 设置 parent extent 的时机
 
 * ACCELERATE_SINK，权重为 4
 
+    
+
+    取集群中的节点最高值 perf_thin_medium_ratio = 0.5, perf_thin_high_ratio = 0.6, perf_thin_very_high_ratio = 0.85
+
+    取集群中的节点平均值 sink_mid_load_ratio = 0.5, sink_high_load_ratio = 0.8, sink_very_high_load_ratio = 0.95
+
+    
+
+    也把 perf_thin_used_ratio 用起来
+
+    
+
+    考虑把 perf_thin_high_ratio 改成 0.7 吗？然后在节点超过 0.7 就开启加速下沉，
+
+    超过 0.7 开启加速下沉，超过 0.85 开启全力加速下沉，回到 0.65 时关闭加速下沉。
+
+    加速下沉分两档
+
+    * 档位 1 ，[0.7, 0.85]，loc 里的所有 cid 如果都是加速下沉状态，那么对其加速下沉
+
+      如果都是加速下沉节点，那么对其下沉
+
+      
+
+      loc 上如果都是加速下沉节点，即使在 active list，也给他下沉？
+
+      
+
+    * 档位 2 ，>= 0.85，就开启全力下沉模式，直到回到 
+
+     
+
+    都扫描一遍，把跟下沉节点有关系的 block_no 找出来，
+
+    记一个 lease_id、block_no、lru_type，loc
+
+    把只要有跟碰到 cid 节点的 block 先拿出来，带上 lru_type
+
+    
+
+    每次从 free 到 active 取 loc 包含加速下沉节点的 block 20000 个，保证不在 accelerate_blocks
+
+    对于每个 block，记录他的 lease_id、block_no、lru_type，loc
+
+    每个 cid 有 perf_thin_not_free_ratio，可以对每个 block 算一个负载分数，分数越大说明越着急下沉。
+
+    分数相同的，优先下沉 clean 上的。
+
+    
+
+    比如最多只取 2w 个，还是保留目前这种
+
+    
+
+    我打算在 4 种 lru list 上各搞一个 iterator，这个 iter 遍历完当前 lru list 后，只会从这个 lru list 的尾 end 重新开始遍历，不调到其他 list 上。每轮找加速下沉节点的时候，只在各个 list 上允许扫描 1w 个，把 loc 包含加速下沉节点的 block info 拿出来。这样最多有 4w 个候选 block。下一轮找的时候，从 iter 上一轮停的位置开始遍历。
+
+    对这些候选 block 的 loc 按每个节点的 perf_thin_not_free_ratio 去算一个分数，分数越大的说明副本所在的 chunk 上的空间越稀缺，这个 block 越应该被早点下沉。分数相同的话，按 lru type 排序，clean > inactive full > inactive not full > active。
+
+    按这个规则从中选出 8192 个 block，认为是这个阶段最应该优先下沉的。
+
+    
+
+    
+
+    access 决定是否开启加速下沉的判断依据是 perf_thin_used_ratio，其值 = thin_used / thin_valid。
+
+    当 perf_thin_used_ratio < 0.85 时关闭加速下沉；当 perf_thin_used_ratio >= 0.89 时开启加速下沉，此时马上就要进入限流状态（> 0.90）
+
+    
+
     加速下沉，在 sinkable_block_lru 上找到
+
+    
 
 * DRAIN_CMD，权重为 2
 
@@ -942,7 +1006,7 @@ extent 设置 parent extent 的时机
 
     * 手动触发的下沉的 volume 中的 extent；
     * drain mgr 从 sink_low 开始下发 parent extent 的 drain cmd；
-    * drain mgr 从 sink_mid 开始下发 no lease extent 的 drain  cmd
+    * drain mgr 从 sink_mid 开始下发 no lease extent 的 drain  cmd；
 
 * SINK_CHILD_EXTENT，权重为 2
 
@@ -971,6 +1035,12 @@ lease 里有 BlockManager 类型的 blocks_ ，它里面有 BlockLRU 类型的 b
 
 
 libmeta 每 1min 处理一次资源回收，lease 超过 1h 未被使用会被释放。
+
+
+
+drain handler --> sink io handler -> access io handler -> replica / ec io handler -> pextent io handler -> local io handler
+
+
 
 ### EC 相关
 
