@@ -1,4 +1,20 @@
-性能测试，如果是 4k，先看 CPU 是否有异常使用的，如果是 256k，先看内存是否有异常使用的。
+通过更早开启加速下沉来让节点更晚进入限流状态
+
+通过更早开启加速下沉来让节点更晚进入限流状态
+
+1. 让加速下沉的时机提前一点。目前节点负载 > 0.89 才开启加速下沉，但 > 0.9 就开始限速了。可以让加速下沉早点开启，比如 0.85。
+
+
+
+
+
+等到添加了 4  个 LRu iterator 后，可以用 TimeLimiter tl(200, 50); tl.MightSleep();
+
+
+
+
+
+性能测试，如果是 4k，先看 CPU 是否有异常使用的，如果是 256k，先看内存是否有异常使用的（内存是否和 chunk 在同一个 node 上）。
 
 
 
@@ -942,7 +958,11 @@ extent 设置 parent extent 的时机
 
     超过 0.7 开启加速下沉，超过 0.85 开启全力加速下沉，回到 0.65 时关闭加速下沉。
 
-    加速下沉分两档
+    加速下沉分两档（可以分档处理，因为从高负载开始，就只有 0.2 * perf_thin_valid 的 block lru 长度，此时还不着急下沉 active list 上加速下沉节点所在的 Block，因为大部分 block 在 inactive / clean 上。假设  active list 上全是跟加速下沉节点有关的，那最多也就 0.2 * perf_thin_valid 的 block lru 一直下沉不掉，但其他是有机会的）
+
+    进入限流状态，再允许把 active list 的下沉掉。
+
+    
 
     * 档位 1 ，[0.7, 0.85]，loc 里的所有 cid 如果都是加速下沉状态，那么对其加速下沉
 
@@ -987,6 +1007,24 @@ extent 设置 parent extent 的时机
     按这个规则从中选出 8192 个 block，认为是这个阶段最应该优先下沉的。
 
     
+
+    AccessIOHandler::PromoteForElevate 和 AccessIOHandler::SetupVExtentWriteIO 这两个地方会将 block lru 放入 active list 中
+
+    
+
+    对于每个节点来说，一定是他曾经做过某个 lextent 的 lease owner 并且 vextent write 过，被 app io 写过的 block 才会出现在 active list 中 
+
+    如果一个 block 一开始的 lease owner 在 chunk A 上，app io 写过，这个 block 进入 chunk A  的 active lru list，然后这个 block 的 lease owner 转到 chunk B，
+
+    有 lease owner，但不是
+
+    
+
+    从 BlockLRU 会被 Access / Delete / InsertToActive/ InsertToInactive / InsertToClean 的角度看，什么情况下 block 会留在 active list，什么时候会被移出去。
+
+    
+
+    到
 
     
 
