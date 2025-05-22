@@ -1,3 +1,14 @@
+有个点要注意，flow ctrl 中判断是否开启加速用的是 perf_thin_used_ratio，但 drain handler 中使用的加速下沉节点负载是 perf_thin_not_free_ratio（判断限速用的），这里我理解实际上可以用一个值？因为加速下沉的目的也是为了避免限流（否则可能出现限流前没有加速下沉的情况？或者提前加速下沉了）。
+
+* thick_reserved > 0 时，thin_free / thin_valid = 1 - thin_used / thin_valid，二者实际上相等；
+* thick_reserved = 0 时，thin_free + thin_used 就不一定等于 thin_valid，比如拔盘和克隆场景等
+
+等 dongdong 提供新字段之后，access 的 perf thin 语义会变，到时候再来改这个。
+
+
+
+
+
 通过更早开启加速下沉来让节点更晚进入限流状态
 
 通过更早开启加速下沉来让节点更晚进入限流状态
@@ -870,9 +881,7 @@ vscode 中用 vim 插件，这样可以按区域替换代码
 
 ### 下沉
 
-meta 会根据集群平均负载决定使用何种下沉策略（下发给每个节点，每个节点使用的下沉策略一定是一致的）：
-
-
+meta 会根据集群平均负载决定使用何种下沉策略（下发给每个节点，每个节点使用的下沉策略是一样的）：
 
 |                | ratio       | drain parent perf pextent | drain idle perf pextent | sink no lease timeout | generate drain cmd interval | reserved block num          | inactive lease interval | Replica 的 Cap 直写策略                                      |
 | -------------- | ----------- | ------------------------- | ----------------------- | --------------------- | --------------------------- | --------------------------- | ----------------------- | ------------------------------------------------------------ |
@@ -942,7 +951,7 @@ extent 设置 parent extent 的时机
 
 * ACCELERATE_SINK，权重为 4
 
-    
+    // 中和高档位，有什么区别？高负载下，migrate 触发频率更快，高负载下才放弃本地化
 
     取集群中的节点最高值 perf_thin_medium_ratio = 0.5, perf_thin_high_ratio = 0.6, perf_thin_very_high_ratio = 0.85
 
@@ -950,7 +959,9 @@ extent 设置 parent extent 的时机
 
     
 
-    也把 perf_thin_used_ratio 用起来
+    一个 block  的 lease 在谁那，谁就掌管了对他下沉的权利
+
+    每个节点维护的是以自身作为 lease owner，曾经有过 vextent write 的 block lru
 
     
 
@@ -960,43 +971,19 @@ extent 设置 parent extent 的时机
 
     加速下沉分两档（可以分档处理，因为从高负载开始，就只有 0.2 * perf_thin_valid 的 block lru 长度，此时还不着急下沉 active list 上加速下沉节点所在的 Block，因为大部分 block 在 inactive / clean 上。假设  active list 上全是跟加速下沉节点有关的，那最多也就 0.2 * perf_thin_valid 的 block lru 一直下沉不掉，但其他是有机会的）
 
-    进入限流状态，再允许把 active list 的下沉掉。
-
     
 
-    * 档位 1 ，[0.7, 0.85]，loc 里的所有 cid 如果都是加速下沉状态，那么对其加速下沉
-
-      如果都是加速下沉节点，那么对其下沉
-
-      
-
-      loc 上如果都是加速下沉节点，即使在 active list，也给他下沉？
-
-      
-
-    * 档位 2 ，>= 0.85，就开启全力下沉模式，直到回到 
+    0.75 开启，0.7 关闭加速下沉
 
      
 
-    都扫描一遍，把跟下沉节点有关系的 block_no 找出来，
+    [0.7, 0.85] 的时候，可以着急加速下沉 inactive 上的加速下沉节点，且只有要 1 个是就可以下沉
 
-    记一个 lease_id、block_no、lru_type，loc
-
-    把只要有跟碰到 cid 节点的 block 先拿出来，带上 lru_type
+    第二档 [0.85, 1.0] 的时候，active 中的也可以下沉，且只有要 1 个是就可以下沉
 
     
 
-    每次从 free 到 active 取 loc 包含加速下沉节点的 block 20000 个，保证不在 accelerate_blocks
-
-    对于每个 block，记录他的 lease_id、block_no、lru_type，loc
-
-    每个 cid 有 perf_thin_not_free_ratio，可以对每个 block 算一个负载分数，分数越大说明越着急下沉。
-
-    分数相同的，优先下沉 clean 上的。
-
-    
-
-    比如最多只取 2w 个，还是保留目前这种
+    进入限流状态，再允许把 active list 的下沉掉
 
     
 
