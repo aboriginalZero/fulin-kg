@@ -1,4 +1,13 @@
+
 * 等到添加了 4  个 LRu iterator 后，可以用 TimeLimiter tl(200, 50); tl.MightSleep();
+
+有个点要注意，flow ctrl 中判断是否开启加速用的是 perf_thin_used_ratio，但 drain handler 中使用的加速下沉节点负载是 perf_thin_not_free_ratio（判断限速用的），这里我理解实际上可以用一个值？因为加速下沉的目的也是为了避免限流（否则可能出现限流前没有加速下沉的情况？或者提前加速下沉了）。
+
+* thick_reserved > 0 时，thin_free / thin_valid = 1 - thin_used / thin_valid，二者实际上相等；
+* thick_reserved = 0 时，thin_free + thin_used 就不一定等于 thin_valid，比如拔盘和克隆场景等
+
+等 dongdong 提供新字段之后，access 的 perf thin 语义会变，到时候再来改这个。
+
 
 
 
@@ -832,7 +841,7 @@ vscode 中用 vim 插件，这样可以按区域替换代码
 
 ### 下沉
 
-meta 会根据集群平均负载决定使用何种下沉策略（下发给每个节点，每个节点使用的下沉策略一定是一致的）：
+meta 会根据集群平均负载决定使用何种下沉策略（下发给每个节点，每个节点使用的下沉策略是一样的）：
 
 |                | ratio       | drain parent perf pextent | drain idle perf pextent | sink no lease timeout | generate drain cmd interval | reserved block num          | inactive lease interval | Replica 的 Cap 直写策略                                      |
 | -------------- | ----------- | ------------------------- | ----------------------- | --------------------- | --------------------------- | --------------------------- | ----------------------- | ------------------------------------------------------------ |
@@ -902,7 +911,7 @@ extent 设置 parent extent 的时机
 
 * ACCELERATE_SINK，权重为 4
 
-    
+    // 中和高档位，有什么区别？高负载下，migrate 触发频率更快，高负载下才放弃本地化
 
     取集群中的节点最高值 perf_thin_medium_ratio = 0.5, perf_thin_high_ratio = 0.6, perf_thin_very_high_ratio = 0.85
 
@@ -910,7 +919,9 @@ extent 设置 parent extent 的时机
 
     
 
-    也把 perf_thin_used_ratio 用起来
+    一个 block  的 lease 在谁那，谁就掌管了对他下沉的权利
+
+    每个节点维护的是以自身作为 lease owner，曾经有过 vextent write 的 block lru
 
     
 
@@ -920,77 +931,91 @@ extent 设置 parent extent 的时机
 
     加速下沉分两档（可以分档处理，因为从高负载开始，就只有 0.2 * perf_thin_valid 的 block lru 长度，此时还不着急下沉 active list 上加速下沉节点所在的 Block，因为大部分 block 在 inactive / clean 上。假设  active list 上全是跟加速下沉节点有关的，那最多也就 0.2 * perf_thin_valid 的 block lru 一直下沉不掉，但其他是有机会的）
 
-    进入限流状态，再允许把 active list 的下沉掉。
-
     
 
-    比如最多只取 2w 个，还是保留目前这种
+    0.75 开启，0.7 关闭加速下沉
 
+
+    [0.7, 0.85] 的时候，可以着急加速下沉 inactive 上的加速下沉节点，且只有要 1 个是就可以下沉
     
+    第二档 [0.85, 1.0] 的时候，active 中的也可以下沉，且只有要 1 个是就可以下沉
+
+
+​    
+
+    进入限流状态，再允许把 active list 的下沉掉
+
+​    
 
     我打算在 4 种 lru list 上各搞一个 iterator，这个 iter 遍历完当前 lru list 后，只会从这个 lru list 的尾 end 重新开始遍历，不调到其他 list 上。每轮找加速下沉节点的时候，只在各个 list 上允许扫描 1w 个，把 loc 包含加速下沉节点的 block info 拿出来。这样最多有 4w 个候选 block。下一轮找的时候，从 iter 上一轮停的位置开始遍历。
-
+    
     对这些候选 block 的 loc 按每个节点的 perf_thin_not_free_ratio 去算一个分数，分数越大的说明副本所在的 chunk 上的空间越稀缺，这个 block 越应该被早点下沉。分数相同的话，按 lru type 排序，clean > inactive full > inactive not full > active。
-
+    
     按这个规则从中选出 8192 个 block，认为是这个阶段最应该优先下沉的。
 
-    
+
+​    
 
     AccessIOHandler::PromoteForElevate 和 AccessIOHandler::SetupVExtentWriteIO 这两个地方会将 block lru 放入 active list 中
 
-    
+
+​    
 
     对于每个节点来说，一定是他曾经做过某个 lextent 的 lease owner 并且 vextent write 过，被 app io 写过的 block 才会出现在 active list 中 
-
+    
     如果一个 block 一开始的 lease owner 在 chunk A 上，app io 写过，这个 block 进入 chunk A  的 active lru list，然后这个 block 的 lease owner 转到 chunk B
-
+    
     有 lease owner，但不是
 
-    
+
+​    
 
     从 BlockLRU 会被 Access / Delete / InsertToActive / InsertToInactive / InsertToClean 的角度看，什么情况下 block 会留在 active list，什么时候会被移出去。
-
+    
     * Access() 被调用的时机，AccessBlockForUpdate --> AccessBlockForWrite / AccessBlockForUnmap，这一般发生在 block 有 vextent write 时
-
+    
       Access() 的时候并不管当前 active list 中有多少 block，只是往里插入，但会有每 200ms 一次的 UpdateBlockLRU，这里会执行是否把节点剔到 inactive list 的决定。
-
+    
       也就是说，如果 block lru list 变长了，inactive list 上的 block 不会回到 active list，而是看之后哪些 block 会先调用 Access()
-
+    
     * Delete() 被调用的时机
-
+    
       * block sink 完但无法对 perf 执行 unmap 时
       * access 在 get lease 时触发的 UpdateBlockLRU 会更新 block 所在 lru list（从 sinkable_lru_list 到 potential_sinkable_lru_list 或者 nullptr）
       * DeleteBlock，比如下沉发现 subblock bitmap = 0、block sink 完且可以对 perf 执行 unmap 时
       * FreeAllBlocks，lease 置为 expired 时调用 
-
+    
     * InsertToActive() 只会在 Access() 中被调用
-
+    
     * InsertToInactive() 
-
+    
       * 在 block lru list 长度变化时被调用，大部分情况都是如此
       * MarkAllBlocksInactive，比如代理读某个 extent，虽然还持有这个 extent 的 lease，但实际上转发到 parent extent 的 lease owner 执行读操作
-
+    
     * InsertToClean
-
+    
       发生在 block sink 结束时，不过之后基本都会跟上 Delete，可以认为即使节点是高负载，block lru list 中 clean 状态的节点会很少。
-
+    
     如果从高负载空间降下来，允许在 active list 上的 block 变多，那些 inactive list 上的会被下沉，对他们的读就变慢了（当前，如果读很频繁，会被放到 read cache 上）。
 
-    
+
+​    
 
     access 决定是否开启加速下沉的判断依据是 perf_thin_used_ratio，其值 = thin_used / thin_valid。
-
+    
     当 perf_thin_used_ratio < 0.85 时关闭加速下沉；当 perf_thin_used_ratio >= 0.89 时开启加速下沉，此时马上就要进入限流状态（> 0.90）
 
-    
+
+​    
 
     加速下沉，在 sinkable_block_lru 上找到
 
-    
 
-    
+​    
 
-    
+​    
+
+​    
 
 * DRAIN_CMD，权重为 2
 
