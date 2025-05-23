@@ -1,16 +1,4 @@
-通过更早开启加速下沉来让节点更晚进入限流状态
-
-通过更早开启加速下沉来让节点更晚进入限流状态
-
-1. 让加速下沉的时机提前一点。目前节点负载 > 0.89 才开启加速下沉，但 > 0.9 就开始限速了。可以让加速下沉早点开启，比如 0.85。
-
-
-
-
-
-等到添加了 4  个 LRu iterator 后，可以用 TimeLimiter tl(200, 50); tl.MightSleep();
-
-
+* 等到添加了 4  个 LRu iterator 后，可以用 TimeLimiter tl(200, 50); tl.MightSleep();
 
 
 
@@ -28,23 +16,15 @@
 
 把下沉和 ec 总结出来
 
-
-
-1. 在 perf thin high 就开启加速下沉，但是只下沉 perf loc 都是开启了加速下沉节点的 block，当 perf thin very  high，那么也会下沉就一个 cid 是加速下沉节点的 block
-1. 优先下沉 3 副本且都是加速下沉节点，再下沉 2 副本且都是加速下沉节点
-1. update_from_remote_recover_counter 的更新，影响到 From Local Speed
-
-
-
-这么要保证 sink 的频率不在 drain handler 上，先看下会怎么处理 accelerate_blocks_ 中的 block
-
-https://docs.google.com/document/d/1YINrRmp0Omdzz8a8ycobv9lVesBqkemB37_Rrz3yUvo/edit?tab=t.0
+update_from_remote_recover_counter 的更新，影响到 From Local Speed
 
 
 
 1. sinkable_block_lru 和 potential_sinkable_block_lru 的区别
 
-    初衷是为了减少遍历 block_lru 的代价，拆成 2 部分了
+    初衷是为了减少遍历 block_lru 的代价，拆成 2 部分了。当 lease 不能下沉的时候，用 potential_sinkable_block_lru 来记录不能下沉 lease block 的冷热情况
+
+    chunk 通过 libmeta 获取 lease 的时候，会执行 UpdateBlockLRU，将 lease 中包含的 perf block 放到 sinkable_block_lru / potential_sinkable_block_lru 或者移出 block lru list
 
 2. 搞清 PushChildExtent 被调用的地方
 
@@ -56,22 +36,18 @@ https://docs.google.com/document/d/1YINrRmp0Omdzz8a8ycobv9lVesBqkemB37_Rrz3yUvo/
 
     遍历 meta 通过心跳给过来的 SinkablePairs，如果发现满足 lease->need_to_sink_cow_blocks() && lease->sinkable()，会把这个 extent 送入 child_extents_to_sink_
 
-3. 为啥  no need to dealloc perf extent when sink_cow_block_only is true.
+3. 为啥 no need to dealloc perf extent when sink_cow_block_only is true.
 
 4. 为啥 SINK 高/超高负载的时候不需要 sink cow block
 
-5. 为啥只有 SinkChildExtent / SinkInactiveExtent 会执行 lease->IncreaseSinkCount()
-
-6. sink child extent 的来源
+5. sink child extent 的来源
 
     * 发生克隆/Snapshot 之后的只读 LExtent 在没有发生 COW 的情况下也会积极下沉，避免 COW 之后的 Child Perf Extent 继承过多的只读数据
     * 发生 COW 之后，即便集群处于低负载状态，Child Perf Extent 和 Parent Perf Extent 共享的数据部分，在 Parent Perf Extent 下沉释放后，也会积极主动的下沉。这样，虽然 Child Perf Extent 自己占用的空间也许还是相对较大的，但是后续再产生的后代 Perf Extent 也不再需要继承来自远古祖先的只读数据，避免空间的持续放大；
 
     https://docs.google.com/document/d/1oOZ6CENaLFBU_AG6tZ4nnxv1CFUNvv3ND_NWVGVN2PY/edit?tab=t.0#heading=h.n0guzrhz6br
 
-7. 
-
-
+    
 
 
 
@@ -170,21 +146,7 @@ session follower 里的 reconected = true 以及打印日志里要带上 session
 
 
 
-ifc 还有一个问题，出现了 2 次，日志是这样：
-
-```
-89669:I0415 17:59:01.460330 123191(c1-chunk-main) recover_handler.cc:90] [REPOSITION] get notification, put cmd into pending queue: pid: 281367 lease { owner { uuid: "e5e156b1-6787-4351-8fbb-75347cdcfe97" ip: "10.0.134.154" num_ip: 2592473098 port: 10201 cid: 1 secondary_data_ip: "20.0.134.154" zone: "default" scvm_mode_host_data_ip: "" alive_sec: 6440 machine_uuid: "bdae6ad6-150f-11f0-b804-525400cccd54" } pid: 161 location: 0 epoch: 109361 expected_replica_num: 4 } dst_chunk: 3 src_chunk: 1 epoch: 281367 agile_recover_only: false dst_shard_idx: 0 ec_active_location { field1: 67502336 field2: 0 field3: 0 field4: 0 } pextent_type: PT_CAP thin_provision: true location { field1: 67502336 field2: 0 field3: 0 field4: 0 } start_ms: 88842495
-
-// src 和 dst 分别是 1 和 3
-89683:I0415 17:59:01.460575 123191(c1-chunk-main) reposition_concurrency_controller.cc:256] pid: 281367, cmd has paused, pt: PT_CAP, reposition concurrency: { src cid: 1, current: 4, limit: 8, dst cid: 3, current: 8, limit: 8 }
-129198:I0415 18:01:46.161351 123191(c1-chunk-main) reposition_concurrency_controller.cc:265] pid: 281367, cmd has resumed, pt: PT_CAP, reposition concurrency: { src cid: 1, current: 3, limit: 3, dst cid: 3, current: 6, limit: 8 }
-147098:[ECancelled]: sink io canceledsink_io: 0x563cd2134000 lease: lease_id: 161, lease_epoch: 109361, proxy_lid: 0, proxy_epoch: 0, owner: 1, cow: 0, expired: 0, version: "LV_LAYERED"  perf_pextent_info: pid: 281499, epoch: 281499, origin_pid: 0, origin_epoch: 0, ever_exist: 1, meta_generation: 1, expect_replica_num: 2, loc: "[1 6 ]", cow_from_snapshot: 0  capacity_pextent_info: pid: 281367, epoch: 281367, origin_pid: 0, origin_epoch: 0, ever_exist: 1, meta_generation: 1, expect_replica_num: 4, loc: "[ 0:0 1:1 2:6 3:4 ]", cow_from_snapshot: 0 , ec_param: name: "ISAL" k: 3 m: 1 rs_arg { w: 8 coding_tech: REED_SOL_VAN } block_size: 4096 ec_type: REED_SOLOMON extent_offset: 232783872 data_len: 36864 block_bitmap: 0000000000000000000000000000000000000000000000000000000000000000 canceled: 1 finished: 0 status: OK is_unmap: 0
-147099:[ECancelled]: sink io canceledsink_io: 0x563cd4593550 lease: lease_id: 161, lease_epoch: 109361, proxy_lid: 0, proxy_epoch: 0, owner: 1, cow: 0, expired: 0, version: "LV_LAYERED"  perf_pextent_info: pid: 281499, epoch: 281499, origin_pid: 0, origin_epoch: 0, ever_exist: 1, meta_generation: 1, expect_replica_num: 2, loc: "[1 6 ]", cow_from_snapshot: 0  capacity_pextent_info: pid: 281367, epoch: 281367, origin_pid: 0, origin_epoch: 0, ever_exist: 1, meta_generation: 1, expect_replica_num: 4, loc: "[ 0:0 1:1 2:6 3:4 ]", cow_from_snapshot: 0 , ec_param: name: "ISAL" k: 3 m: 1 rs_arg { w: 8 coding_tech: REED_SOL_VAN } block_size: 4096 ec_type: REED_SOLOMON extent_offset: 232833024 data_len: 73728 block_bitmap: 0000000000000000000000000000000000000000000000000000000000000000 canceled: 1 finished: 0 status: OK is_unmap: 0
-```
-
-
-
-sink 只是按照每个 lease owner 最多运行 32 个 sink task 来限制，但某个作为 sink dst 的 chunk，可能出现多个 lease owner 的 sink 都打到他这的情况，这样需要参与 sink 的就远超 32 个。
+sink 只是按照每个 lease owner 最多运行 32 个 sink task 来限制，但某个作为 sink dst 的 chunk，可能出现多个 lease owner 的 sink 都打到他这的情况，所以一个节点同时处理 sink cmd write 的数量可能远超 32 个。
 
 
 
@@ -872,8 +834,6 @@ vscode 中用 vim 插件，这样可以按区域替换代码
 
 meta 会根据集群平均负载决定使用何种下沉策略（下发给每个节点，每个节点使用的下沉策略一定是一致的）：
 
-
-
 |                | ratio       | drain parent perf pextent | drain idle perf pextent | sink no lease timeout | generate drain cmd interval | reserved block num          | inactive lease interval | Replica 的 Cap 直写策略                                      |
 | -------------- | ----------- | ------------------------- | ----------------------- | --------------------- | --------------------------- | --------------------------- | ----------------------- | ------------------------------------------------------------ |
 | sink low       | [0, 0.5]    | T                         | F                       | 10 min                | 30s                         | unlimit                     | 1h                      | 不允许 cap 直写                                              |
@@ -964,38 +924,6 @@ extent 设置 parent extent 的时机
 
     
 
-    * 档位 1 ，[0.7, 0.85]，loc 里的所有 cid 如果都是加速下沉状态，那么对其加速下沉
-
-      如果都是加速下沉节点，那么对其下沉
-
-      
-
-      loc 上如果都是加速下沉节点，即使在 active list，也给他下沉？
-
-      
-
-    * 档位 2 ，>= 0.85，就开启全力下沉模式，直到回到 
-
-     
-
-    都扫描一遍，把跟下沉节点有关系的 block_no 找出来，
-
-    记一个 lease_id、block_no、lru_type，loc
-
-    把只要有跟碰到 cid 节点的 block 先拿出来，带上 lru_type
-
-    
-
-    每次从 free 到 active 取 loc 包含加速下沉节点的 block 20000 个，保证不在 accelerate_blocks
-
-    对于每个 block，记录他的 lease_id、block_no、lru_type，loc
-
-    每个 cid 有 perf_thin_not_free_ratio，可以对每个 block 算一个负载分数，分数越大说明越着急下沉。
-
-    分数相同的，优先下沉 clean 上的。
-
-    
-
     比如最多只取 2w 个，还是保留目前这种
 
     
@@ -1014,17 +942,39 @@ extent 设置 parent extent 的时机
 
     对于每个节点来说，一定是他曾经做过某个 lextent 的 lease owner 并且 vextent write 过，被 app io 写过的 block 才会出现在 active list 中 
 
-    如果一个 block 一开始的 lease owner 在 chunk A 上，app io 写过，这个 block 进入 chunk A  的 active lru list，然后这个 block 的 lease owner 转到 chunk B，
+    如果一个 block 一开始的 lease owner 在 chunk A 上，app io 写过，这个 block 进入 chunk A  的 active lru list，然后这个 block 的 lease owner 转到 chunk B
 
     有 lease owner，但不是
 
     
 
-    从 BlockLRU 会被 Access / Delete / InsertToActive/ InsertToInactive / InsertToClean 的角度看，什么情况下 block 会留在 active list，什么时候会被移出去。
+    从 BlockLRU 会被 Access / Delete / InsertToActive / InsertToInactive / InsertToClean 的角度看，什么情况下 block 会留在 active list，什么时候会被移出去。
 
-    
+    * Access() 被调用的时机，AccessBlockForUpdate --> AccessBlockForWrite / AccessBlockForUnmap，这一般发生在 block 有 vextent write 时
 
-    到
+      Access() 的时候并不管当前 active list 中有多少 block，只是往里插入，但会有每 200ms 一次的 UpdateBlockLRU，这里会执行是否把节点剔到 inactive list 的决定。
+
+      也就是说，如果 block lru list 变长了，inactive list 上的 block 不会回到 active list，而是看之后哪些 block 会先调用 Access()
+
+    * Delete() 被调用的时机
+
+      * block sink 完但无法对 perf 执行 unmap 时
+      * access 在 get lease 时触发的 UpdateBlockLRU 会更新 block 所在 lru list（从 sinkable_lru_list 到 potential_sinkable_lru_list 或者 nullptr）
+      * DeleteBlock，比如下沉发现 subblock bitmap = 0、block sink 完且可以对 perf 执行 unmap 时
+      * FreeAllBlocks，lease 置为 expired 时调用 
+
+    * InsertToActive() 只会在 Access() 中被调用
+
+    * InsertToInactive() 
+
+      * 在 block lru list 长度变化时被调用，大部分情况都是如此
+      * MarkAllBlocksInactive，比如代理读某个 extent，虽然还持有这个 extent 的 lease，但实际上转发到 parent extent 的 lease owner 执行读操作
+
+    * InsertToClean
+
+      发生在 block sink 结束时，不过之后基本都会跟上 Delete，可以认为即使节点是高负载，block lru list 中 clean 状态的节点会很少。
+
+    如果从高负载空间降下来，允许在 active list 上的 block 变多，那些 inactive list 上的会被下沉，对他们的读就变慢了（当前，如果读很频繁，会被放到 read cache 上）。
 
     
 
@@ -1035,6 +985,10 @@ extent 设置 parent extent 的时机
     
 
     加速下沉，在 sinkable_block_lru 上找到
+
+    
+
+    
 
     
 
@@ -1069,6 +1023,28 @@ extent 设置 parent extent 的时机
 
 
 lease 里有 BlockManager 类型的 blocks_ ，它里面有 BlockLRU 类型的 block_lru_ ，block_lru_ 里面有 BlockInfoLRUNode 类型的 LRUList，共有 4 个双向链表 LRUList，每个 BlockInfoLRUNode 中存了 lease_id、block_no、lru_type 和 bitmap（判断 extent 上是否有 block）
+
+
+
+SinkBlock 和 SinkExtent 都会影响到对 transfer_task_num_ 的占用，但后者有可能会有 1024 个需要下沉的
+
+对于 extent 的下沉，也是一个一个来的。所以 drain handler 还是保证了任意时刻，最多有 32 个 block 正在下沉
+
+
+
+对比下 SinkBlock 和 DoSinkExtent
+
+对于下沉来说，如果没有走 unmap，这个 block 的下沉就只是改一些 lru 中的标记值、写 cap 之类的，并不会真的给 perf thin 省出 256k 粒度的空间，因为 lsm 那边这个 block 还跟这个 extent 关联，还是统计到他的空间里了。
+
+如果 1024 个 block 都没有走 unmap，那就只会等到 dealloc perf extent 后，meta 发 gc cmd 之后才能腾出空间。
+
+sink extent 是逐个进行的，所以可能还好。
+
+
+
+
+
+下沉 block/extent 之后，会尝试发起 DeallocPerfExtent
 
 
 
