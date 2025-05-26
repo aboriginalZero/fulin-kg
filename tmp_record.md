@@ -1,3 +1,56 @@
+触发加速下沉时，能不能让 sink 优先级比 recover 高
+
+
+
+如果是 ec 卷，看 ec_param，如果是 replica 卷，看 volume.replica_num
+
+target / subsystem 这一级已经支持改 ec 参数
+
+
+
+如果想要降级分片数，需要考虑 lextent 是否被多个 volume 引用，取这些 volume 里的最高 expected replica num。
+
+通过 lid 反查 volume 需要先对 vtable db 打快照，再逐个遍历每个 volume 的 vtable，每个 pextent 都需要这么操作的话，代价比较大。
+
+除了 volume，需要支持快照的分片数降级吗？
+
+一个卷中的 lextent，如果也跟他的快照共享，那么即使将卷从 3 副本弄成 2 副本了，共享 lextent 中的 perf / cap 数据块还是保留 3 副本，空间也降不下去。
+
+对一个降级后的卷打快照，这个快照会是 2 副本了。
+
+进入回收站的，可以考虑弄成 2 副本来减少空间占用。
+
+双活直接不允许降低副本数
+
+在 transaction 中将 expected_replica_num 修改后，recover mgr 要怎么反应
+
+副本可以任意移除一个，但 ec 只能移除最后一个。可以考虑在 sync 的时候就踢掉，踢完 recover 就结束了。
+
+或许应该先先 revoke 下 lease，或者强制 sync 之类的，不然有可能这个 pid 的 lease 都 sync 过了。
+
+怎么选出待剔除副本。
+
+
+
+src 和 dst 都是 0，选一个 replace_cid，lease owner 的选择可以是任意的
+
+* ec，只能是去掉最后一个校验块
+* replica，需要根据当前规则选一个 replace cid
+
+所以他还是一个 migrate cmd，可以特殊标记下，是个 bool reduce_segment
+
+复用 migrate 的现有判断
+
+优先移除 sync gen 中失败的副本，不要让减分片这个操作引入 recover
+
+meta 中找 migrate 要优先移除 isolated 节点。
+
+即使 expected_segment_num 变小了，但如果 loc 不调整的话，还是不会下发 gc 
+
+
+
+
+
 * 下沉文档描述
 * 验证空间调整、加速下沉的改动在集群上是否有效
 
@@ -63,7 +116,7 @@ EC volume 支持从 4 +1  调整为 4 +2 这种提升校验分片的数量的操
 
 不同于 replica volume 的 cap / perf 要么都是 2，要么都是 3。ec volume 的 cap num = k + m，当 m = 1 时，perf num = 2，当 m >= 2 时，perf num = 3，当 k 从 1 调整成 2 后，perf replica 会从 2 调到 3。
 
-想要调大 m，但如果 k + m + 1 超过集群节点数量，那么拒绝调大 m。m 只会是 1 2 3 4
+想要调大 m，但如果 k + m + 1 超过集群节点数量，那么拒绝调大 m。目前 m 只会是 1 2 3 4
 
 
 
@@ -81,7 +134,7 @@ EC volume 支持从 4 +1  调整为 4 +2 这种提升校验分片的数量的操
 
 
 
-支持降低数据块期望分片数，副本允许从 3 到 2（双活不允许），ec 支持从 k + m 最低降到 2 + 1；
+支持降低数据块期望分片数，副本允许从 3 到 2（双活不允许），ec 支持从 k + 2 最低降到 k + 1；
 
 要剔除的分片要从保证局部化 / topo 安全的角度出发，尽量减少后续还要再走一次 migrate。
 
