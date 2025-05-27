@@ -1,4 +1,14 @@
-触发加速下沉时，能不能让 sink 优先级比 recover 高
+触发加速下沉时，能不能让 sink 优先级比 recover 高，会触发加速下沉，那个节点也不会作为 recover dst 了
+
+
+
+回滚到快照的时候，改了 ec_m 会不会影响到 replica_ 堆变量的大小
+
+另搞一个 meta test，去验证 perf 会变成 2 
+
+扩大 expected segment num 的时候，是立即扩大的，没什么问题，但缩小的时候并没有。
+
+缩小的时候，需要考虑下，PhysicalExtentTableEntry::FromPExtent 中会立即缩小 replica，不太合理。
 
 
 
