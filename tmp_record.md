@@ -49,6 +49,36 @@ meta 中找 migrate 要优先移除 isolated 节点。
 
 
 
+复用 migrate 的现有判断，meta 指定 src 和 dst 都是 0，根据当前副本放置策略选一个 replace cid，ec 的话要看 dst_shared_idx，也先让 meta 选出
+
+
+
+允许他跟其他 migrate 一起下发，因为并不冲突，也不占用 slot。
+
+这个时候健康，下发的时候不健康了，这种是可接受的。
+
+sync 的时候，如果发现有不健康的，优先踢掉这个不健康的。
+
+meta 侧，如果有 lease owner，replace cid 不应该选到他。另外要动下这种情况下 lease owner 的选取逻辑。
+
+一定让他是重新分配 lease ？
+
+要看一下 sync 完的 loc
+
+
+
+如果 sync 完，发现 sync 失败，也需要主动释放 lease。具体表现是 lease 上记录的 gen 还是 kInvalidGeneration。一般来说 sync 完都会调用 SetGen()
+
+等 sync 完，先判断下 loc 个数是否已经符合要求，不符合的话，按 meta 给的 replace cid 做移除。
+
+移除之前，需要加锁
+
+
+
+在 access 侧
+
+sync gen 过程中的剔除副本，会在 RemoveReplica rpc 调用后，更新本地 lease 上的 location / ec_location
+
 
 
 * 下沉文档描述
