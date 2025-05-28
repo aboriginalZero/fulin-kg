@@ -1,3 +1,4 @@
+
 MetaRpcServer::DoRollbackVolume  中对 ec m 的处理，在这个 patch 里先不管
 
 ```
@@ -18,6 +19,12 @@ MetaRpcServer::DoRollbackVolume  中对 ec m 的处理，在这个 patch 里先�
 ```
 
 
+回滚到快照的时候，改了 ec_m 会不会影响到 replica_ 堆变量的大小
+
+
+扩大 expected segment num 的时候，是立即扩大的，没什么问题，但缩小的时候并没有。
+
+缩小的时候，需要考虑下，PhysicalExtentTableEntry::FromPExtent 中会立即缩小 replica，不太合理。
 
 
 
