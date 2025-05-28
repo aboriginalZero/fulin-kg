@@ -1,3 +1,20 @@
+创建的时候，还是要保证 volume 跟 pool 是一样的 ec param
+
+克隆允许从 ec 2 + 1克隆出 ec 2 + 2 吗？
+
+
+
+如果快照的 ec m = 2，之后缩小成 m = 1，那么在回滚的时候，要注意特别处理下。
+
+
+
+要支持 m 不同的回滚吗？先看下 replica 在这种情况下的行为。
+
+或者提升了分片数，但是 recover 还没完全前，就回滚了。
+
+比如一开始卷的 ec m = 1，打了快照，将卷的 ec m 提升到 2，允许他回滚到快照吗？这样有可能出现某些 pextent 的 m = 1，某些 m = 2（比如快照中就 4 个 vextent，但 volume 已经更新 size 到 10 个 vextent 了，回滚的话，会造成前 4 个 vextent 是 1 个校验块，后 6 个 vextent 是 2 个校验块），能接受刚回滚回去就触发 recover 吗？（看 replica 应该是可以）
+
+
 
 MetaRpcServer::DoRollbackVolume  中对 ec m 的处理，在这个 patch 里先不管
 
