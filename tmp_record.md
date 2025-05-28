@@ -1,10 +1,29 @@
-触发加速下沉时，能不能让 sink 优先级比 recover 高
+MetaRpcServer::DoRollbackVolume  中对 ec m 的处理，在这个 patch 里先不管
+
+```
+    bool update_snapshot = false;
+    if (volume.replica_num() > snapshot.replica_num()) {
+        snapshot.set_replica_num(volume.replica_num());
+        update_snapshot = true;
+    }
+    if (volume.has_ec_param() && volume.ec_param().m() == 2 && snapshot.has_ec_param() &&
+        snapshot.ec_param().m() == 1) {
+        snapshot.mutable_ec_param()->set_m(volume.ec_param().m());
+        update_snapshot = true;
+    }
+    if (update_snapshot) {
+        RETURN_IF_ERROR(meta_db_.UpdateSnapshot(snapshot.name(), snapshot));
+        context_->volume_table->MarkSnapshot(snapshot);
+    }
+```
+
+
 
 
 
 如果是 ec 卷，看 ec_param，如果是 replica 卷，看 volume.replica_num
 
-target / subsystem 这一级已经支持改 ec 参数
+zbs cli 中 target / subsystem 这一级已经支持改 ec 参数，需要支持 lun / namespace 级别的支持。
 
 
 
@@ -82,15 +101,9 @@ sync gen 过程中的剔除副本，会在 RemoveReplica rpc 调用后，更新�
 
 
 * 下沉文档描述
-* 验证空间调整、加速下沉的改动在集群上是否有效
-
-
-
-
 
 
 * update_from_remote_recover_counter 的更新，影响到 From Local Speed
-* 等到添加了 4  个 LRu iterator 后，可以用 TimeLimiter tl(200, 50); tl.MightSleep();
 
 有个点要注意，flow ctrl 中判断是否开启加速用的是 perf_thin_used_ratio，但 drain handler 中使用的加速下沉节点负载是 perf_thin_not_free_ratio（判断限速用的），这里我理解实际上可以用一个值？因为加速下沉的目的也是为了避免限流（否则可能出现限流前没有加速下沉的情况？或者提前加速下沉了）。
 
@@ -101,9 +114,7 @@ sync gen 过程中的剔除副本，会在 RemoveReplica rpc 调用后，更新�
 
 
 
-把 ec 总结出来
-
-
+把 ec 总结出来，可能用不到了，先不管 ec。
 
 
 
@@ -136,22 +147,6 @@ sync gen 过程中的剔除副本，会在 RemoveReplica rpc 调用后，更新�
 
     
 
-EC volume 支持从 4 +1  调整为 4 +2 这种提升校验分片的数量的操作，提升完正常，通过 recover 来实现数据提升；
-
-记得 meta iscsi / nvmf / nfs server 都调整 
-
-做这个可以把 ec 部分的文档追一下，并总结下来。
-
-
-
-不同于 replica volume 的 cap / perf 要么都是 2，要么都是 3。ec volume 的 cap num = k + m，当 m = 1 时，perf num = 2，当 m >= 2 时，perf num = 3，当 k 从 1 调整成 2 后，perf replica 会从 2 调到 3。
-
-想要调大 m，但如果 k + m + 1 超过集群节点数量，那么拒绝调大 m。目前 m 只会是 1 2 3 4
-
-
-
-目前只支持 replica 提升副本数，但没有 ec 提升 k + m 的。只允许提升 ec 的校验分片数，不允许提升数据分片数（后者需要重写一遍数据）
-
 
 
 对于共享的 Extent，我们的提升策略是，只要有一个 Volume/Snapshot 使用较高的副本数/校验分片数，就使用较高的数量。
@@ -164,7 +159,7 @@ EC volume 支持从 4 +1  调整为 4 +2 这种提升校验分片的数量的操
 
 
 
-支持降低数据块期望分片数，副本允许从 3 到 2（双活不允许），ec 支持从 k + 2 最低降到 k + 1；
+支持降低数据块期望分片数，副本允许从 3 到 2（双活不允许），ec 支持从 k + 2 降到 k + 1；
 
 要剔除的分片要从保证局部化 / topo 安全的角度出发，尽量减少后续还要再走一次 migrate。
 
