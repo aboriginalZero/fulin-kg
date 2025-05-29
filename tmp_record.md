@@ -1,22 +1,13 @@
+1. rpc / transaction 里的处理，pentry 中的 replica_ 缩减、是否允许克隆/回滚，回滚了之后 expected segment num 以谁为准，cap / perf 需要都设置，降级时需要考虑 lextent 是否被多个 volume 引用，取这些 volume 里的最高 expected replica num；
 
-MetaRpcServer::DoRollbackVolume  中对 ec m 的处理，在这个 patch 里先不管
+2. 还是通过 migrate cmd 下发，这样能保证不是 need recover 时，才去 reduce segment，这里需要考虑 replica 里 replace cid 怎么选能否让 topo 距离变得最小，或者不需要局部化迁移，不影响到容量均衡，尽量不选 lease owner，ec 的话要设成最后一个校验块的 dst_shared_idx，这里的 lease owner 理论上可以任选一个，但可以看看 app / reposition 是怎么选的；
 
-```
-    bool update_snapshot = false;
-    if (volume.replica_num() > snapshot.replica_num()) {
-        snapshot.set_replica_num(volume.replica_num());
-        update_snapshot = true;
-    }
-    if (volume.has_ec_param() && volume.ec_param().m() == 2 && snapshot.has_ec_param() &&
-        snapshot.ec_param().m() == 1) {
-        snapshot.mutable_ec_param()->set_m(volume.ec_param().m());
-        update_snapshot = true;
-    }
-    if (update_snapshot) {
-        RETURN_IF_ERROR(meta_db_.UpdateSnapshot(snapshot.name(), snapshot));
-        context_->volume_table->MarkSnapshot(snapshot);
-    }
-```
+   先批量扫描所有 pid，检查他们的 expected segment num，给他们找出最不健康的分片（这里的不健康要注意 migrate cmd 从生成到下发有一定的滞后性）
+
+   理论上不需要选出 src 和 dst（让他们一定是 0），比如 3 节点集群，现有有 2 + 2 ec，need recover 结束不了， 也选不出 dst，此时就可以通过减少 ec_m 的方式让 need recover pextent 消失
+
+3. access 拿到之后，先处理 cmd 校验，但要在 HandleRecoverNotification 里单独搞一条路径。在 lease sync 后再决定是否 reduce，如果 sync 过程过程就剔分片了，后续要判断是否还要继续剔除分片，剔除时记得加 extent_io_barrier_guard 锁。
+
 
 
 回滚到快照的时候，改了 ec_m 会不会影响到 replica_ 堆变量的大小
@@ -34,27 +25,23 @@ zbs cli 中 target / subsystem 这一级已经支持改 ec 参数，需要支持
 
 
 
-如果想要降级分片数，需要考虑 lextent 是否被多个 volume 引用，取这些 volume 里的最高 expected replica num。
+如果想要降级分片数，需要考虑 lextent 是否被多个 volume 引用，取这些 volume 里的最高 expected replica num。通过 lid 反查 volume 需要先对 vtable db 打快照，再逐个遍历每个 volume 的 vtable，每个 pextent 都需要这么操作的话，代价比较大。
 
-通过 lid 反查 volume 需要先对 vtable db 打快照，再逐个遍历每个 volume 的 vtable，每个 pextent 都需要这么操作的话，代价比较大。
-
-除了 volume，需要支持快照的分片数降级吗？
+除了 volume，需要支持快照的分片数降级吗？需要支持。
 
 一个卷中的 lextent，如果也跟他的快照共享，那么即使将卷从 3 副本弄成 2 副本了，共享 lextent 中的 perf / cap 数据块还是保留 3 副本，空间也降不下去。
 
 对一个降级后的卷打快照，这个快照会是 2 副本了。
 
-进入回收站的，可以考虑弄成 2 副本来减少空间占用。
+进入回收站的，可以考虑默认给他弄成 2 副本来减少空间占用？
 
-双活直接不允许降低副本数
+双活直接不允许降低副本数。
 
-在 transaction 中将 expected_replica_num 修改后，recover mgr 要怎么反应
+在 transaction 中将 expected_replica_num 减小后，recover mgr 要怎么反应
 
 副本可以任意移除一个，但 ec 只能移除最后一个。可以考虑在 sync 的时候就踢掉，踢完 recover 就结束了。
 
-或许应该先先 revoke 下 lease，或者强制 sync 之类的，不然有可能这个 pid 的 lease 都 sync 过了。
-
-怎么选出待剔除副本。
+或许应该先先 revoke 下 lease，或者强制 sync 之类的，不然有可能这个 pid 的 lease 都 sync 过了。sync 过没事，就是要他 sync 过后，才决定要不要 reduce segment，因为 sync 过程就剔分片了，分片数不满足要求的话，后续的 reduce segment 行为就不继续进行。
 
 
 
@@ -64,10 +51,6 @@ src 和 dst 都是 0，选一个 replace_cid，lease owner 的选择可以是任
 * replica，需要根据当前规则选一个 replace cid
 
 所以他还是一个 migrate cmd，可以特殊标记下，是个 bool reduce_segment
-
-复用 migrate 的现有判断
-
-优先移除 sync gen 中失败的副本，不要让减分片这个操作引入 recover
 
 meta 中找 migrate 要优先移除 isolated 节点。
 
@@ -81,23 +64,13 @@ meta 中找 migrate 要优先移除 isolated 节点。
 
 允许他跟其他 migrate 一起下发，因为并不冲突，也不占用 slot。
 
-这个时候健康，下发的时候不健康了，这种是可接受的。
-
-sync 的时候，如果发现有不健康的，优先踢掉这个不健康的。
-
-meta 侧，如果有 lease owner，replace cid 不应该选到他。另外要动下这种情况下 lease owner 的选取逻辑。
-
-一定让他是重新分配 lease ？
-
-要看一下 sync 完的 loc
+这个时候健康，下发的时候不健康了，这种是可接受的。sync 的时候，如果发现有不健康的，会踢掉这个不健康的，如果是 sync 后才变成不健康的，没法发现。
 
 
 
 如果 sync 完，发现 sync 失败，也需要主动释放 lease。具体表现是 lease 上记录的 gen 还是 kInvalidGeneration。一般来说 sync 完都会调用 SetGen()
 
 等 sync 完，先判断下 loc 个数是否已经符合要求，不符合的话，按 meta 给的 replace cid 做移除。
-
-移除之前，需要加锁
 
 
 
@@ -121,7 +94,7 @@ sync gen 过程中的剔除副本，会在 RemoveReplica rpc 调用后，更新�
 
 
 
-把 ec 总结出来，可能用不到了，先不管 ec。
+把 ec 总结出来，可能用不到了，先不管 ec 具体原理。
 
 
 
