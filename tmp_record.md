@@ -1,4 +1,23 @@
+
 1. rpc / transaction 里的处理，pentry 中的 replica_ 缩减、是否允许克隆/回滚，回滚了之后 expected segment num 以谁为准，cap / perf 需要都设置，降级时需要考虑 lextent 是否被多个 volume 引用，取这些 volume 里的最高 expected replica num；
+
+创建的时候，还是要保证 volume 跟 pool 是一样的 ec param
+
+克隆允许从 ec 2 + 1克隆出 ec 2 + 2 吗？
+
+
+
+如果快照的 ec m = 2，之后缩小成 m = 1，那么在回滚的时候，要注意特别处理下。
+
+
+
+要支持 m 不同的回滚吗？先看下 replica 在这种情况下的行为。
+
+或者提升了分片数，但是 recover 还没完全前，就回滚了。
+
+比如一开始卷的 ec m = 1，打了快照，将卷的 ec m 提升到 2，允许他回滚到快照吗？这样有可能出现某些 pextent 的 m = 1，某些 m = 2（比如快照中就 4 个 vextent，但 volume 已经更新 size 到 10 个 vextent 了，回滚的话，会造成前 4 个 vextent 是 1 个校验块，后 6 个 vextent 是 2 个校验块），能接受刚回滚回去就触发 recover 吗？（看 replica 应该是可以）
+
+
 
 2. 还是通过 migrate cmd 下发，这样能保证不是 need recover 时，才去 reduce segment，这里需要考虑 replica 里 replace cid 怎么选能否让 topo 距离变得最小，或者不需要局部化迁移，不影响到容量均衡，尽量不选 lease owner，ec 的话要设成最后一个校验块的 dst_shared_idx，这里的 lease owner 理论上可以任选一个，但可以看看 app / reposition 是怎么选的；
 
