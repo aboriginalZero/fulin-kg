@@ -25,7 +25,24 @@
 
    理论上不需要选出 src 和 dst（让他们一定是 0），比如 3 节点集群，现有有 2 + 2 ec，need recover 结束不了， 也选不出 dst，此时就可以通过减少 ec_m 的方式让 need recover pextent 消失
 
-3. access 拿到之后，先处理 cmd 校验，但要在 HandleRecoverNotification 里单独搞一条路径。在 lease sync 后再决定是否 reduce，如果 sync 过程过程就剔分片了，后续要判断是否还要继续剔除分片，剔除时记得加 extent_io_barrier_guard 锁。
+   
+
+   减少分片这个操作毕竟比较危险，可以等 migrate 都做完了再处理他。
+
+   因为 migrate 的处理不都是按照遍历 pid 的方式处理的。
+
+   如果是用这个来腾出空间的，那么
+
+   如果没有需要正常 migrate 的，才考虑要不要对，整个集群中没有
+
+   后续可以支持查询需要 reduce segment 的数据块 pextent find need_reduce
+
+   需要先搞明白 NeedReduce 的判断条件
+
+
+
+2. access 拿到之后，先处理 cmd 校验，但要在 HandleRecoverNotification 里单独搞一条路径。在 lease sync 后再决定是否 reduce，如果 sync 过程过程就剔分片了，后续要判断是否还要继续剔除分片，剔除时记得加 extent_io_barrier_guard 锁。
+3. 需要搞一个能力协商 
 
 
 
