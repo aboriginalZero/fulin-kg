@@ -1,3 +1,7 @@
+把下沉的面试使用文档整理出来
+
+
+
 
 1. rpc / transaction 里的处理，pentry 中的 replica_ 缩减、是否允许克隆/回滚，回滚了之后 expected segment num 以谁为准，cap / perf 需要都设置，降级时需要考虑 lextent 是否被多个 volume 引用，取这些 volume 里的最高 expected replica num；
 
@@ -1931,7 +1935,7 @@ AccessHandler::ComposeAccessPerf(AccessDataReportRequest* request, bool only_sum
 
 4. 临时副本重放完会被剔除。
 
-### access point
+### iscsi 接入点
 
 zbs 当前行为：
 
@@ -2020,10 +2024,6 @@ void RecoverManager::ClearSessionCmd(const std::string& session_id) {
 }
 ```
 
-
-
-
-
 ### zbs io 流
 
 zbs app io trace
@@ -2104,11 +2104,7 @@ ISCSIServer 在这执行注册多个回调，如 UpdateLuns / RefreshConfig / Li
 iSCSI initiator 和 ZBS Chunk server 进行交互，iSCSI 配置信息要在 Chunk 上落地才算真正生效。
 
 1. ZbsClientProxyV2::DoIO
-2. ZbsClient::Write / Unmap
-3. ZbsClient::DoIO
-4. ZbsClient::SplitIO
-5. ZbsClient::ProcessIO
-6. ZbsClient::SubmitIO
+2. ZbsClient::Write / Unmap --> ZbsClient::DoIO --> ZbsClient::SplitIO --> ZbsClient::ProcessIO --> ZbsClient::SubmitIO
 7. InternalIOClient::SubmitIO
     1. InternalIOClient::DoLocalIO
         1. AccessIOHandler::WriteVExtent
@@ -2117,9 +2113,35 @@ iSCSI initiator 和 ZBS Chunk server 进行交互，iSCSI 配置信息要在 Chu
         2. DataChannelClient::Impl::WriteVExtent
         3. AccessIOHandler::SubmitWriteVExtent，Access IO Handler 中注册了该回调
         4. AccessIOHandler::WriteVExtent
-8. AccessIOHandler::WriteVExtent
-9. access io handler
-10. replica io handler
+8. access io handler --> replica io handler --> pextent io handler --> local io handler
+
+
+
+把读和写顺一遍
+
+
+
+bdev_zbs.cc 中的 zbs_aio_write
+
+SPDK_NOTICELOG 开头打印的日志在哪可以看到
+
+kZbsDiskBlockSize = 512U; 这个的含义是什么
+
+/src/iscsi/bdev_zbs.cc 中的 spdk_bdev_zbs_create
+
+zio 中有 instance_candidates 的信息
+
+/src/scsi/bdev_zbs.cc 中的 zbs_aio_read() 借助 src/include/zbs/libzbs_v2.h 中的 zio_prep_readout() 填充的
+
+IO 链路上，为什么需要获取 2 次 lease
+
+第一次是根据 session uuid 找到各种接入点所在的 access handler？
+
+lease 是跟 session uuid 绑定的，一个 access 只跟 meta leader 建立一个 session
+
+access handler 跟 access mgr 建立 session 的时候，access mgr 在 SessionMasterBase::CreateSession 中为他生成一个随机的 uuid，通过心跳传递给 access handler 后，在 Meta1SessionManager::SessionCreatedCb 时，设置本地的 libmeta 上的 session uuid，即调用 set_session_uuid
+
+第二次在 access io handler 中获取 lease 是
 
 ### access io 并发控制
 
