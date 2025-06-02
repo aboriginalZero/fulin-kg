@@ -73,6 +73,10 @@ zbs cli 中 target / subsystem 这一级已经支持改 ec 参数，需要支持
 
 
 
+meta 在帮忙处理卸载盘的迁移时，也需要关注，如果负载已经非常不均，需要先进行负载均衡迁移
+
+
+
 如果想要降级分片数，需要考虑 lextent 是否被多个 volume 引用，取这些 volume 里的最高 expected replica num。通过 lid 反查 volume 需要先对 vtable db 打快照，再逐个遍历每个 volume 的 vtable，每个 pextent 都需要这么操作的话，代价比较大。
 
 除了 volume，需要支持快照的分片数降级吗？需要支持。
@@ -1108,6 +1112,31 @@ drain handler --> sink io handler -> access io handler -> replica / ec io handle
 
 
 
+### zbs client 相关
+
+在 ZBS Client 中，不额外的处理 IO 重叠的保序问题，即不会严格的按照收到的 IO 请求顺序下发 IO。因为对于通用的块存储系统收到的并发重叠 IO，A 和 B，语义上并不保证最终结果是 A 或 B 或者 AB 交叠。大部分应用端希望确定某个结果时，会在发送时做合并或者严格的遵循收到 A 成功之后再下发 B 的原则。这样 IO 都成功之后结果就一定是 B。
+
+
+
+在调用 ZBS Client 的线程预期与 ZBS Client 自身的线程不同时，则业务线程中不应该直接访问 ZBS Client 对象，而是创建 ZBS Client Proxy 代理访问。常见的场景是将 ZBS Client 封装为 ZADP 供第三方集成时，使用独立的线程运行 ZBS Client，业务线程通过 Proxy 按需使用同步或异步的方式访问 ZBS。
+
+
+
+Internal IO Client 因为在获取 VExtent Lease owner 的时候，对于从未写过数据的 Extent，Meta 将不生成 Lease，而是返回一个 ENotAlloc 的错误：
+
+* 如果是读请求，默认情况下返回一个全 0 的 IO 结果（因为 ZBS 默认未写过的数据区域等效于全 0）。如果有特殊指定则会返回对应的错误。这里的主要使用场景是 Task Center 在做 Extent 复制的时候，如果整个 Extent 都未分配，则不需要每个 Block 都读一遍向目标端传输全 0；
+* 如果是写请求，并且写入的数据为全 0，也不会真实副本分配，将直接返回成功。这个场景适应于 VMware 的厚置备立即置 0 操作。因为厚制备立即置 0 的功能原始诉求是将所有磁盘区域都分配出来并且初始化为 0。我们将 volume 转化为 thick 模式后，空间就已经分配出来了，结合读未分配的数据自动返回全 0，所以不需要真实写 0 也可以达到目标，这个处理方式有助于减少处理此类请求的时间。
+
+
+
+UIO 指的是 User IO，来自用户处的原始 IO 请求。在 ZBS Client 中使用 UIOCtx 进行管理，他主要与 Volume 相关。BIO 是 Block IO，代表 ZBS 内部 Extent 的 IO 请求。Access 和 LSM 都要求单个 IO 请求必须在一个 Extent 的单一 Block （256 K ） 内（Access 其实只是限制了在单一 Extent 内，但是向下取得最小约束）。而用户的 IO 则显然是自由的，不会遵循这个限制。因此 ZBS Client 在收到一个 UIO 之后会检查是否对齐，按照约束条件将其拆分为若干个满足约束的 BIO 再下发给 Access。只有所有的 BIO 都成功才代表着 UIO 成功。
+
+
+
+IO Permission
+
+在 vHost & NVMF 场景中，为了避免客户端 IO 对同一个 Volume 的 IO 被多个不同接入点处理引发的 ABA 时序问题。在 ZBS Client 端采用了认证机制。每个 ZBS Client 在处理客户端 IO 时，都需要申请对于客户端 + Volume 的访问权限，Meta 会保证在同一时刻有且仅有一个 ZBS Client 可以获得访问权限（权限实际是和 ZBS Client 本地的 Access 绑定，只是 IO 检查端），细节参见 [Initiator Binding](https://docs.google.com/document/d/1Xro2919inu3brs03wP1pu5gtbTmOf_Tig7H8pfdYPls/edit#heading=h.5xv9micct4d1)。
+
 ### EC 相关
 
 quorum 机制 
@@ -1139,6 +1168,10 @@ volume 条带化对 ec 条带的影响，https://docs.google.com/document/d/1iNI
 
 
 ec 下沉允许一个 extent 上的多个 ec 条带并发下沉，因此 ec shard 的 gen 可能都不一样，因此不能像多副本那样直接剔除 Generation 不一致的 EC Shard，而是需要继续未完成的下沉操作，将各个 EC Shard 恢复到一致状态。Lease Owner 需要知道不一致的 gen 是由于哪些条带下沉导致的以及条带内的哪些块已经完成更新。
+
+
+
+ZBS 所实现的 Stripe 和 EC 里 Stripe 不同。EC 中的 Stripe 主要的作用是降低副本数，不同分片数据是关联： data + checksum。而 ZBS 的 Stripe 主要用途是帮助 LSM 将 Extent 分散至不同的 Partition 中，以便在顺序吞吐型 IO 击穿缓存后，获得尽可能高的带宽。
 
 ### IO 超时参数
 
@@ -1425,11 +1458,23 @@ should meet
 
 #### lease 定义
 
+在分布式系统中，数据块分片分散在不同的物理节点上，如果有多个 access 发起同一个 extent 的 IO，每个数据块分片收到 IO 的顺序很难保证是一致的，这会导致在存储系统内部造成数据错误。为了避免这个问题，zbs 在整体设计中采用了单一接入的策略，这包含 2 个维度的实现，不同协议下数据链路上的单一接入点（比如 NFS 下的 Login Revoke / IO Reroute、iSCSI 下的 iscsi redirector）和 access 上数据块粒度的权限控制 Lease
+
+
+
+
+
 zbs 使用 lease 来控制 LExtent 的访问权限，在任意时刻，最多仅有一个 access session 可以是某个 lextent 的 lease owner。
 
 pextent 没有独立的访问权限，依附于关联的 lextent，lease owner 用 session uuid 来做唯一区分，而 meta leader 跟每个 access 最多只会建立一个 session，所以可以说任意时刻最多只有一个 access 会是某个 pextent 的 lease owner，同一个 lextent 下的 cap / perf pextent 在每个时刻，要么没有 lease owner，要么是相同的 lease owner。
 
 
+
+在分布式系统中，数据副本分散在各个不同的物理节点上，如果有多个 Access 发起通向同一个 Extent 的 IO ，则每个数据副本收到 IO 的顺序很难保证是一致的。这会在存储系统内部造成数据错误，因此 ZBS 在整体设计中采用了单一接入的策略。这包含有多个维度的实现，包括[数据链路上的单一接入点](https://docs.google.com/document/d/1Xro2919inu3brs03wP1pu5gtbTmOf_Tig7H8pfdYPls/edit#heading=h.5xv9micct4d1)和 Access 上实现的数据块粒度的权限控制 ：[Lease](https://docs.google.com/document/d/1Xro2919inu3brs03wP1pu5gtbTmOf_Tig7H8pfdYPls/edit#heading=h.l853u6hfrfd)。Meta 会保证最多仅有一个 Access Session 持有 Volume 某个逻辑区域对应的 VExtent 或者是某个真实数据块 Extent 的访问权限。如果需要发起 IO 的 Access 不具备需要访问的数据块的访问权限会将请求转发至持有权限的 Access 处进行
+
+
+
+因为 IO 请求的频率过大，每一次都访问 Meta 获取位置信息将对 Meta 产生过大的压力。所以 Libmeta 收到 Lease 后将在本地缓存。ZBS Client 与 Access 不同，与 Meta 之间不会有心跳维护 Lease 的有效性，即 Meta 处的 Lease 变化是不会在意 Client 是否知道的。这样 ZBS Client 缓存的 Lease 可能与 Meta 存在不一致的现象。但是这并不影响正确性。因为 ZBS Client 的 Lease 仅用于路由向 Access Lease owner，只要 Meta 维持了 Access 的 Lease 正确性，如果 ZBS Client 访问了老旧的 Lease Owner，Access 将返回一个 ENotOwner 类型的错误。ZBS Client 收到此类错误后将丢弃本地缓存的 Lease 再向 Meta 获取新的 Lease ，中间过程数据是不会产生任何变化的。
 
 #### lease 机制安全性
 
@@ -2106,7 +2151,7 @@ recover 性能统计
 
 AccessHandler::ComposeAccessPerf(AccessDataReportRequest* request, bool only_summary) 这个统计的是普通 io，ComposeRecoverPerf 统计的 reposition io 相关的。
 
-### 副本分配
+### 副本分配性能优化
 
 副本分配有过的优化
 
