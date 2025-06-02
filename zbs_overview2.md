@@ -2,7 +2,32 @@
 
 
 
+## 分片生命周期
 
+一个 thin volume 上的 extent 的生命周期如下：
+
+1. 创建 volume 时，lextent 和 cap pextent 都会被创建，Cap PExtent 只是分配了 pid，但是没有对应的 Segment；
+2. Chunk 申请 VExtent 的写 lease，Meta 为 LExtent 分配一个 Perf PExtent 和对应的 Segment；
+3. Chunk 向获得的 lease 中的各个 Segment 写入数据，初次写入成功之后上报 Meta，Meta 记录 Perf PExtent 状态为存在；
+4. Chunk 出现异常，Meta 通过心跳发现 Perf PExtent 活跃副本数不足，触发 Recover，Access 执行 Recover 完成，Perf PExtent 出现在新的副本位置；
+5. 随着集群的使用，新增节点或者已有节点容量差异较大时，将会触发 Migrate，Access 执行 Migrate 完成，cap / perf pextent  出现在新的位置；
+6. Volume 不再被使用，长期不 IO，Perf PExtent 触发下沉，为 Cap PExtent 分配 Segment。下沉完成后 Perf PExtent 被清理后在 GC 流程中被回收；
+7. Volume 被删除，LExtent 被 GC 流程回收，对应的 Cap PExtent 也在 GC 流程中被 Meta 回收（磁盘 Cap PExtent 会被标记为无效）；
+8. Chunk 心跳上报 Cap PExtent 在节点上存在，Meta 认为 Cap PExtent 无效，下发 GC 命令；
+9. Chunk 回收 Extent 所占用的空间。
+
+
+
+（再描述一个 pin volume extent 的生命周期）
+
+如果用户是以混合存储池的方式来使用 pin 卷，那么预期 cap 层总是应该占用容量，便于在 tower 上展示空间。
+
+如果用户是以全闪池的方式使用 pin 卷，那么 cap 层可以不占用空间，因为实际上 pin 卷不会下沉，不会占用容量层空间。
+
+
+
+* 卷的 prioritized 属性，决定了 perf extent 是 thick 或 thin；
+* 卷的 thin provision 属性，决定了 cap extent 是 thick 或 thin。
 
 ## 分片分配策略
 
@@ -580,9 +605,61 @@ zbs 中为了避免 IO 长时间不返回，每个发往本地 LSM 的 IO 若在
 
 Cap IO Throttle 具体实现参考 [Access for Tiering](https://docs.google.com/document/d/12P9oHQXEzRmOJ0RMdbdHoTF1_RkO7Ar_EUYoIAEKx08/edit?tab=t.0#heading=h.16o3ugr2s82p)
 
+
+
+## ZBS Lease 机制
+
+ZBS 使用 lease 机制来控制每个 LExtent 的访问权限，在任意时刻最多只有一个 access 会是某个 lextent 的 lease owner。
+
+每个 lease 的有效时间是 7s，但是在 session 处于活跃状态时，会通过心跳周期申请延长正在使用的 lease 有效时间
+
+
+
+
+
+lease 分配策略：
+
+Access  分配 Lease 时遵循本地优先原则，如果请求中指定了 Owner 偏好（Access 本地）则优先分配偏好的 Access 作为 Lease Owner。否则在所有的可用 Session 中随机选择。尽可能的达成本地优先与访问均衡。
+
+
+
+
+
+zbs 中的 lease 只允许 Access 主动要求 Meta 释放某一 Lease，而不允许 Meta 先于 Access 清理自身缓存的 Lease 信息，所以 lease 的释放一定是 access 主动发起的。如果是 meta 重启，lease 在 jeopardy / expired 状态就会清掉自身持有的所有 lease。
+
+
+
+ZBS 中读写共用一个 Lease，iSCSI/NFS Client 会把 IO 请求转发到持有 Lease 的 Access 上，以此来保证 IO 请求是串行的，都是以相同的 IO 请求顺序去写多个副本，副本数据是一致的。
+
+由应用层通过读写锁等机制来避免出现两个 ZBS Client 同时写同一个文件的情况，否则会出现数据错乱。
+
+
+
+access 中所有的  IO 操作的前提都依赖 lease 的有效性。
+
+
+
+
+
+## ZBS Session 机制
+
+Access Manager 建立 Session 机制最重要的作用是为 Extent 分配 Lease。
+
+
+
+在分布式存储系统中，Session 机制作为一种常见的授权模式，通过维护客户端与系统之间的临时会话状态，有效管理权限验证、状态跟踪和资源分配，从而显著降低元数据管理模块的负载。
+
+Session 机制在分布式系统中是一种轻量级的授权和管理方式，核心思想是通过建立一个临时的“会话”上下文来管理客户端的身份、权限和操作状态，而不是每次请求都重新进行复杂的认证和元数据查询，通过缓存和状态管理，Session 机制将高开销的操作（如认证、元数据查询）转化为低开销的 Session 检查。
+
+
+
+session 机制中包含心跳机制。目前 ZBS 通过 Session 的 Keepalive 心跳传递 Chunk 与 Access 上正在处理的链路状态信息，并通过 Keepalive Response 下发各类控制指令（Recover／Migrate／GC / Drop Connection）
+
+
+
+
+
 ## ZBS IO 路径
-
-
 
 
 

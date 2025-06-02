@@ -1,3 +1,7 @@
+最后一行可以写，熟悉 zbs lease 机制、session 机制
+
+
+
 把下沉的面试使用文档整理出来
 
 
@@ -16,6 +20,10 @@
 
 
 要支持 m 不同的回滚吗？先看下 replica 在这种情况下的行为。
+
+RollBack 操作允许将 Volume 的数据回滚至指定 Snapshot 的状态。操作方式为取消源 Volume 关联Extent 的访问 Lease 后，再使用 Snapshot 的 extent table 替换源 Volume 的 extent table。需要注意的是，Rollback 事实上可以允许使用 Volume A 的 Snapshot 去替换 Volume B 的数据。在 A 和 B 本身并不存在亲缘关系的情况下也是如此。典型的使用场景是，用户的自动化流程指定了某个磁盘的一些操作，有时会明确的指定某个磁盘。但是希望运行的是不同状态的数据，并且不希望修改自身的自动化代码。此时这个模式可以比较方便的在不同改变用户自身应用代码的情况下更新数据内容。但是这个操作在正常的生产流程里并不建议。因为除去极少场景之外，用户很难用好这种非同源的数据覆盖，容易导致各种预期外的数据正确性问题。[参考](https://docs.google.com/document/d/1Xro2919inu3brs03wP1pu5gtbTmOf_Tig7H8pfdYPls/edit?tab=t.0#heading=h.3fuxxwaoddug)
+
+
 
 或者提升了分片数，但是 recover 还没完全前，就回滚了。
 
@@ -236,6 +244,8 @@ meta2 里将 meta1 的 SessionMaster 改成了 SessionMasterBase
 
 
 需要预留跟 meta1 的交互的 Meta1SessionManager，包括其中的 SessionManager 和 SessionFollower
+
+搞这部分内容时，可以看[文档](https://docs.google.com/document/d/186FwmbmWvrT5xdsCHWCYvQrD_l6Oy-uVKoi3AGepsFM/edit?tab=t.0#heading=h.olhpezf81s3m)
 
 
 
@@ -1413,7 +1423,149 @@ should meet
 
 ### Lease 相关
 
-zbs 中的 lease 只允许 Access 主动要求 Meta 释放某一 Lease，而不允许 Meta 先于 Access 清理自身缓存的 Lease 信息，所以 lease 的释放一定是 access 主动发起的。如果是 meta 重启，lease 在 jeopardy / expired 状态就会清掉自身持有的所有 lease。
+#### lease 定义
+
+zbs 使用 lease 来控制 LExtent 的访问权限，在任意时刻，最多仅有一个 access session 可以是某个 lextent 的 lease owner。
+
+pextent 没有独立的访问权限，依附于关联的 lextent，lease owner 用 session uuid 来做唯一区分，而 meta leader 跟每个 access 最多只会建立一个 session，所以可以说任意时刻最多只有一个 access 会是某个 pextent 的 lease owner，同一个 lextent 下的 cap / perf pextent 在每个时刻，要么没有 lease owner，要么是相同的 lease owner。
+
+
+
+#### lease 机制安全性
+
+Lease 机制安全性保证的目标是避免出现多 Lease owner，这需要保证不允许出现 access 缓存了 lease 而 meta 未缓存该 lease 的情况，否则 meta 可能为一个 lextent 分配出多个 lease owner，导致多个 access 都有权限读写 pextent 进而导致数据损坏。
+
+为了保证 lease 机制的安全性，在使用 lease 时需要遵循：
+
+1. access 上已缓存的 lease 必须也缓存在 meta 上。这一原则通过以下 3 点保证：
+   1. 一个 lease 在创建时，总是先缓存在 meta 侧，再缓存到 access 侧；
+   2. 一个 lease 在释放时，总是先释放 access 侧缓存的，再释放 meta 侧缓存的；
+   3. lease 是通过 access session 中的心跳续约的，而 access session 失效时，总是先在 chunk 上失效，然后才在 meta 上失效，因此 lease 也一定先在 access 上释放，再在 meta 上释放。
+2. meta 上缓存的 lease 在 access 上可以有对应缓存，也可以没有。这对应释放 lease 的 3 种情况：
+   1. access 可以单独释放 lease 而不通知 meta，比如 access 发现 lease owner 不是自己时清空缓存 lease 并找 meta 重新获取 lease、meta 通过心跳通知其他 chunk 清理 removing chunk 作为 owner 的 lease；
+   2. 当 access 释放 lease 且需要通知 meta 也释放时，比如 access 定时清理未使用超过 1h 的 lease、access 进入维护模式。此时为了避免阻塞一个 IO 的后续流程，可以异步通知 meta，即使通知失败也是可接受的，因为没有破坏安全性前提（这里通知失败也不会重试）；
+   3. 当 meta 释放 lease 且需要通知 access 也释放时，一定是先通过心跳下发 revoke cmd 让 access 先清理，清理后 access 再通知 meta 清理。
+
+
+
+#### lease 类型
+
+lease 的 2 种类型，为什么要分成 2 种？如果是由内部 IO 申请的 lease，此时并不清楚 app io 的最佳接入点在哪，另外，内部 IO 也不用管 COW flag
+
+lease 分为 2 种：
+
+* vextent lease 表示 volume 视角的 io 权限，即 access 是否有权限处理某一 volume 的特定数据区域的 IO
+* pextent lease 表示 pextent 视角的 io 权限，即 access 是否有权限处理某个 pextent 上任何区域的 IO
+
+vtable id + vtable no 的数据区域唯一映射一个 lextent 的数据区域，进而映射出与之关联的一组 perf / cap pextent 的数据区域。两种 lease 在代码上由同一个 lease 对象表示。
+
+* 在 meta 上不区分 vextent lease 和 pextent lease，meta 仅缓存 pextent lease
+* 在 access 上，vextent lease 和 pextent lease 分别存储在不同的 cached map 上，指向同一个 std::shared_ptr< Lease> 对象。
+
+VExtent Lease 和 Extent Lease 虽然有很多共同的属性，也都代表着访问权限。但是本质上是两个不同视角和逻辑对象的访问权限。目前版本因为 ZBS Client 和 Access 运行在同一个进程中，他们共享了缓存 Lease 的 Libmeta 结构。因此在大部分场景下， Client 对 Volume 执行 IO 时申请了 VExtent Lease ，Access 就不再需要额外申请一次。当然 Client 访问 Extent Lease owner 未必一定在本地 Chunk 中，此时就会通过网络访问远端 Access。
+
+Extent Lease 代表着 ZBS 内部的数据对象 Extent 的访问权限。Access 在每次 IO 时都会检查自己是否是 Extent 的 Lease owner，仅在确认有访问权限的情况下才会执行 IO 操作。 Extent Lease 有可能会独立于 VExtent Lease 存在。例如 Meta 希望迁移/恢复数据时，因为此时没有外部对于 Volume 对象的 IO，Access 申请的就仅是 Extent Lease，而不是 VExtent Lease。Extent Lease 中不会携带 COW Flag。此时如果 Access 收到了来自用户的 Volume  IO 请求，还需要再向 Meta 申请 VExtent Lease。
+
+#### lease 分配策略
+
+遵循的原则是尽可能的让 IO 路径较短（Owner 距离 IO 发起者或者副本位置较近），且节点的健康度最高，网络的联通性最好。根据不同类型的 IO，lease 分配的具体规则也不同。
+
+* UIO
+* Reposition
+* Drain
+
+#### lease 生命周期
+
+什么时候 lease 会被创建？
+
+什么时候 meta 上的 lease 会被释放，释放的时候都会做些啥？
+
+什么时候 access 上的 lease 会被释放，释放的时候都会做些啥？
+
+什么时候被续约
+
+
+
+Lease 的创建有 3 种触发条件：
+
+* 客户 IO ，会由 Access 中协议层中调用 zbs client 向 Meta 获取对应的 VExtent Lease；
+* recover handler：在产生恢复/迁移命令时，如果当前 Extent 处于冷的状态，没有活跃的 Lease， 将会在命令下发时生成一个 Extent Lease；
+* drain handler：在产生恢复/迁移命令时，如果当前 Extent 处于冷的状态，没有活跃的 Lease， 将会在命令下发时生成一个 Extent Lease；
+
+
+
+在 Lease 生成之后，各个 IO 服务（ZBS Client 持有 VExtent Lease，Access 持有 VExtent Lease 或仅持有 Extent Lease） 会持有 Lease，Meta 也会在内存中记录 Lease 的 owner。在 Chunk 和 Meta 保持心跳的过程中，会不断的通知 Access 续租持有的 Lease。
+
+
+
+只有 3 种情况才会触发 Meta 主动释放 Lease：
+
+1. Meta 重启或者异常，所有的 Lease 都丢失，新的 Meta 启动后对应的 Access 会感知到 Session Master 变化事件丢弃自身缓存的所有 Lease；
+2. Meta 感知到 Session 超时，会释放掉所有的授予这个 Session 的 Lease；
+3. Access 主动申请释放 Lease，一般发生在 Extent 较长时间没有 IO 进入空闲状态时；
+
+
+
+access 主动释放 lease 的几种情况：
+
+* access 定时清理未使用超过 1h 的 lease
+
+  为了减少 access 的内存压力，access 会主动释放空闲的 lease，每 1 min 会清空一次 expired lease、 inactive lease（超过 1h 没有 IO）。lease 不会持久化
+
+* access 进入维护模式
+
+* 待补充，参考 https://docs.google.com/document/d/1iEoD6-EhDiEbUcI3w4_aRCFp7lRbZa7S4YpWWtspv_k/edit?tab=t.0#heading=h.fa1aklvviyt
+
+
+
+
+
+Access 申请 Lease 时，
+
+* 获取 vextent lease：仅检查 vextent lease 是否存在 vextent cached map 中，收到响应时缓存两个 lease。
+* 获取 pextent lease：仅检查 pextent lease 是否存在 pextent cached map 中，仅缓存 pextent lease。
+
+Access 清理 Lease 时：
+
+* 清理 vextent lease：清理 vextent lease 的同时必定会清理 pextent lease。
+* 清理 pextent lease：允许仅清理 cached pextent lease。vextent lease 也会被设置为 expired。 
+
+总结一下，Access 上存在 4 种 lease 缓存的情况：
+
+1. vextent lease 和 pextent lease 同时缓存：外部 IO 到达 access 后，Access 发出 GetVExtentLease，返回会同时缓存两种 Lease。
+2. vextent lease 缓存，但 pextent lease 未缓存：已有 Lease，但是 pextent lease 超过 1h 不活跃，被 access 自动清理，清理的同时也会将 vextent lease 设置为 expired。因此这种情况等同于两种 lease 都未缓存。
+3. vextent lease 未缓存，但 pextent lease 缓存：副本损失触发了内部的 recover IO，Access 发出 GetLease，返回时仅会缓存 pextent lease。
+4. vextent lease 和 pextent lease 都未缓存。
+
+
+
+
+
+要么立即 Keepalive（2s 左右），要么会等个 5s 或 7s 才对 lease 续约。
+
+
+
+lease 中 revoke_seq_ 的作用是啥？
+
+一种可行的方法是给 volume 添加一个 Clear Cache Lease 的计数器，每次调用 ClearCacheLease 的 vtable 版本，计数器自增。GetVextentLease 发出 RPC 之前，拿一下计数器的值，当 RPC 返回后，再次拿一下值，如果两次的值不一样，可以确定，这期间，发生了 Clear Cache Lease，此时 GetVextentLease 拿到的 Lease 信息是不可靠的，进行重试。
+
+
+
+什么时候清空 lease 的时候要让 revoke_seq ++？
+
+如果 access 每次清空 lease 的时候也通知 meta 去清空，会有什么问题吗？
+
+因为许多申请 Lease 和释放 Lease 的操作在 IO 路径上，因此需要尽可能不阻塞 IO 流程，通知 meta 清空 lease 比较适合用异步的方式处理
+
+
+
+把引入 revoke req 的例子分析一下，https://docs.google.com/document/d/1iEoD6-EhDiEbUcI3w4_aRCFp7lRbZa7S4YpWWtspv_k/edit?tab=t.0#heading=h.hugb8tdslt0u，其中一个点是，虽然 meta 端是先返回 GetLease 的响应，再执行 revoke lease，但 Chunk 端不一定是相同的处理顺序。因为前者通过 Chunk 的 libmeta 返回，后者通过 session 机制返回，两者使用了不同的 meta client 和 tcp 连接。因此可能出现先收到 revoke lease 通知，再收到 GetLease rpc 的情况。
+
+
+
+#### revoke lease 
+
+meta 主动要求 access 清空 lease 的几种情况：
 
 
 
@@ -1435,6 +1587,56 @@ meta 会 revoke 某个 pid 的 lease 的情况包括但不限于：
 2. set pextent existence，当传入的 gen = 0 时，貌似只有 ec 会发起 gen = 0 的这个 rpc
 3. reset volume extents prefer local
 4. 待补充
+
+不论 meta revoke 整个 volume 上的 lease 还是某个 pextent 上的 lease，都是先下发 revoke cmd，先等 access 清空 lease 然后才是 meta 清空 lease。（快照/克隆场景下，只会清空 access 上的 lease，保留 meta 上的 lease，这样可以让 COW 前后的 prefer local 不变）
+
+
+
+参考资料
+
+* https://docs.google.com/document/d/1iEoD6-EhDiEbUcI3w4_aRCFp7lRbZa7S4YpWWtspv_k/edit?tab=t.0
+* https://docs.google.com/document/d/186FwmbmWvrT5xdsCHWCYvQrD_l6Oy-uVKoi3AGepsFM/edit?tab=t.0#heading=h.5a17sib58knd
+* https://docs.google.com/document/d/1Xro2919inu3brs03wP1pu5gtbTmOf_Tig7H8pfdYPls/edit?tab=t.0#heading=h.l853u6hfrfd
+
+### access session 相关
+
+access session 的正确性
+
+等处理 session follower for meta2 时，把这部分总结一下
+
+
+
+session 机制是分布式系统中非常常见的一种授权模式，可以有效的降低元数据管理模块的负载。access 通过 session 机制与 meta 建立联系，并经由 session 确保数据访问权限（ lease）的唯一性。
+
+
+
+Access 中 Session 状态维护的机制包括两个部分，维持生命周期心跳循环的 Session Follower 与响应状态变化事件的 Session handler。Session 也有自己的 Lease， 代表 Session 的健康状态，每次 Access 收到 Meta 的心跳回复都会延续自身的 Lease 。如果长时间没有收到正常的心跳回复就会触发状态变化。在 Access 中 Session 可能的状态包括：
+
+* Init，刚刚建立的初始状态，很快会进入 KeepAlive 状态；（5.4.0 新增）建立 Access Session 前要求 Access 与 ZK server 之间已经建立了 zk session（长连接）。
+* KeepAlive，健康 Session 的常态，和 Meta 保持正常的心跳交换，此时 Access 可以正常的提供服务；
+* Jeopardy，当 Access 短暂的与 Meta 失去连接（没有正常的收到 Meta 的心跳回复）超过了一定时间，但是没有需要超过最大允许的限制时，进入 Jeopardy 状态，此时不会允许下发新的 IO，参见[ Jeopardy](https://docs.google.com/document/d/1Xro2919inu3brs03wP1pu5gtbTmOf_Tig7H8pfdYPls/edit#heading=h.v9fblt6ydyzc)；
+* Expired，原有的 Session 长时间与 Meta 失去连接，（5.4.0 新增）或者 Access 与 Zk 之间断开长连接，此时所有的 IO 都会被拒绝，并且进入这个状态时 Access 会主动丢弃自身持有的所有 Extent Lease；
+
+[参考](https://docs.google.com/document/d/186FwmbmWvrT5xdsCHWCYvQrD_l6Oy-uVKoi3AGepsFM/edit?tab=t.0#heading=h.cofkzzignlcu)
+
+从 session 状态出发，对应的 lease 情况是：
+
+* 当 session 存活时，即进入 KEEPALIVE 状态时，lease 总是在心跳流程中被续租，不被主动释放时，lease 永不过期；
+* 当 session 失效或即将失效时，即进入 EXPIRED / JEOPARDY 状态时，会清掉自身持有的所有 lease。
+
+在 access 视角上，access session 存在，意味着 lease 一定有效。即在 access session 过期之前，任何已获取并缓存在 access 内存中的 lease 都可以使用。
+
+在 meta 视角上，access session 存在意味着 access 所持有的 lease 都有效，此时 meta 不允许为已缓存 lease 分配新的 lease owner。access session 不存在意味着 access 已经放弃了它持有的 lease，此时 meta 可以安全地删除相关的缓存 lease，此后这些 lextent 可以分配新的 lease owner。
+
+
+
+每个 Access 在不同的时刻可以由不同的 Session 代表，但是在同一时刻，最多仅能有一个 Session 代表一个特定的 Access。因此 Session 在集群中代表着当前可以与集群稳定连接受控的 Access 。Meta 会通过 Session 向 Access 下发数据的访问权限 Lease，集群中各个存储对象状态信息（例如 iSCSI LUN 的变化等等）。Access 仅有在自身持有一个处于健康活跃状态的 Session 时才可以对外提供接入服务。
+
+ZBS 中的 Access 借助 Session 实现了分布式接入语义，即客户端可以从整个集群中任意一个 Access 接入即可访问到集群中的所有数据，并且不论在哪个 Access 上在同一时刻观察到的数据状态是一致的。在分布式系统中，数据副本分散在各个不同的物理节点上，如果有多个 Access 发起通向同一个 Extent 的 IO ，则每个数据副本收到 IO 的顺序很难保证是一致的。这会在存储系统内部造成数据错误，因此 ZBS 在整体设计中采用了单一接入的策略。这包含有多个维度的实现，包括[数据链路上的单一接入点](https://docs.google.com/document/d/1Xro2919inu3brs03wP1pu5gtbTmOf_Tig7H8pfdYPls/edit#heading=h.5xv9micct4d1)和 Access 上实现的数据块粒度的权限控制 ：[Lease](https://docs.google.com/document/d/1Xro2919inu3brs03wP1pu5gtbTmOf_Tig7H8pfdYPls/edit#heading=h.l853u6hfrfd)。
+
+Meta 会保证最多仅有一个 Access Session 持有 Volume 某个逻辑区域对应的 VExtent 或者是某个真实数据块 Extent 的访问权限。如果需要发起 IO 的 Access 不具备需要访问的数据块的访问权限会将请求转发至持有权限的 Access 处进行。特别需要注意的是，每次 Access 连接产生的 Session 是不同的，Meta Lease 的授予对象是 Session。因此一个 Access 在上一次 Session 生命周期内获得的 Lease 并不可以沿用到下一个 Session 生命周期内。因为两个 Session 交替期间内一定发生过集群失连的事件，Lease 在此期间很有可能已经由 Meta 授予给其他 Access 上的 Session。
+
+分布式一致性接入仅是解决用户层面的多点访问带来的数据冲突问题的必要非充分条件。例如 A 和 B 两个程序同时写一个本地文件，文件系统可以保证按序处理 IO 并且返回给 A 和 B 一致的结果，但是如果 A 和 B 没有互相协作，不具备感知使用的存储是一个共享存储的能力，则数据状态很有可能不是他们中任意一个预期的结果。多点接入的数据正确性保证，还需要依赖于应用程序本身支持共享存储，例如 Oracle RAC，SQL Server Cluster，OCFS，VMFS, Hyper-V CSV 等。
 
 ### prometheus 使用
 
@@ -1935,6 +2137,22 @@ AccessHandler::ComposeAccessPerf(AccessDataReportRequest* request, bool only_sum
 
 4. 临时副本重放完会被剔除。
 
+
+
+segment location 的位置变化
+
+Extent 的 Segment 位置初次分配由 Meta 主导，厚置备模式的 Volume 创建时或者是精简制备的 Extent 处理初次写入请求时。其后， Meta 就不再主动的调整的 Extent 的 Segment 位置。在后续的 IO 过程中，Access 将成为 Extent Segment 的位置的唯一修改人，仅有 Extent 的 Lease owner 有权限向 Meta 要求调整 Segment 位置。Meta 自身将不直接修改 Extent 的 Segment 位置。
+
+采用这个设计约束的主要原因是，为了保证有效 Segment 的一致性， Access Lease owner 天然的具备修改 Location 需求。将所有的变更请求统一在同一个角色和控制逻辑上可以简化异常冲突的处理过程。
+
+Extent 的 Segment 位置在如下场景中可能会发生变化：
+
+* Sync Generation 或者 IO 阶段的部分 Segment 失败，Access 将会剔除异常 Segment；
+* Recover 结束时，Access 会要求 Meta 新增 Segment；
+* Migrate 结束时，Access 会要求 Meta 替换 Segment；
+
+因为仅有 Lease owner 负责 Extent 内部的 Segment 逻辑，其他非 Lease owner 的 Access 仅需要知道 Lease Owner 位置而不感知 Segment。所以在这个模式下，每次的 Segment 变更都保证完整的通知到所有关联方（Meta & Access Lease owner）
+
 ### iscsi 接入点
 
 zbs 当前行为：
@@ -2141,7 +2359,11 @@ lease 是跟 session uuid 绑定的，一个 access 只跟 meta leader 建立一
 
 access handler 跟 access mgr 建立 session 的时候，access mgr 在 SessionMasterBase::CreateSession 中为他生成一个随机的 uuid，通过心跳传递给 access handler 后，在 Meta1SessionManager::SessionCreatedCb 时，设置本地的 libmeta 上的 session uuid，即调用 set_session_uuid
 
-第二次在 access io handler 中获取 lease 是
+
+
+第一次在 internal io client 中获取 lease 是为了找到 lease owner，把 IO 转发到 lease owner 所在地
+
+第二次在 access io handler 中获取 lease 是为了触发数据块分片分配、COW 的行为
 
 ### access io 并发控制
 

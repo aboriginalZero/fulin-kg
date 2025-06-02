@@ -41,6 +41,8 @@
     
 7. 调用 AccessIOHandler::GetVExtentLease(wctx) 获取 lease，因为如果是写有 COW 标记的 vextent，meta leader 在复制一个新的 vextent 之后，会通过心跳下发 Revoke Lease 指令要求 Access 释放 Lease，之后让 Access 主动去获取新的 vextent lease，这一步是为了保证拿到最新的 vextent lease 
 
+    分层之后，这一步还涉及到 app io 发起的 perf segment 的分配，sink io 发起的 cap segment 的分配
+
 8. 调用 AccessIOHandler::SyncGeneration(ioctx)，在 Access Session 成为 Lease owner 之后执行初次 IO 请求之前，会获取 Extent 所有有效副本的 Gen，最大的 Gen 会被视为有效的 Gen，如果这个 Gen 低于 Meta 认可的 Gen 则同步失败，数据进入不可 IO 的异常，否则那些没有在指定时间内响应的副本或者 Gen 低于有效 Gen 的副本将会被剔除。同步 Gen 之后，触发本地记录的 Gen + 1。
 
     > 为什么只需要初次 IO 时进行 SyncGeneration？
@@ -199,6 +201,8 @@ int zbs_get_cluster_summary(zbs_t zbs, zbs_cluster_summary_t *summary);
 ```
 
 ### Lease 机制
+
+TODO 等待替换成新内容
 
 ZBS 中读写共用一个 Lease，iSCSI/NFS Client 会把 IO 请求转发到持有 Lease 的 Access 上，以此来保证 IO 请求是串行的，都是以相同的 IO 请求顺序去写多个副本，副本数据是一致的。
 
