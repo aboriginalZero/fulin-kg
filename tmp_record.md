@@ -1,36 +1,79 @@
-最后一行可以写，熟悉 zbs lease 机制、session 机制
+reposition src 可以只是 healthy，但 reposition dst 必须是 healthy_and_in_use
+
+在 AllocRecoverForAgile 里用错了
 
 
 
-把下沉的面试使用文档整理出来
+```
+existed_segment_num_，有多少个 cid 上报了，以 segment_num_ 为长度遍历 replica_，记录了其中 replica_[i].cid != 0 的个数
+在 心跳处理 / AddReplica / AddECShard / RemoveReplica / RemoveECShard / ReplaceSegment 时会做相应的加加减减
+
+这个值只是用来计算空间占用。
+
+expected_replica_num_，用户设定的期望副本数，可通过 rpc 改变
+支持调小后，可能出现现有副本数大于期望副本数，比如从 3 降低到 2
+
+算 need recover 的时候，根本不管 existed_segment_num_，而是去按 segment_num_ 长度遍历 replica_， 按是否 alive /healthy 来看，或者说 alive / healthy cids 一定 <= existed_segment_num_
+
+segment_num_，会创建的 PExtentReplica 的数量，影响了堆的大小
+
+为了支持期望副本数下调，需要让他的值变成 location num 和 expected_segment_num_ 的最大值
+```
+
+
+
+目前来看，RemoveReplica 的时候，不会去重新分配，这里可以考虑在一定条件下，触发重新分配。
+
+把已有的 AddECShard / RemoveECShard 等整合到 segment 里。
+
+
+
+会执行 std::make_unique<PExtentReplica[]> 的 2 个地方：
+
+1. PhysicalExtentTableEntry::FromPExtent() --> PhysicalExtentTable::SetPExtentUnlocked() 
+
+   1. meta 刚开始从 metadb 中加载 pextent 的时候，会调用 PhysicalExtentTable::Initialize
+   2. 外部调用 pextent table 的 SetPExtents
+      1. 非双活转双活的过程中，会遍历所有 pextent 并更新 expected replica num 后，调用 SetPExtents
+      2. refresh child lextent loc 时，把 child pextent 的 loc 更新成 parent loc，调用 SetPExtents
+      3. transaction 中的 UpdateMetaContextWhenSuccess
+         1. SpaceTransaction::PersistExtents()，几乎每个 transaction 的最后都会调用，涉及到有 expected / loc 变动时
+         2. UpdateVolumeTransaction::CommitInternal()，在更新完执行
+         3. UpgradeForTieringTransaction::Commit()
+         4. UpgradeForTieringPExtentTransaction::Commit()
+
+   
+
+2. PhysicalExtentTableEntry::CopyMemVar()，这个是用在构造函数的地方
+
+   不过此时 segment_num_ 已经是确定的状态，所以还好
+
 
 
 
 
 1. rpc / transaction 里的处理，pentry 中的 replica_ 缩减、是否允许克隆/回滚，回滚了之后 expected segment num 以谁为准，cap / perf 需要都设置，降级时需要考虑 lextent 是否被多个 volume 引用，取这些 volume 里的最高 expected replica num；
 
-创建的时候，还是要保证 volume 跟 pool 是一样的 ec param
+   创建的时候，还是要保证 volume 跟 pool 是一样的 ec param
 
-克隆允许从 ec 2 + 1克隆出 ec 2 + 2 吗？
+   克隆允许从 ec 2 + 1克隆出 ec 2 + 2 吗？
 
+   
 
+   如果快照的 ec m = 2，之后缩小成 m = 1，那么在回滚的时候，要注意特别处理下。
 
-如果快照的 ec m = 2，之后缩小成 m = 1，那么在回滚的时候，要注意特别处理下。
+   
 
+   要支持 m 不同的回滚吗？先看下 replica 在这种情况下的行为。
 
+   RollBack 操作允许将 Volume 的数据回滚至指定 Snapshot 的状态。操作方式为取消源 Volume 关联Extent 的访问 Lease 后，再使用 Snapshot 的 extent table 替换源 Volume 的 extent table。需要注意的是，Rollback 事实上可以允许使用 Volume A 的 Snapshot 去替换 Volume B 的数据。在 A 和 B 本身并不存在亲缘关系的情况下也是如此。典型的使用场景是，用户的自动化流程指定了某个磁盘的一些操作，有时会明确的指定某个磁盘。但是希望运行的是不同状态的数据，并且不希望修改自身的自动化代码。此时这个模式可以比较方便的在不同改变用户自身应用代码的情况下更新数据内容。但是这个操作在正常的生产流程里并不建议。因为除去极少场景之外，用户很难用好这种非同源的数据覆盖，容易导致各种预期外的数据正确性问题。[参考](https://docs.google.com/document/d/1Xro2919inu3brs03wP1pu5gtbTmOf_Tig7H8pfdYPls/edit?tab=t.0#heading=h.3fuxxwaoddug)
 
-要支持 m 不同的回滚吗？先看下 replica 在这种情况下的行为。
+   
 
-RollBack 操作允许将 Volume 的数据回滚至指定 Snapshot 的状态。操作方式为取消源 Volume 关联Extent 的访问 Lease 后，再使用 Snapshot 的 extent table 替换源 Volume 的 extent table。需要注意的是，Rollback 事实上可以允许使用 Volume A 的 Snapshot 去替换 Volume B 的数据。在 A 和 B 本身并不存在亲缘关系的情况下也是如此。典型的使用场景是，用户的自动化流程指定了某个磁盘的一些操作，有时会明确的指定某个磁盘。但是希望运行的是不同状态的数据，并且不希望修改自身的自动化代码。此时这个模式可以比较方便的在不同改变用户自身应用代码的情况下更新数据内容。但是这个操作在正常的生产流程里并不建议。因为除去极少场景之外，用户很难用好这种非同源的数据覆盖，容易导致各种预期外的数据正确性问题。[参考](https://docs.google.com/document/d/1Xro2919inu3brs03wP1pu5gtbTmOf_Tig7H8pfdYPls/edit?tab=t.0#heading=h.3fuxxwaoddug)
-
-
-
-或者提升了分片数，但是 recover 还没完全前，就回滚了。
-
-比如一开始卷的 ec m = 1，打了快照，将卷的 ec m 提升到 2，允许他回滚到快照吗？这样有可能出现某些 pextent 的 m = 1，某些 m = 2（比如快照中就 4 个 vextent，但 volume 已经更新 size 到 10 个 vextent 了，回滚的话，会造成前 4 个 vextent 是 1 个校验块，后 6 个 vextent 是 2 个校验块），能接受刚回滚回去就触发 recover 吗？（看 replica 应该是可以）
-
-
-
+   或者提升了分片数，但是 recover 还没完全前，就回滚了。
+   
+   比如一开始卷的 ec m = 1，打了快照，将卷的 ec m 提升到 2，允许他回滚到快照吗？这样有可能出现某些 pextent 的 m = 1，某些 m = 2（比如快照中就 4 个 vextent，但 volume 已经更新 size 到 10 个 vextent 了，回滚的话，会造成前 4 个 vextent 是 1 个校验块，后 6 个 vextent 是 2 个校验块），能接受刚回滚回去就触发 recover 吗？（看 replica 应该是可以）
+   
 2. 还是通过 migrate cmd 下发，这样能保证不是 need recover 时，才去 reduce segment，这里需要考虑 replica 里 replace cid 怎么选能否让 topo 距离变得最小，或者不需要局部化迁移，不影响到容量均衡，尽量不选 lease owner，ec 的话要设成最后一个校验块的 dst_shared_idx，这里的 lease owner 理论上可以任选一个，但可以看看 app / reposition 是怎么选的；
 
    先批量扫描所有 pid，检查他们的 expected segment num，给他们找出最不健康的分片（这里的不健康要注意 migrate cmd 从生成到下发有一定的滞后性）
@@ -50,20 +93,20 @@ RollBack 操作允许将 Volume 的数据回滚至指定 Snapshot 的状态。�
    后续可以支持查询需要 reduce segment 的数据块 pextent find need_reduce
 
    需要先搞明白 NeedReduce 的判断条件
+   
+   目前只会是通过命令行的变动导致 expected 变小，此时可以也把它放入 active 
+   
+   NeedReduce 需要像 NeedRecover 那样考虑维护模式之类的情况吗？
 
 
 
-2. access 拿到之后，先处理 cmd 校验，但要在 HandleRecoverNotification 里单独搞一条路径。在 lease sync 后再决定是否 reduce，如果 sync 过程过程就剔分片了，后续要判断是否还要继续剔除分片，剔除时记得加 extent_io_barrier_guard 锁。
-3. 需要搞一个能力协商 
+3. access 拿到之后，先处理 cmd 校验，但要在 HandleRecoverNotification 里单独搞一条路径。在 lease sync 后再决定是否 reduce，如果 sync 过程过程就剔分片了，后续要判断是否还要继续剔除分片，剔除时记得加 extent_io_barrier_guard 锁。
+
+   或许需要复用 MPIO 的能力协商 
 
 
 
-回滚到快照的时候，改了 ec_m 会不会影响到 replica_ 堆变量的大小
-
-
-扩大 expected segment num 的时候，是立即扩大的，没什么问题，但缩小的时候并没有。
-
-缩小的时候，需要考虑下，PhysicalExtentTableEntry::FromPExtent 中会立即缩小 replica，不太合理。
+回滚到快照的时候，改了 ec_m 会不会影响到 replica_ 堆变量的大小，只是回滚，不会。回滚后触发的 recover 或者 reduce segment 完成的时候，调用的 RemoveReplica / SetPextents 时会。
 
 
 
