@@ -1,9 +1,3 @@
-给客户的 solution RPM 要从 CI 上出。
-
-出了之后把 Solution RPM 和对应的 Debuginfo 上传到 http://192.168.28.216:8080/login?redirect=%2Ffiles%2F
-
-
-
 
 
 UpdatePExtentReplicaNumToStretched() 中如果遍历过程中 pid map 变了，会不会有某些 pid 的 expected_replica_num 没更新
@@ -990,6 +984,14 @@ git submodule ，https://git-scm.com/book/zh/v2/Git-%E5%B7%A5%E5%85%B7-%E5%AD%90
 vscode 中用 vim 插件，这样可以按区域替换代码
 
 
+
+### 出 hotfix
+
+给客户的 solution RPM 要从 CI 上出
+
+1. http://zbsci.smartx.com/job/ 中搜 zbs-release 开头的任务，找到匹配的平台，el7/oe1，SERVER_SAN/HCI 之类的，然后把 refs/heads/solution-1082795 填到 GERRIT_REFNAME里面就好了，勾选上 publish
+2. CI 运行完，根据 commit id （不是 Change-Id，是 patchset 2 边上的 SHA 码）去 17.20 上找
+3. 把 rpm 和对应的 debuginfo 备份到 http://zbs-release.smartx.com/files/ 
 
 ### 下沉
 
