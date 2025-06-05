@@ -1,6 +1,36 @@
+给客户的 solution RPM 要从 CI 上出。
+
+出了之后把 Solution RPM 和对应的 Debuginfo 上传到 http://192.168.28.216:8080/login?redirect=%2Ffiles%2F
+
+
+
+
+
+UpdatePExtentReplicaNumToStretched() 中如果遍历过程中 pid map 变了，会不会有某些 pid 的 expected_replica_num 没更新
+
+
+
+没配 topo 也需要响应 reduce segment 任务，所以这个遍历应该是少不了。
+
+可以让 reduce segment 触发的更早些
+
+
+
 reposition src 可以只是 healthy，但 reposition dst 必须是 healthy_and_in_use
 
 在 AllocRecoverForAgile 里用错了
+
+
+
+这些 map 应该是有重复的
+
+```
+absl::flat_hash_map<cid_t, ChunkStatus> chunk_status_map_;
+absl::flat_hash_map<cid_t, ChunkState> chunk_state_map_;
+absl::flat_hash_map<cid_t, std::array<double, PExtentKind_ARRAYSIZE>> healthy_and_in_use_chunk_load_map_;
+```
+
+
 
 
 
