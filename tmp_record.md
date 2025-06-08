@@ -1,6 +1,16 @@
+volume / lextent / pextent / chunk table
+
+这几个 table 太多了，是否考虑让大家各搞各的。
+
 
 
 UpdatePExtentReplicaNumToStretched() 中如果遍历过程中 pid map 变了，会不会有某些 pid 的 expected_replica_num 没更新
+
+在转换过程中创建的卷，2 副本，后续会提升到 3 副本吗？双活能够保证所有卷一定是 3 副本吗？可能会有些遗漏
+
+
+
+59s
 
 
 
@@ -212,8 +222,6 @@ sync gen 过程中的剔除副本，会在 RemoveReplica rpc 调用后，更新�
 等 dongdong 提供新字段之后，access 的 perf thin 语义会变，到时候再来改这个。
 
 
-
-把 ec 总结出来，可能用不到了，先不管 ec 具体原理。
 
 
 
