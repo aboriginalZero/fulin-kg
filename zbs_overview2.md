@@ -609,14 +609,6 @@ Cap IO Throttle 具体实现参考 [Access for Tiering](https://docs.google.com/
 
 ## ZBS Lease 机制
 
-ZBS 使用 lease 机制来控制每个 LExtent 的访问权限，在任意时刻最多只有一个 access 会是某个 lextent 的 lease owner。
-
-每个 lease 的有效时间是 7s，但是在 session 处于活跃状态时，会通过心跳周期申请延长正在使用的 lease 有效时间
-
-
-
-
-
 lease 分配策略：
 
 Access  分配 Lease 时遵循本地优先原则，如果请求中指定了 Owner 偏好（Access 本地）则优先分配偏好的 Access 作为 Lease Owner。否则在所有的可用 Session 中随机选择。尽可能的达成本地优先与访问均衡。

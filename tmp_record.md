@@ -1,16 +1,14 @@
-volume / lextent / pextent / chunk table
+pextent table 中临时副本相关的变量 temporary_replicas_ 和 temporary_replica_indices_ ，看起来只会被 meta rpc 线程访问，可以不用锁保护的。rim_pextent_num_ 只在 ut 中被访问，但可以用来判断维护模式中产生的剔除副本的数量。
 
-这几个 table 太多了，是否考虑让大家各搞各的。
+
+
+volume / lextent / pextent / chunk table，meta 里的 table 太多了，是否考虑让大家各搞各的。
 
 
 
 UpdatePExtentReplicaNumToStretched() 中如果遍历过程中 pid map 变了，会不会有某些 pid 的 expected_replica_num 没更新
 
 在转换过程中创建的卷，2 副本，后续会提升到 3 副本吗？双活能够保证所有卷一定是 3 副本吗？可能会有些遗漏
-
-
-
-59s
 
 
 
@@ -993,6 +991,63 @@ vscode 中用 vim 插件，这样可以按区域替换代码
 
 
 
+查看集群空间占用
+
+```
+zbs-tool space show 
+```
+
+
+
+VLOG(VLOG_INFO) 级别的日志怎么开启，zbs-meta vlog -h 的用法
+
+```shell
+# 在 meta 配置文件里加上
+GLOG_vmodule="tcp=4, data_channel=4"
+```
+
+如果是 chunk 的 vlog，需要在 chunk 配置文件里加上吗？有了这个之后，可以通过 zbs-meta vlog -h 来不重启的状态下调节。
+
+ zbs-meta memory heap_profiler_start /root/yiwu/heap_profiler && zbs-meta memory heap_profiler_stop 收集到的文件如何使用
+
+```
+# 在对应 docker （oe1 或 el7）里安装 pprof
+./pprof_linux_amd64 -h
+# 测试环境的话，可以直接在节点上 wget http://192.168.91.19/bin/x86_64/pprof_linux_amd64
+./pprof_linux_amd64 -text /usr/sbin/zbs-metad heap_profiler.0002.heap
+```
+
+
+
+ZBS Chunk 磁盘
+
+chunk 侧有慢盘标记，早在网络亚健康之前就有了，副本分配策略会考虑节点容量，这个容量是有效数据空间比例，看的是比例，慢盘不算有效数据空间，如果有慢盘，这个值会比较低，所以这个 chunk 被选中的优先级会低一些。
+
+[磁盘异常处理  II](https://docs.google.com/document/d/1NdsdRCPmNciLC8Vj70HEImQKRxLAPIVEzvtTbKqIkZI/edit)，在平均延迟 >= 2s 时，TUNA 将磁盘记录为慢盘 II ，并向本地 Chunk 提示慢盘进入隔离状态。LSM 2 将响应磁盘隔离请求，隔离磁盘：
+
+1. 对于进入隔离状态的磁盘，所有的普通 IO 请求将被拒绝，关键 IO 需要被接受；
+2. 隔离的磁盘上关联的 Extent 都将被标记为异常状态以快速让 Meta 触发数据恢复 （需要确认是否可以标记所有有部分间接 Block 在磁盘上的 Extent，如果实现代价较大，可以不标记这些 Extent）；
+3. 隔离的磁盘不再会被分配新的 Extent，并且 GC 命令可以正常的清理系统中对隔离磁盘的数据状态；特别的，强制 IO 触发的 LSM 内部数据分配，在没有健康磁盘可用的情况下，要允许分配至隔离中的磁盘（比如处理 COW，COW 需要的副本空间只会在本地）；
+4. 在隔离的磁盘上不再具备数据后，隔离磁盘将自动从 Chunk 中移除；
+5. 隔离磁盘的空间将不再被标记为有效空间，需要在向 Meta 上报的有效空间容量中扣减；
+
+隔离状态的磁盘与直接标记为慢盘 I & 坏盘的标记不同，在必要时依然需要处理 IO 请求。对于慢盘 I & 坏盘 & 磁盘消失，可以认为 Chunk 不具备读取数据的能力，在当前阶段只能直接放弃该副本。但是对于慢盘 II，数据是还可以被访问的。
+
+理论上的最优效果是，保留该副本，且外部 IO 行为几乎等同于该磁盘行为。理论上，通过重置 HBA 卡、重启节点的手段来恢复该磁盘，很大几率地，磁盘能重新恢复正常响应，但需要引入较为复杂且不可控的恢复手段。但是在作为最后一个副本时，提供 IO 能力有可能避免用户业务立即中断。因为 LSM 本身并不具备识别副本是否最后一个副本的能力，因此数据副本在 LSM 2 中隔离后需要被标记为异常，由 Access （知晓副本状态）提供 IO 标记，要求 LSM 响应此类 IO。
+
+即当慢盘 II / 健康盘上都有同一个 pid 副本且所有的副本都写失败，才会去写慢盘 II，对应代码 GenerationSyncor::MarkPidIOHard()
+
+可以通过在目标节点上的 /var/log/message 里搜索 Abort Task 来检查是否有物理磁盘 IO 异常的信息。如果有则通常是磁盘损坏或者磁盘固件版本不对，如果多个磁盘均有出现则有可能是 HBA 卡异常或者固件版本不对。
+
+```shell
+# 磁盘消除"隔离中"状态
+zbs-chunk partition set-healthy /dev/sdx
+# 磁盘消除"亚健康/不健康"状态
+zbs-node set_disk_healthy sdx
+```
+
+
+
 ### 出 hotfix
 
 给客户的 solution RPM 要从 CI 上出
@@ -1197,6 +1252,10 @@ drain handler --> sink io handler -> access io handler -> replica / ec io handle
 
 ### zbs client 相关
 
+ZBS Client 与 Access 不同，与 Meta 之间不会有心跳维护 Lease 的有效性，即 Meta 处的 Lease 变化是不会在意 Client 是否知道的。这样 ZBS Client 缓存的 Lease 可能与 Meta 存在不一致的现象。但是这并不影响正确性。因为 ZBS Client 的 Lease 仅用于路由向 Access Lease owner，只要 Meta 维持了 Access 的 Lease 正确性，如果 ZBS Client 访问了老旧的 Lease Owner，Access 将返回一个 ENotOwner 类型的错误。ZBS Client 收到此类错误后将丢弃本地缓存的 Lease 再向 Meta 获取新的 Lease ，中间过程数据是不会产生任何变化的。
+
+
+
 在 ZBS Client 中，不额外的处理 IO 重叠的保序问题，即不会严格的按照收到的 IO 请求顺序下发 IO。因为对于通用的块存储系统收到的并发重叠 IO，A 和 B，语义上并不保证最终结果是 A 或 B 或者 AB 交叠。大部分应用端希望确定某个结果时，会在发送时做合并或者严格的遵循收到 A 成功之后再下发 B 的原则。这样 IO 都成功之后结果就一定是 B。
 
 
@@ -1219,6 +1278,32 @@ UIO 指的是 User IO，来自用户处的原始 IO 请求。在 ZBS Client 中�
 IO Permission
 
 在 vHost & NVMF 场景中，为了避免客户端 IO 对同一个 Volume 的 IO 被多个不同接入点处理引发的 ABA 时序问题。在 ZBS Client 端采用了认证机制。每个 ZBS Client 在处理客户端 IO 时，都需要申请对于客户端 + Volume 的访问权限，Meta 会保证在同一时刻有且仅有一个 ZBS Client 可以获得访问权限（权限实际是和 ZBS Client 本地的 Access 绑定，只是 IO 检查端），细节参见 [Initiator Binding](https://docs.google.com/document/d/1Xro2919inu3brs03wP1pu5gtbTmOf_Tig7H8pfdYPls/edit#heading=h.5xv9micct4d1)。
+
+
+
+ZBS Client 的核心功能是处理来自用户的 IO 请求。是 ZBS 内部数据对象 Volume 的访问入口，同时也集成了 Libmeta 作为集群 RPC 的访问代理（meta.cc，包含 Lease 管理和集群 RPC 接口两部分功能）。
+
+可能有多个 zbs client，但一定只会有一个 access，一个 lease owner 来保证接入点的唯一性
+
+在 IO 过程中，ZBS Client 不处理副本、数据校验等逻辑，他的主要逻辑是将对一个 Volume 的访问请求转化为对 Extent 的访问请求。ZBS Client 通过 Meta 将 Volume 指定区域（offset + len）映射到对应的 Extent，并从 Meta 返回的 VExtent Lease 中获得 Extent  Lease owner 的位置信息并将 IO 转发过去。
+
+因为 IO 请求的频率过大，每一次都访问 Meta 获取位置信息将对 Meta 产生过大的压力。所以 Libmeta 收到 Lease 后将在本地缓存。ZBS Client 与 Access 不同，与 Meta 之间不会有心跳维护 Lease 的有效性，即 Meta 处的 Lease 变化是不会在意 Client 是否知道的，这样 ZBS Client 缓存的 Lease 可能与 Meta 存在不一致的现象。但是这并不影响正确性，因为 ZBS Client 的 Lease 仅用于路由向 Access Lease owner，只要 Meta 维持了 Access 的 Lease 正确性，如果 ZBS Client 访问了老旧的 Lease Owner，Access 将返回一个 ENotOwner 类型的错误。ZBS Client 收到此类错误后将丢弃本地缓存的 Lease 再向 Meta 获取新的 Lease ，中间过程数据是不会产生任何变化的。
+
+Libmeta 也会监控自身的 Lease 使用情况，在长期未使用时会释放 Lease 以回收内存。但是因为 ZBS Client 自身其实不是 Lease 的持有者（非 Access owner），所以它的清理动作只需要涉及清理自身的缓存即可，不需要通知 Meta 也同步释放（但是因为和 Access 共享 Libmeta，所以会看到清理动作）。
+
+他有两种存在形态：
+
+1. Internal Mode
+
+   Access Server 中集成的 ZBS Client，特点是本地 Client 所在的节点会持有一个 Session，并且本地有 Access 可以处理 IO 请求。Client 自身可以访问到集群内部的服务，例如 Meta，ZK 等。在这个模式下，ZBS Client 会通过 Access 受到 Meta 的控制和管理。
+
+   在 Internal 模式下，IO Client 会将 UIO 按照 Volume 的 stripe 配置将 UIO 拆分为若干 BIO。在发送 BIO 时也会查询 VExtent Lease，将 IO 转发给 Access Owner。如是本地将直接调用 Access 接口将任务交给 Access 队列，如是远端，则通过 Datachannel Client 发送 VExtent IO。
+
+2. External Mode
+
+   集群外部（Taskd 也使用 External 模式，因为他并不在 IO 路径上，可以认为是集群外部）访问 ZBS 集群时使用的 Client 使用的模式，此时仅能访问集群中的 Blockd 服务，它将代理 IO 请求和元数据访问请求。Client 无法直接访问 ZK 或 Meta，在这个模式下，ZBS Client 不会收到任何来自 Meta 主动的控制命令下发。
+
+   在 External 模式下，因为并不在当前的 Client 真的处理 IO，所以不会做拆分，只是简单的将 UIO 转化为 BIO。在发送时，将使用 Datachannel Client 将 Volume IO 发送给随机的一个 Blockd Server（在配置中指定的一组 Blockd Server 中随机选择），在与 Blockd Server 建立连接并且之后都正常通信的情况下，Volume IO 会始终的发往固定的 Blockd Server。需要注意的是，这个模式下通常是以 SDK 形态供外部集成，此时我们并没有一个强的单一接入点限制保证，需要 SDK 的使用方自己处理可能存在的多点接入情况下引发的正确性问题。这是因为这个模式下并没有天然可获得的客户端身份信息（iSCSI 的 initiator IQN， NVMF 的 initiator NQN，vHost 的 Machine ID），需要 SDK 调用者主动注入。如果后续有确切的需求场景我们会增加对应的限制策略。
 
 ### EC 相关
 
@@ -1541,40 +1626,24 @@ should meet
 
 #### lease 定义
 
-在分布式系统中，数据块分片分散在不同的物理节点上，如果有多个 access 发起同一个 extent 的 IO，每个数据块分片收到 IO 的顺序很难保证是一致的，这会导致在存储系统内部造成数据错误。为了避免这个问题，zbs 在整体设计中采用了单一接入的策略，这包含 2 个维度的实现，不同协议下数据链路上的单一接入点（比如 NFS 下的 Login Revoke / IO Reroute、iSCSI 下的 iscsi redirector）和 access 上数据块粒度的权限控制 Lease
+在分布式系统中，数据块分片分散在不同的物理节点上，如果有多个 access 发起同一个 extent 的 IO，每个数据块分片收到 IO 的顺序很难保证是一致的，这会导致在存储系统内部造成数据错误。为了避免这个问题，zbs 通过 lease 机制来处理数据块粒度的权限控制。
 
+zbs 面向用户提供的存储对象是虚拟卷 volume，一个 volume 对应一个 iSCSI LUN / NFS File，在 zbs 内部，一个 volume 被切分成多个 256 MiB 大小的 VExtent 区域，每个 VExtent 对应一个 LExtent（克隆/快照时，不同 Volume 的 VExtent 指向同一个 LExtent ），每个 LExtent 对应一个位于集群性能层的 Perf  PExtent 和容量层的 Cap PExtent。
 
+在 zbs 内部，meta 通过颁发 lease 给 access 来控制 lextent 的访问权限。在任意时刻，最多仅有一个 access session 可以是某个 lextent 的 lease owner。pextent 没有独立的访问权限，而是依附于关联的 lextent，同一个 lextent 下的 cap / perf pextent 在任意时刻，要么没有 lease owner，要么是相同的 lease owner。如果需要发起 IO 的 access 不具备需要访问的数据块的访问权限，会将请求转发至持有权限的 Access 处进行。
 
+#### lease 使用
 
+access 收到 meta 颁发的 lease 后将在本地缓存，以避免获取 lease 总是出现在 IO 路径上，以及避免对 meta 产生过大的请求压力。根据 meta / access 分别是否缓存 lease，共有 4 种情况，只有 access 缓存了 lease 但 meta 却没有缓存的情况是危险的，这会导致一个 lextent 在同一时刻可能有多个 lease owner，多个 access 都有权限读写它的 pextent 进而导致数据损坏的情况。
 
-zbs 使用 lease 来控制 LExtent 的访问权限，在任意时刻，最多仅有一个 access session 可以是某个 lextent 的 lease owner。
+为了避免出现这个问题，需要保证 access 上已缓存的 lease 必须也缓存在 meta 上，而 meta 上缓存的 lease 在 access 上可以有对应缓存，也可以没有。为此，在使用 lease 时需要遵循：
 
-pextent 没有独立的访问权限，依附于关联的 lextent，lease owner 用 session uuid 来做唯一区分，而 meta leader 跟每个 access 最多只会建立一个 session，所以可以说任意时刻最多只有一个 access 会是某个 pextent 的 lease owner，同一个 lextent 下的 cap / perf pextent 在每个时刻，要么没有 lease owner，要么是相同的 lease owner。
-
-
-
-在分布式系统中，数据副本分散在各个不同的物理节点上，如果有多个 Access 发起通向同一个 Extent 的 IO ，则每个数据副本收到 IO 的顺序很难保证是一致的。这会在存储系统内部造成数据错误，因此 ZBS 在整体设计中采用了单一接入的策略。这包含有多个维度的实现，包括[数据链路上的单一接入点](https://docs.google.com/document/d/1Xro2919inu3brs03wP1pu5gtbTmOf_Tig7H8pfdYPls/edit#heading=h.5xv9micct4d1)和 Access 上实现的数据块粒度的权限控制 ：[Lease](https://docs.google.com/document/d/1Xro2919inu3brs03wP1pu5gtbTmOf_Tig7H8pfdYPls/edit#heading=h.l853u6hfrfd)。Meta 会保证最多仅有一个 Access Session 持有 Volume 某个逻辑区域对应的 VExtent 或者是某个真实数据块 Extent 的访问权限。如果需要发起 IO 的 Access 不具备需要访问的数据块的访问权限会将请求转发至持有权限的 Access 处进行
-
-
-
-因为 IO 请求的频率过大，每一次都访问 Meta 获取位置信息将对 Meta 产生过大的压力。所以 Libmeta 收到 Lease 后将在本地缓存。ZBS Client 与 Access 不同，与 Meta 之间不会有心跳维护 Lease 的有效性，即 Meta 处的 Lease 变化是不会在意 Client 是否知道的。这样 ZBS Client 缓存的 Lease 可能与 Meta 存在不一致的现象。但是这并不影响正确性。因为 ZBS Client 的 Lease 仅用于路由向 Access Lease owner，只要 Meta 维持了 Access 的 Lease 正确性，如果 ZBS Client 访问了老旧的 Lease Owner，Access 将返回一个 ENotOwner 类型的错误。ZBS Client 收到此类错误后将丢弃本地缓存的 Lease 再向 Meta 获取新的 Lease ，中间过程数据是不会产生任何变化的。
-
-#### lease 机制安全性
-
-Lease 机制安全性保证的目标是避免出现多 Lease owner，这需要保证不允许出现 access 缓存了 lease 而 meta 未缓存该 lease 的情况，否则 meta 可能为一个 lextent 分配出多个 lease owner，导致多个 access 都有权限读写 pextent 进而导致数据损坏。
-
-为了保证 lease 机制的安全性，在使用 lease 时需要遵循：
-
-1. access 上已缓存的 lease 必须也缓存在 meta 上。这一原则通过以下 3 点保证：
-   1. 一个 lease 在创建时，总是先缓存在 meta 侧，再缓存到 access 侧；
-   2. 一个 lease 在释放时，总是先释放 access 侧缓存的，再释放 meta 侧缓存的；
-   3. lease 是通过 access session 中的心跳续约的，而 access session 失效时，总是先在 chunk 上失效，然后才在 meta 上失效，因此 lease 也一定先在 access 上释放，再在 meta 上释放。
-2. meta 上缓存的 lease 在 access 上可以有对应缓存，也可以没有。这对应释放 lease 的 3 种情况：
+1. 一个 lease 在创建时，总是先缓存在 meta 侧，再缓存到 access 侧。由于 lease 是 meta 颁发的，所以这是个自然而言的事。
+2. 一个 lease 在释放时，总是先释放 access 侧缓存的，再释放 meta 侧缓存的
    1. access 可以单独释放 lease 而不通知 meta，比如 access 发现 lease owner 不是自己时清空缓存 lease 并找 meta 重新获取 lease、meta 通过心跳通知其他 chunk 清理 removing chunk 作为 owner 的 lease；
    2. 当 access 释放 lease 且需要通知 meta 也释放时，比如 access 定时清理未使用超过 1h 的 lease、access 进入维护模式。此时为了避免阻塞一个 IO 的后续流程，可以异步通知 meta，即使通知失败也是可接受的，因为没有破坏安全性前提（这里通知失败也不会重试）；
-   3. 当 meta 释放 lease 且需要通知 access 也释放时，一定是先通过心跳下发 revoke cmd 让 access 先清理，清理后 access 再通知 meta 清理。
-
-
+   3. 当 meta 想要释放 lease 时，总是需要通知 access 先释放，然后 meta 才能释放，比如创建快照时，为了保证快照只读，meta 会撤回卷上的所有已经颁发的 lease
+3. 一个 lease 在续约时，总是借助 access session 中的心跳续约。，因为 access session 失效时，总是先在 chunk 上失效，然后才在 meta 上失效，让 lease 跟 access session 的生命周期绑定，能够保证让节点重启等非预期行为发生时，lease 一定也是先在 access 上释放，再在 meta 上释放。
 
 #### lease 类型
 
@@ -1610,7 +1679,7 @@ Extent Lease 代表着 ZBS 内部的数据对象 Extent 的访问权限。Access
 
 什么时候 access 上的 lease 会被释放，释放的时候都会做些啥？
 
-什么时候被续约
+什么时候被续约？
 
 
 
@@ -1622,7 +1691,7 @@ Lease 的创建有 3 种触发条件：
 
 
 
-在 Lease 生成之后，各个 IO 服务（ZBS Client 持有 VExtent Lease，Access 持有 VExtent Lease 或仅持有 Extent Lease） 会持有 Lease，Meta 也会在内存中记录 Lease 的 owner。在 Chunk 和 Meta 保持心跳的过程中，会不断的通知 Access 续租持有的 Lease。
+在 Lease 生成之后，各个 IO 服务（ZBS Client 持有 VExtent Lease，Access 持有 VExtent Lease 或仅持有 Extent Lease） 会持有 Lease，Meta 也会在内存中记录 Lease 的 owner。在 Chunk 和 Meta 保持心跳的过程中，会不断的通知 Access 续租持有的 Lease（要么立即 Keepalive（2s 左右），要么会等个 5s 或 7s 才对 lease 续约）。
 
 
 
@@ -1667,12 +1736,6 @@ Access 清理 Lease 时：
 
 
 
-
-
-要么立即 Keepalive（2s 左右），要么会等个 5s 或 7s 才对 lease 续约。
-
-
-
 lease 中 revoke_seq_ 的作用是啥？
 
 一种可行的方法是给 volume 添加一个 Clear Cache Lease 的计数器，每次调用 ClearCacheLease 的 vtable 版本，计数器自增。GetVextentLease 发出 RPC 之前，拿一下计数器的值，当 RPC 返回后，再次拿一下值，如果两次的值不一样，可以确定，这期间，发生了 Clear Cache Lease，此时 GetVextentLease 拿到的 Lease 信息是不可靠的，进行重试。
@@ -1691,7 +1754,9 @@ lease 中 revoke_seq_ 的作用是啥？
 
 
 
-#### revoke lease 
+
+
+revoke lease 
 
 meta 主动要求 access 清空 lease 的几种情况：
 
@@ -1717,6 +1782,79 @@ meta 会 revoke 某个 pid 的 lease 的情况包括但不限于：
 4. 待补充
 
 不论 meta revoke 整个 volume 上的 lease 还是某个 pextent 上的 lease，都是先下发 revoke cmd，先等 access 清空 lease 然后才是 meta 清空 lease。（快照/克隆场景下，只会清空 access 上的 lease，保留 meta 上的 lease，这样可以让 COW 前后的 prefer local 不变）
+
+
+
+
+
+待整理
+
+
+
+Access 持有的 Lease 包括三种类型：
+
+1. Session Lease，代表了 Session 的存活状态。由 Keepalive 过程维系，Lease 到期之后 Session 进入异常状态，Access 不再提供 IO 服务。Lease 在心跳过程中会不断续期。只要心跳正常，Lease 就始终有效；
+2. VExtent Lease， 代表着虚拟卷对应数据块的访问权限，通常由 ZBS Client 和 Access 尝试对 Volume 执行 IO 时向 Meta 申请，存储 vExtent Lease 时也会缓存对应的 Extent lease；
+3. Extent Lease，代表着 ZBS 内部的数据对象 Extent 的访问权限，在 Recover/Migrate 等系统内部 IO 事件发生时会如果需要生成 Lease 会产生于独立于 VExtent Lease 的 Extent Lease。
+
+
+
+VExtent Lease 和 Extent Lease 虽然有很多共同的属性，也都代表着访问权限。但是本质上是两个不同视角和逻辑对象的访问权限。目前版本因为 ZBS Client 和 Access 运行在同一个进程中，他们共享了缓存 Lease 的 Libmeta 结构。因此在大部分场景下， Client 对 Volume 执行 IO 时申请了 VExtent Lease ，Access 就不再需要额外申请一次。当然 Client 访问 Extent Lease owner 未必一定在本地 Chunk 中，此时就会通过网络访问远端 Access。
+
+
+
+持有 Lease 的 holder 应该在 yield 之后重新检查 lease，因为在 yield 期间有可能被其他 holder 清理或自身过期
+
+Lease 原理上应该是一个独立的具备时间有效性的机制，出于实现方便地考虑，我们没有对每个 VExtent Lease 和 Extent Lease 做独立的基于时间的生命周期管理。而是将他们的生命周期与 Session Lease 绑定在一起，Session 存活即保证 Lease 存活，仅在必要时通过命令处理逻辑或者异常处理逻辑清理部分 Extent 的 Lease。
+
+Meta Lease 的授予对象是 Session，因此一个 Access 在上一次 Session 生命周期内获得的 Lease 并不可以沿用到下一个 Session 生命周期内。这是因为两个 Session 交替期间内一定发生过集群失连的事件，Lease 在此期间很有可能已经由 Meta 授予给其他 Access 上的 Session（如果只是 meta leader 在 7s 内重启，貌似是可以的，因为 session uuid 被保存到 meta db 中，重启之后还是用的同一个 session uuid）。
+
+Access Server 通过 Session 机制与 Meta 建立连接，经过 Session 确保数据访问权限（Extent Lease）的唯一性，提供接入协议转换功能。
+
+Access 中 Session 状态维护机制包括 2 个部分：维持生命周期心跳循环的 Session Follower 与响应状态变化事件的 Session Handler。Session 也有自己的 Lease， 代表 Session 的健康状态，每次 Access 收到 Meta 的心跳回复都会延续自身的 Lease 。如果长时间没有收到正常的心跳回复就会触发状态变化。状态有 Init、KeepAlive、Jeopardy、Expired。
+
+Access 在进行读/写 IO 前先进行一次 Sync Gen，确认所有副本当前的 Gen 是一致的。
+
+
+
+1. 通过 iscsi redirector / nfs ioreroute 保证在 iscsi / nfs client 到 iscsi / nfs server 这个链路上的唯一性；
+2. 通过 lease 机制保证在 access 到 chunk 这个 IO 链路上的唯一性。
+
+
+
+ZBS 在整体设计中采用了单一接入的策略来保持数据块分片（副本）间的的一致性，具体方式包括：
+
+1. 数据链接上的单一接入点（比如 NFS 下的 Login Revoke / IO Reroute、iSCSI 下的 iscsi redirector）；
+
+   qemu 通过 LibiSCSI 模块将虚拟机磁盘请求转换为 iSCSI 请求，每个虚拟磁盘对应一个 iscsi LUN，每个虚拟磁盘拥有独立的数据连接
+
+   如果出现 qemu 上的 iscsi client 多点登录 zbs 的 iscsi server（），
+
+   如果出现 ESXi 上的 NFS Client 多点登录 NFS Server，没法保证从 NFS Client 下发 IO 到 NFS Server 这之间的 IO 的顺序性。（这个阶段 Lease 无法发挥作用）
+
+   不论是热迁移还是异常 HA/节点切换，我们始终可以保证最大仅有 Access 处理一个客户端对某一个磁盘的数据访问，从原则上避免了在接入层的数据重试引发的潜在数据异常问题。在 Oracle RAC 等共享模式下，不同客户端可以在不同/相同的接入点使用不同的数据链路同时访问一个磁盘，此时的数据竞争问题由应用层自身解决。
+
+   
+
+2. Access 上实现的数据块粒度的权限控制（Lease 机制）；
+
+   通过 Lease 机制，所有的 IO 都被顺序化，客户端的多读者多写者模型被转化为单读者单写者模型 
+
+3. Generation 机制
+
+   Lease Owner 通过 gen 判断多个副本是否一致，当一个副本成功写入一个 IO 后，Generation 自增，每个 IO 携带当前的 Generation，Chunk 只有在 Generation 匹配时才允许 IO 处理
+
+
+
+ZBS 保持副本一致性的方式的是在整体设计中采用了单一接入的策略，包含数据链接上的单一接入点、Access 上实现的数据块粒度的权限控制、Generation 机制。
+
+分布式一致性接入仅是解决用户层面的多点访问带来的数据冲突问题的必要非充分条件。例如 A 和 B 两个程序同时写一个本地文件，文件系统可以保证按序处理 IO 并且返回给 A 和 B 一致的结果，但是如果 A 和 B 没有互相协作，不具备感知使用的存储是一个共享存储的能力，则数据状态很有可能不是他们中任意一个预期的结果。多点接入的数据正确性保证，还需要依赖于应用程序本身支持共享存储，例如 Oracle Rac，SQL Server Cluster，OCFS，VMFS, Hyper-V CSV 等。
+
+块存储系统需要业务方来控制下发的 IO 是有序的，自身并不保证同时下发的 IO 有序。在 ZBS Client 中，不额外的处理 IO 重叠的保序问题，即不会严格的按照收到的 IO 请求顺序下发 IO。因为对于通用的块存储系统收到的并发重叠 IO，A 和 B，语义上并不保证最终结果是 A 或 B 或者 AB 交叠。大部分应用端希望确定某个结果时，会在发送时做合并或者严格的遵循收到 A 成功之后再下发 B 的原则。这样 IO 都成功之后结果就一定是 B。
+
+
+
+目前 ZBS 仅支持以多副本方式存储数据，适用于对读写延迟比较敏感的业务场景。EC 相比副本占用更少的存储空间，同时提供与副本同等甚至更高的容错能力，其代价是更新或者故障数据恢复的性能略差（注：写不一定比副本差，虽然需要多一次读，但数据量变少了。看最终实现的效果）。EC 非常适合归档、备份等数据量较大且更新很少的业务，也适用于对延迟不敏感而对带宽敏感的业务。需注意，EC 的目标是为了保证完整性而非正确性，只可以用于恢复丢失的数据，而无法修复位翻转等数据正确性问题。需要有其他机制对数据篡改进行检测，例如 CheckSum 检测，被篡改的数据可以视为丢失，再通过 EC 做数据恢复。
 
 
 
@@ -1902,7 +2040,7 @@ elf  一直以来创建虚拟卷模板，创建的是 volume 而不是 snapshot�
 
 * [网卡异常探测](https://docs.google.com/document/d/1cNja_rnJ3fQglBqfouPvx8Ss82qzIiObN6cN_wYUs3s/edit#heading=h.xjzjaz3p8u9t)（节点层面） /var/log/zbs/netbouncer/l2ping@storage.INFO
 
-* [网络亚健康探测](https://docs.google.com/document/d/1MK0VRK5WcRF14N36PpJ_O0Y-HUHG-fxe9q-usfAAevk/edit#heading=h.jz7vtdo3hm60)（集群层面）/var/log/zbs/network-high-latencies.log（是 network-monitor 的摘要日志）  /var/log/zbs/network-monitor.log 
+* [网络亚健康探测](https://docs.google.com/document/d/1MK0VRK5WcRF14N36PpJ_O0Y-HUHG-fxe9q-usfAAevk/edit#heading=h.jz7vtdo3hm60)（集群层面）/var/log/zbs/network-high-latencies.log（是 network-monitor 的摘要日志，从这两个日志里判断网络是否有高延迟或丢包）  /var/log/zbs/network-monitor.log 
 
     ```
     fping <data_ip> <mgt_ip> -C 30 -t 199 -i 1 -r 1 -p 400 -q 
