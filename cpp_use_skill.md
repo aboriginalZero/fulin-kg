@@ -1,3 +1,194 @@
+用 lambda 的时候指明返回值，想表示没有返回值时可以用 std::optional，这样可以多带一个含义
+
+```
+[&, this](auto batch_pids) -> std::optional<pid_t> {
+	if (!stopped_) {
+			AddToWaitingRecoverIfNecessary(batch_pids, now_ms, false, maintenance_chunk_recover_enabled, &cancel_migrate_cmds);                                              
+      return std::nullopt;
+  } else {
+      return kPExtentIdStart;
+  }
+}
+```
+
+
+
+什么时候该用 && 形参传入？明确知道变量声明周期时，这里会给到生命周期足够长的类成员变量
+
+```
+RepositionDistributedCmdSlot RecoverManager::GetRepositionDistributedCmdSlot(bool is_migrate) {
+    cmd_count_map_t cap, perf;
+    // 从 chunk table 中的这次赋值拷贝没法省
+    context_->chunk_table->GetRepositionUsedCmdSlots(&cap, &perf);
+    // 但是这里可以通过右值传入来避免重新构造
+    return RepositionDistributedCmdSlot(std::move(perf), std::move(cap), is_migrate, config_);
+}
+
+RepositionDistributedCmdSlot::RepositionDistributedCmdSlot(cmd_count_map_t&& perf_slots, cmd_count_map_t&& cap_slots, bool is_migrate, const RepositionConfigManager& config) {
+    std::swap(cap_avail_cmd_slots_, cap_slots);
+    std::swap(perf_avail_cmd_slots_, perf_slots);
+}
+```
+
+
+
+一个函数内部有时需要加锁，有时不需要，可以用 unique_ptr 来管理锁
+
+```
+void func(bool use_cache) {
+		std::unique_ptr<RepositionLockGuard> l;
+		if (UNLIKELY(!use_cache)) {
+        l.reset(new RepositionLockGuard(&mutex_, source_location::current().line()));
+    }
+    // 业务逻辑
+}
+```
+
+
+
+往 std::vector 插入多个元素时，可以避免不必要的拷贝开销
+
+```
+vec.reserve(big_size);
+LOOP(big_size) {
+    auto& item = vec.emplace_back();
+    item.pid = i;
+}
+```
+
+
+
+一个函数中同时处理多个类型不同的参数
+
+```
+template <typename Container>
+Status ChunkTable::GetStoragePoolSpace(Container* chunks) {
+    auto fn = [&] (auto& entries) {
+        FOREACH (entries, it) {
+            Chunk* entry = nullptr;
+            // 要么传入 map，需要自己取 value，要么直接传入 value
+            if constexpr (std::is_same_v(std::remove_cvref_t<decltype(*it)>, ChunkTableEntry*)) {
+                entry = *it;
+            } else {
+                entry = it->second;
+            }
+            
+            if constexpr (std::is_same_v(Container, absl::flat_hash_map<cid_t, ChunkSpaceInfo>>)) {
+                (*chunks)[entry->id()] = space_info;
+            } else if constexpr (std::is_same_v(Container, std::vector<ChunkSpaceInfo>)) {
+                chunks->push_back(space_info);
+            } else {
+                static_assert(sizeof(Container) == 0, "unsupported container type")
+            }
+        }
+    };
+    
+    if (sp_id.empty()) {
+        fn(chunk_table_);
+    } else {        
+        StoragePoolEntry* spe = GetStoragePoolEntry(sp_id);
+        fn(spe->chunk_entries);
+    }
+}
+```
+
+
+
+当明确一个类的成员方法只需要操作静态成员变量或者不依赖类的具体对象时，可以将其声明成 static，能稍微提高方法调用性能。（静态方法是类的全局函数，滥用将破坏封装性，应优先考虑非静态方法，除非有明确理由）
+
+能提高性能的原因：
+
+1. 避免对象创建开销。静态方法通过类名直接调用（如 ClassName::method()），无需创建对象实例，节省了构造和析构的开销；
+2. 省去 this 指针传递。在高频调用场景下如工具函数或频繁查询，省去 this 指针传递可减少由于寄存器使用、栈帧操作带来的纳秒级微小开销；
+3. 提高内联机会。静态方法通常是类级别的简单函数，编译器更容易内联，直接嵌入调用点，可以消除调用栈的创建和销毁。
+
+
+
+给定 key，从 hash map 拿到 value，key 不存在的话，添加默认值并返回
+
+```
+value = map.try_emplace(key, specified_value).first->second;
+```
+
+给定 Key，从 hash map 中拿到 value，key 不存在的话，返回 nullptr（如果用 contains + at 要查两次）
+
+```
+auto it = map.find(key);
+return it == map.end() ? nullptr : it->second;
+```
+
+
+
+
+
+用 virtual 菱形继承，避免拥有多份 AccessSessionCommon 中的变量
+
+```
+class AccessManagerCommon  {
+  public:
+    // 析构函数也用 virtual 声明
+    virtual ~AccessManagerCommon() = default;
+  
+  protected:
+    // 只希望被子类访问方法用 protected 声明
+    AccessSession* GetChunkSession(cid_t cid);
+};
+
+class AccessManagerForExtentManager : virtual public AccessManagerCommon {
+  protected:
+    // 希望不同之类有不同的实现方式，声明为虚函数
+    virtual void OnAccessSessionExpired(const std::string& uuid) = 0;
+    
+    // 如果要兼容多种版本的 rpc requst，可以用 std::variant
+    // use ptr to avoid memory copy (PExtentInfoPBArray may copy when used to construct std::variant)
+    using PExtentInfosVariant = std::variant<const PExtentInfoPBArray*, const PExtentInfoArrayView<ReportPExtentInfoV2>*, const PExtentInfoArrayView<ReportPExtentInfoV3>*>;
+    using cb_info_t = PhysicalExtentTable::cb_info_t;
+    using cb_entry_info_t = PhysicalExtentTable::cb_entry_info_t;
+    virtual void HandlePExtentInfosFromDataReport(const PExtentInfosVariant& pextent_infos, uint64_t now_ms, cid_t cid, const std::unordered_set<pid_t>& recover_pids, const cb_info_t& update_gc_cb, const cb_entry_info_t& update_provision_cb, const cb_info_t& update_treplica_space_cb, int begin, int end) = 0;
+};
+
+class AccessManagerForChunkManager : virtual public AccessManagerCommon {
+  public:
+    // 声明友元类，TESTLens 可以访问这个类的 private 变量
+    friend class TESTLens;
+}
+
+class AccessManager : public AccessManagerForExtentManager,
+                      public AccessManagerForChunkManager {
+  public:
+    explicit AccessManager(MetaContext* context);
+    virtual ~AccessManager();
+    
+    // 要注意调用之类方法的顺序
+    void SessionExpiredCb(MasterSessionBase* session) {
+        LockGuard l(&lock_);
+        AccessManagerForChunkManager::SessionExpiredCb(session);
+        AccessManagerForExtentManager::SessionExpiredCb(session);
+        // this will erase session from sessions_, so it must be called at last.
+        AccessManagerCommon::SessionExpiredCb(session);
+    }
+    
+    // 返回值不是局部对象、一定不为 nullptr 时，可以返回引用以避免拷贝
+    PhysicalExtentTable& GetPhysicalExtentTable() { 
+    		return *context_->pextent_table; 
+    }
+    
+  private:
+    void HandlePExtentInfosFromDataReport(const PExtentInfosVariant& pextent_infos, uint64_t now_ms, cid_t cid, const std::unordered_set<pid_t>& recover_pids, const cb_info_t& update_gc_cb, const cb_entry_info_t& update_provision_cb, const cb_info_t& update_treplica_space_cb, int begin, int end) override {
+        std::visit([&](auto&& pextent_infos) {
+            context_->pextent_table->HandlePExtentInfosFromDataReport(*pextent_infos, now_ms, cid, recover_pids, update_gc_cb, update_provision_cb,                                                                     update_treplica_space_cb, begin, end); }, pextent_infos);
+    }
+}
+```
+
+
+
+
+
+
+
+
+
 * class FollowerManager
 
 * class SessionFollower
