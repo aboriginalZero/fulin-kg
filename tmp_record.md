@@ -1,10 +1,10 @@
-作为 string 的 dcdf3486-30da-45d9-80e4-83d8abd2d0aa，看一下他的 zbs_uuid_t 会是什么
-
-
+migrate src 节点除了 healthy_and_in_use，还可以是 healthy_and_removing，migrate dst 节点不应该是 umounting chunk
 
 
 
 pextent table 中临时副本相关的变量 temporary_replicas_ 和 temporary_replica_indices_ ，看起来只会被 meta rpc 线程访问，可以不用锁保护的。rim_pextent_num_ 只在 ut 中被访问，但可以用来判断维护模式中产生的剔除副本的数量。
+
+搞一个空间统计分布，能够看到哪些卷分别占用了多大的信息（大部分情况下，用户只关心前 10 个，volume 和 snapshot 要分开展示）
 
 
 
