@@ -1,3 +1,9 @@
+作为 string 的 dcdf3486-30da-45d9-80e4-83d8abd2d0aa，看一下他的 zbs_uuid_t 会是什么
+
+
+
+
+
 pextent table 中临时副本相关的变量 temporary_replicas_ 和 temporary_replica_indices_ ，看起来只会被 meta rpc 线程访问，可以不用锁保护的。rim_pextent_num_ 只在 ut 中被访问，但可以用来判断维护模式中产生的剔除副本的数量。
 
 
@@ -1906,6 +1912,10 @@ Meta 会保证最多仅有一个 Access Session 持有 Volume 某个逻辑区域
 
 ### prometheus 使用
 
+想修改 Metric 相关代码时，参考现有的代码增加新的 Metric，并且修改对应服务的配置文件（zbs/data/exporter/xxx_exporter.json）即可。检查修改是否生效可以直接用浏览器访问对应服务的 exporter 路径即可（端口和路径也在配置文件中）。在集群中测试 Metric 时，需要将修改的配置文件放置在集群内任意一节点的 /etc/aquarium/register_conf 路径下，并在该节点执行 zbs-deploy-manage register-service 重新注册即可。
+
+
+
 Cap IO Throttle 相关
 
 * 查看落到 lsm 上的 IO 并发度，zbs_chunk_lsm_max_cap_write_queue_depth
@@ -1949,7 +1959,31 @@ prometheus 语法
 zbs_volume_logical_size_bytes{_volume!~"7697f.*|56e7e.*|130478.*|6ac3588.*"}
 # 按值过滤
 zbs_volume_logical_size_bytes{} > 1 and zbs_volume_logical_size_bytes{} < 536870912000
+
+# 查看过去 24h 写流量前 20 大的卷，图上每个点表示以该点为结束时间，24h 内的总写流量，GiB 为单位
+# 这里 * 30 是因为这个指标是每 30s 采样一次
+topk(20, sum_over_time(zbs_volume_write_speed_bps[24h])) / 1024 / 1024 / 1024 * 30
+
+# 查看过去 24h 内独占空间增长最大的 20 个卷，跟上面的语法不同，是因为这里不用累加，只看前后 2 个的差值
+topk(20, zbs_volume_unique_logical_size_bytes - (zbs_volume_unique_logical_size_bytes offset 24h)) / 1024 / 1024 / 1024
+
+# 查看过去 24h 内共享空间增长最大的 500 个卷的共享空间总和
+sum(topk(500, zbs_volume_shared_logical_size_bytes - (zbs_volume_shared_logical_size_bytes offset 24h))) / 1024 / 1024 / 1024
+ 
+# 还有 increase / rate 之类的关键词可以用
 ```
+
+
+
+1. zbs_cluster_logical_size_bytes
+2. zbs_cluster_unique_logical_size_bytes
+3. zbs_cluster_shared_logical_size_bytes
+4. zbs_volume_unique_logical_size_bytes
+5. zbs_volume_shared_logical_size_bytes
+
+
+
+
 
 tower 首页的存储性能图标对应 zbs 的哪些 metric？
 
