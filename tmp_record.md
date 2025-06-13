@@ -1,3 +1,18 @@
+```
+/var/log/zbs/zbs-metad.log.20250611-215650.113331:16549:W0612 07:09:01.126711 113347(meta-rpc-server) chunk_manager.cc:1745] Exit maintenance mode due to timeout, node ip: 10.0.134.151
+/var/log/zbs/zbs-metad.log.20250611-215650.113331:16558:I0612 07:09:01.135130 113347(meta-rpc-server) chunk_isolate_manager.cc:489] Start deisolating chunk. cid: 7
+```
+
+
+
+检查 ban chunk 和 set chunk maintenance mode 是否都是作用在一个 node 上的？
+
+因超时退出，打印下 log。
+
+
+
+
+
 migrate src 节点除了 healthy_and_in_use，还可以是 healthy_and_removing，migrate dst 节点不应该是 umounting chunk
 
 
@@ -2605,7 +2620,12 @@ LSMCmdQueue 中的元素在哪被消费呢？
 ### iscsi io 流
 
 1. submitter_receiver.cc 中的 eventfd_read / eventfd_write 使用
-2. zbs client proxy 和 v2 的区别
+
+2. zbs client proxy v2 的作用
+
+   外部发来的 IO 不知道 zbs 用的 thread context 有 co 语义，所以在给到 zbs client 之前要通过 zbs client proxy v2 来做转换（应该是 IOReceiver::HandleIO ？）
+
+   
 
 一次写操作
 
