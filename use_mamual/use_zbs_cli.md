@@ -35,7 +35,12 @@ docker run --rm --privileged=true -it -v /home/code/zbs3:/zbs -w /zbs registry.s
 rm -rf build && mkdir build && cd build && source /opt/rh/devtoolset-7/enable && cmake -DBUILD_MOLD_LINKER=ON -DCMAKE_BUILD_TYPE=RELWITHDEBINFO -G Ninja ..
 # 编译时给定参数，比如要同时编译 bench，cmake -DBUILD_BENCHMARKS=ON -G Ninja ..
 # -DBUILD_TARGET_PLATFORM=hygon 编译海光下的
-ninja -j20 zbs_test
+# 当前在 build 目录下
+cd /zbs && ./script/format.sh && cd build && ninja -j20 zbs_test
+
+# 进 docker 后先启用 gcc 14
+scl enable gcc-ztoolset-14 bash
+rm -rf build && mkdir build && cd build && source /opt/rh/gcc-ztoolset-14/enable && cmake -DBUILD_MOLD_LINKER=ON -DCMAKE_BUILD_TYPE=RELWITHDEBINFO -G Ninja ..
 
 # docker 中也可以通过配置 zookeeper 来运行 ut
 

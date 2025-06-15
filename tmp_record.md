@@ -1,19 +1,52 @@
+1. migrate for removing chunk 中，刚生成完并没有马上下发，但没有马上减去空间 ，所以在 dst ratio 都相同时，这一波迁移会往同一个节点上发，会导致散不开
+
+    migrate for removing chunk 目前 src 或 dst 可以在选择前，先用  MigrateFilterByCid 过滤掉候选的 src / dst，避免散不开。
+
+    这么看 recover 可能也散不开。
+
+2. 若有多个节点在卸载，每个节点的卸载量不同，那是先让一个节点卸载完比较好，还是让大家尽量均匀比较好？
+
+3. 如果某个 chunk 上的 cap layer 有 replica 和 ec 都要卸载，但是上报的 uoumting pextent list 全是 ec 的，meta 没法帮忙，直到这些 ec shard 在盘间迁移完，replica 才有可能被汇报给 meta，这从外界看起来是 meta 不参与似的，是否有改进空间？
+
+4. 先按 umouting pextent 跟其他迁移互斥的方式实现，后续在实际环境上感受下，卸载一块 HDD 在有 meta 参与的迁移下，需要卸载多久，能够忍受最长多久时间没有做其他类型的迁移（比如现在移除节点期间，其他类型的迁移是不会触发的）
+
+5. 迁移类型写在 distribute migrate cmd 里，这样日志里更清楚
+
+6. need_migrate && GenerateMigrateCmd(ctx)，GenerateMigrateCmd 中可能会淘汰不满足条件的，所以打印了生成日志，也可能因为 reposition to the same node 而实际上没有生成
+
+7. 在下发 reposition cmd 时，要避免如果 lease owner 是 umounting chunk，把 migrate src 修改成 lease owner
+
+8. 为了简单处理，dst cid of migrate for umounting pextent 的处理没有用到 comparator，原因是
+
+    认为大部分情况下，在发起 migrate for umounting pextent 的时候，副本分布已经副本预期（低负载下，该局部化的局部化）
+
+    * 若集群中高负载，只需要满足 topo 安全，这在 must meet 中已经包含了
+    * 若集群低负载，当前若已经满足局部化列表，那么根据 LocalizedComparator 选出的，等盘卸载结束，还是会迁回，只有在当前不符合局部化，且 umounting chunk 是不符合局部化列表上的节点时，按 LocalizedComparator 选才有意义。当这里的问题是，非要局部化好处不大，只要满足拓扑安全了就好
+
+9. migrate 不像 recover，不需要考虑 dead cids，因为 migrate cmd 的生成跟下发之间的时间窗口还是比较长的，另外 recover 中考虑 dead cids 也只是尽力而为。 
+
+10. 其他迁移里要让 dst cid 不选 umounting chunk，src cid 尽量不选 umounting chunk，这样 migrate for umounting pextent 可以和其他 migrate 同时进行，弄好 space estimate ，传递  healthy_and_in_use_chunks_map。只考虑加，不考虑减少？
+
+    需要避免 migrate for umounting chunk 可能跟 migrate for rebalance 反复迁移
+
+    meta 在帮忙处理卸载盘的迁移时，也需要关注，如果负载已经非常不均，需要先进行负载均衡迁移
+
+11. umounting_pextent_num_map_ 只是一个用来快速判断的，access mgr 中只能统计到 cap or perf，无法知道 perf thin / thick，所以可能出现如果 perf thin 还能迁移，但是 perf thick 实际上没有，还是会让 perf thin 无法生成 migrate cmd
+
+12. 有 migrate for umounting pextents，可以让迁移频率变成 2 min 一次
+
+
+
+
+
+检查 ban chunk 和 set chunk maintenance mode 是否都是作用在一个 node 上的？是的
+
+因超时退出的 log 可以调整下
+
 ```
 /var/log/zbs/zbs-metad.log.20250611-215650.113331:16549:W0612 07:09:01.126711 113347(meta-rpc-server) chunk_manager.cc:1745] Exit maintenance mode due to timeout, node ip: 10.0.134.151
 /var/log/zbs/zbs-metad.log.20250611-215650.113331:16558:I0612 07:09:01.135130 113347(meta-rpc-server) chunk_isolate_manager.cc:489] Start deisolating chunk. cid: 7
 ```
-
-
-
-检查 ban chunk 和 set chunk maintenance mode 是否都是作用在一个 node 上的？
-
-因超时退出，打印下 log。
-
-
-
-
-
-migrate src 节点除了 healthy_and_in_use，还可以是 healthy_and_removing，migrate dst 节点不应该是 umounting chunk
 
 
 
@@ -23,39 +56,9 @@ pextent table 中临时副本相关的变量 temporary_replicas_ 和 temporary_r
 
 
 
-volume / lextent / pextent / chunk table，meta 里的 table 太多了，是否考虑让大家各搞各的。
-
-
-
-UpdatePExtentReplicaNumToStretched() 中如果遍历过程中 pid map 变了，会不会有某些 pid 的 expected_replica_num 没更新
-
-在转换过程中创建的卷，2 副本，后续会提升到 3 副本吗？双活能够保证所有卷一定是 3 副本吗？可能会有些遗漏
-
-
-
 没配 topo 也需要响应 reduce segment 任务，所以这个遍历应该是少不了。
 
 可以让 reduce segment 触发的更早些
-
-
-
-reposition src 可以只是 healthy，但 reposition dst 必须是 healthy_and_in_use
-
-在 AllocRecoverForAgile 里用错了
-
-
-
-这些 map 应该是有重复的
-
-```
-absl::flat_hash_map<cid_t, ChunkStatus> chunk_status_map_;
-absl::flat_hash_map<cid_t, ChunkState> chunk_state_map_;
-absl::flat_hash_map<cid_t, std::array<double, PExtentKind_ARRAYSIZE>> healthy_and_in_use_chunk_load_map_;
-```
-
-
-
-
 
 ```
 existed_segment_num_，有多少个 cid 上报了，以 segment_num_ 为长度遍历 replica_，记录了其中 replica_[i].cid != 0 的个数
@@ -100,8 +103,6 @@ segment_num_，会创建的 PExtentReplica 的数量，影响了堆的大小
 2. PhysicalExtentTableEntry::CopyMemVar()，这个是用在构造函数的地方
 
    不过此时 segment_num_ 已经是确定的状态，所以还好
-
-
 
 
 
@@ -168,8 +169,6 @@ segment_num_，会创建的 PExtentReplica 的数量，影响了堆的大小
 zbs cli 中 target / subsystem 这一级已经支持改 ec 参数，需要支持 lun / namespace 级别的支持。
 
 
-
-meta 在帮忙处理卸载盘的迁移时，也需要关注，如果负载已经非常不均，需要先进行负载均衡迁移
 
 
 
